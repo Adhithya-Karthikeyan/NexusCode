@@ -40,6 +40,7 @@ export { UsageStore } from "./analytics/store.js";
 export type { RunSummaryLike, UsageStoreOptions } from "./analytics/store.js";
 export { bucketOf } from "./analytics/window.js";
 export { toCsv, toJson } from "./analytics/export.js";
+export { UNATTRIBUTED_PRINCIPAL } from "./analytics/types.js";
 export type {
   BreakdownKey,
   PricingResolver,

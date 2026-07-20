@@ -56,11 +56,23 @@ export interface AgentGoal {
   /**
    * Optional success predicates. The default evaluator treats each as satisfied
    * once its text appears in the accumulated evidence (step output + tool
-   * results). Each becomes a tracked task, so progress is measurable. When
-   * omitted, the goal is met by the first successful step.
+   * results). Each becomes a tracked task, so progress is measurable.
+   *
+   * When omitted, the harness has NO deterministic way to judge the objective,
+   * so the Evaluate phase falls back to an explicit model-driven evaluation
+   * ({@link VerifyFn}); if that cannot reach a verdict either, the run reports
+   * {@link GoalVerdict} `"indeterminate"` — it never assumes success.
    */
   successCriteria?: string[];
 }
+
+/**
+ * The three-valued outcome of the Evaluate phase. `"indeterminate"` is a
+ * first-class result: it means the harness could NOT establish whether the
+ * objective was achieved. It is never collapsed into `"met"` — a run that
+ * cannot be verified says so instead of claiming success.
+ */
+export type GoalVerdict = "met" | "unmet" | "indeterminate";
 
 /** Why the OODA loop stopped. */
 export type AgentStopReason =
@@ -68,6 +80,8 @@ export type AgentStopReason =
   | "max-steps"
   | "blocked"
   | "cancelled"
+  /** The loop stopped because the outcome could not be verified either way. */
+  | "indeterminate"
   | "error";
 
 /**
@@ -82,6 +96,15 @@ export interface Reflection {
   progress: number;
   /** True once every success criterion is satisfied. */
   goalMet: boolean;
+  /**
+   * The three-valued Evaluate verdict. Authoritative when present; the runner
+   * fills it in (and keeps `goalMet === (verdict === "met")`) before recording
+   * the step, so a policy that only sets `goalMet` keeps working. Return
+   * `"indeterminate"` when the evidence does not settle the question — the
+   * runner will attempt a model-driven evaluation and, failing that, stop the
+   * run honestly rather than declare success.
+   */
+  verdict?: GoalVerdict;
   /** True when this step failed (tool error, run error, or partial outcome). */
   failure: boolean;
   /** Ask the coordinator to revise the plan before continuing. */
@@ -166,8 +189,13 @@ export interface AgentRunResult {
   plan: Task[];
   /** Progress over the plan at termination. */
   progress: Progress;
-  /** Whether the goal was achieved. */
+  /**
+   * Whether the goal was achieved. True ONLY for a `"met"` {@link verdict} — an
+   * unverifiable run reports `false` with `verdict: "indeterminate"`.
+   */
   goalMet: boolean;
+  /** The final three-valued verdict (see {@link GoalVerdict}). */
+  verdict: GoalVerdict;
   /** Run-wide usage (sum over steps and sub-agents). */
   usage: Usage;
   /** Results of any delegated sub-agents, in delegation order. */
@@ -209,14 +237,55 @@ export interface EvaluateInput {
   cancelled: boolean;
 }
 
+/** A verdict plus the justification behind it. */
+export interface GoalAssessment {
+  verdict: GoalVerdict;
+  /** Why — surfaced in the critique and (for `"unmet"`) fed back as correction. */
+  reason: string;
+}
+
+/** Inputs handed to a {@link VerifyFn}. */
+export interface VerifyInput {
+  role: string;
+  goal: AgentGoal;
+  step: number;
+  /** The step's final assistant text. */
+  stepText: string;
+  /** Tool results observed this step. */
+  toolResults: StepToolResult[];
+  /** Accumulated evidence across all steps so far (text + tool output). */
+  evidence: string;
+  /**
+   * Run ONE tool-free provider turn (the explicit Evaluate call) and return its
+   * text. Resolves to `undefined` when the evaluation run did not complete
+   * cleanly — which the verifier must treat as `"indeterminate"`, never as a
+   * pass. Injected by the runner so this policy stays dependency-clean and
+   * unit-testable offline.
+   */
+  ask: (prompt: string, system?: string) => Promise<string | undefined>;
+}
+
 /** The Plan-phase policy: produce/revise tasks for the plan. */
 export type PlanFn = (input: PlanInput) => PlanDirective[];
 
 /** The Evaluate/Reflect-phase policy: critique the step and steer the loop. */
 export type EvaluateFn = (input: EvaluateInput) => Reflection;
 
-/** Overridable policies for a single run (both default to the built-ins). */
+/**
+ * The explicit Evaluate-phase verification policy: decide whether the objective
+ * is actually achieved when the deterministic evaluator cannot tell. It MUST
+ * return `"indeterminate"` rather than guess.
+ */
+export type VerifyFn = (input: VerifyInput) => Promise<GoalAssessment> | GoalAssessment;
+
+/** Overridable policies for a single run (all default to the built-ins). */
 export interface AgentPolicies {
   plan?: PlanFn;
   evaluate?: EvaluateFn;
+  /**
+   * Override the model-driven verification step, or pass `false` to disable it
+   * — with it disabled, a run with no success criteria can only ever finish as
+   * `"indeterminate"` (it will never be reported as met).
+   */
+  verify?: VerifyFn | false;
 }

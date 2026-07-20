@@ -20,6 +20,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  dispatch,
   dispatchAgent,
   sumUsage,
   type Labeled,
@@ -35,7 +36,7 @@ import { PermissionGate, ToolRegistry, type Tool } from "@nexuscode/tools";
 import type { TaskStore } from "@nexuscode/tasks";
 import { agentMetaChunk } from "./events.js";
 import { AsyncQueue } from "./queue.js";
-import { defaultEvaluate, defaultPlan } from "./policies.js";
+import { defaultEvaluate, defaultPlan, defaultVerify } from "./policies.js";
 import type { AgentRegistry } from "./roles.js";
 import type {
   AgentDefinition,
@@ -45,8 +46,11 @@ import type {
   AgentStepRecord,
   AgentStopReason,
   DelegateDirective,
+  GoalAssessment,
+  GoalVerdict,
   PlanDirective,
   StepToolResult,
+  VerifyFn,
 } from "./types.js";
 
 /** Everything the runner needs, wired once by the caller. */
@@ -73,6 +77,14 @@ export interface AgentDeps {
    * blocking interceptor never crashes a step.
    */
   toolInterceptor?: ToolInterceptor;
+  /**
+   * The explicit Evaluate-phase verification policy used when the deterministic
+   * evaluator cannot judge the goal (no success criteria). Defaults to
+   * {@link defaultVerify} — one tool-free provider turn per unjudged step. Pass
+   * `false` to spend nothing on verification, at the cost of such runs only ever
+   * finishing as `"indeterminate"`.
+   */
+  verify?: VerifyFn | false;
 }
 
 /** Options for a single {@link Agent.run}. */
@@ -85,6 +97,14 @@ export interface AgentRunOptions {
   maxSteps?: number;
   /** Retry budget for self-correction on failure (default 2). */
   maxRetries?: number;
+  /**
+   * How many consecutive steps whose outcome cannot be verified either way the
+   * loop tolerates before stopping as `"indeterminate"` (default 1). Continuing
+   * past this point cannot produce an honest verdict — the harness has no way to
+   * recognize completion — so it stops and reports the uncertainty instead of
+   * burning the step budget and guessing.
+   */
+  maxUnverifiedSteps?: number;
   /** Override the model preference. */
   model?: string;
   /** Override the adapter preference. */
@@ -233,6 +253,9 @@ export class Agent {
     const maxRetries = options.maxRetries ?? 2;
     const planFn = options.policies?.plan ?? defaultPlan;
     const evalFn = options.policies?.evaluate ?? defaultEvaluate;
+    const verifyOpt = options.policies?.verify ?? this.deps.verify ?? defaultVerify;
+    const verifyFn: VerifyFn | undefined = verifyOpt === false ? undefined : verifyOpt;
+    const maxUnverified = Math.max(1, options.maxUnverifiedSteps ?? 1);
     const store = this.deps.store;
 
     const tools = filterTools(this.deps.tools, def.allowedTools);

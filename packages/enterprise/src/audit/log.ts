@@ -164,12 +164,20 @@ export class AuditLog {
    * to the file that never went through `append()` — including a
    * tail-truncation, which is still a perfectly valid (shorter) hash chain
    * and so is only caught by the anchor.
+   *
+   * A MISSING chain file is NOT automatically clean. Deleting the whole log is
+   * the highest-value attack on a tamper-evident record, and it is precisely
+   * what the anchor exists to catch: a signed anchor asserting `count:N` with
+   * zero recoverable records is a total truncation, reported exactly like the
+   * zero-byte-file case. Only a fresh install — NO anchor and NO file, nothing
+   * ever appended — verifies clean.
    */
   verifyFile(): AuditVerifyResult {
-    if (!this.file || !existsSync(this.file)) return { ok: true, count: 0, tampered: [] };
-    const records = readNdjsonRecords(this.file);
+    if (!this.file) return { ok: true, count: 0, tampered: [] };
+    const fileMissing = !existsSync(this.file);
+    const records = fileMissing ? [] : readNdjsonRecords(this.file);
     const result = verifyChain(records, this.key);
-    const anchorTamper = this.checkAnchor(records);
+    const anchorTamper = this.checkAnchor(records, { fileMissing });
     if (anchorTamper) {
       result.tampered.push(anchorTamper);
       result.ok = false;
@@ -197,8 +205,15 @@ export class AuditLog {
     chmodSync(path, 0o600);
   }
 
-  /** Compare the on-disk anchor against the actual (re-read) record tail. */
-  private checkAnchor(records: readonly AuditRecord[]): AuditTamper | null {
+  /**
+   * Compare the on-disk anchor against the actual (re-read) record tail.
+   * `fileMissing` distinguishes "the chain file was deleted outright" from
+   * "the chain file is present but short", so the finding names what happened.
+   */
+  private checkAnchor(
+    records: readonly AuditRecord[],
+    opts: { fileMissing?: boolean } = {},
+  ): AuditTamper | null {
     const path = this.anchorFile as string;
     if (!existsSync(path)) {
       return records.length > 0
@@ -227,11 +242,14 @@ export class AuditLog {
       };
     }
     if (anchor.count !== records.length) {
+      const found = opts.fileMissing
+        ? `the chain file ${this.file as string} is MISSING (deleted)`
+        : `the file has ${records.length}`;
       return {
         seq: Math.max(anchor.count, records.length, 1) - 1,
         reason: "anchor-mismatch",
         detail:
-          `head anchor expects ${anchor.count} record(s) but the file has ${records.length} ` +
+          `head anchor expects ${anchor.count} record(s) but ${found} ` +
           `(${anchor.count > records.length ? "truncated" : "extra/unanchored records"})`,
       };
     }

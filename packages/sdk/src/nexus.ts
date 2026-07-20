@@ -29,9 +29,12 @@ import {
   type ContextAssembler,
   type Engine,
   type EventStore,
+  type HistoryOptions,
   type JudgeSpec,
   type Labeled,
   type Message,
+  type OrchestrationHandle,
+  type OrchestrationOutcome,
   type OrchestrationSpec,
   type ProviderAdapter,
   type ProviderRegistry,
@@ -42,6 +45,7 @@ import {
   type Session,
   type StreamChunk,
   type TraceEvent,
+  type Turn,
   type UiEvent,
 } from "@nexuscode/core";
 import { randomUUID } from "node:crypto";
@@ -86,6 +90,13 @@ export interface NexusOptions {
   emit?: (event: TraceEvent) => void;
   /** Context Engine run before the first provider dispatch of every run. */
   contextAssembler?: ContextAssembler;
+  /**
+   * Conversation memory. ON by default: every turn on a session is dispatched
+   * with the prior turns ahead of it, bounded to a token budget. Pass
+   * `{ enabled: false }` for stateless one-shot behaviour, or `{ maxTokens }`
+   * to change the budget.
+   */
+  history?: HistoryOptions;
   /** Extra provider adapters registered on top of the config catalog. */
   providers?: ProviderAdapter[];
   /** Tools made available to `agent(...)` runs. */
@@ -217,8 +228,13 @@ function parseBackend(backend: Backend): ParsedBackend {
 
 /**
  * A session-scoped view of the facade: `ask` / `agent` bound to one durable,
- * resumable `Session`, plus its id and disposal. Turns opened here thread their
- * history through the same session container the engine persists.
+ * resumable `Session`, plus its id and disposal.
+ *
+ * Turns opened here REMEMBER each other: the engine threads the session's
+ * transcript (prior user lines + assistant replies) ahead of every new turn, and
+ * records each reply back when the run settles. The transcript is bounded to a
+ * token budget (oldest turns fall off first) — see {@link NexusOptions.history}
+ * to widen, narrow, or disable it. Inspect it with `session.raw.transcript`.
  */
 export class NexusSession {
   constructor(
@@ -318,6 +334,7 @@ export class Nexus {
       emit: emitSpan,
       ...(options.store ? { store: options.store } : {}),
       ...(options.contextAssembler ? { contextAssembler: options.contextAssembler } : {}),
+      ...(options.history ? { history: options.history } : {}),
     });
 
     const nexus = new Nexus(engine, runtime, cfg, toolRegistry, defaultGate, cwd, emitter);
@@ -392,9 +409,27 @@ export class Nexus {
     return (opts.session ?? this.defaultSession).raw;
   }
 
+  /**
+   * Record a settled run's reply into its turn, so the NEXT turn on the same
+   * session sees it. The engine also captures the reply automatically as runs
+   * summarize; this pass is winner-aware, so a judged primitive records the
+   * answer that actually won rather than whichever lane settled last.
+   */
+  private recordOn(turn: Turn, handle: OrchestrationHandle): void {
+    void handle
+      .outcome()
+      .then((outcome: OrchestrationOutcome) => turn.record(outcome))
+      .catch(() => {
+        /* a failed run contributes no reply; the user line stays in history */
+      });
+  }
+
   // ── Primitives ──────────────────────────────────────────────────────────────
 
-  /** Single-provider chat. Streams text and settles into one result. */
+  /**
+   * Single-provider chat. Streams text and settles into one result. Consecutive
+   * `ask`s on the same session remember each other (see {@link NexusSession}).
+   */
   ask(prompt: string, opts: AskOptions = {}): NexusRun {
     this.ensureLive();
     const providerId = opts.provider ?? this.cfg.defaultProvider;
@@ -406,6 +441,7 @@ export class Nexus {
     const turn = session.newTurn({ messages: userText(prompt) });
     const run = this.makeRunSpec(providerId, model, turn.input, params);
     const handle = dispatch({ kind: "single", run }, turn.context());
+    this.recordOn(turn, handle);
     return new NexusRun(handle, { adapterIds: [providerId], single: true }, this.sink);
   }
 

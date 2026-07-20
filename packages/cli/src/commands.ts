@@ -2525,6 +2525,8 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   const session = await engine.openSession();
   try {
     for (const line of lines) {
+      // One session across every line: `turn.input` already carries the prior
+      // turns (engine-owned transcript), so line N+1 remembers line N.
       const turn = session.newTurn({ prompt: line });
       const handle = dispatch(
         { kind: "single", run: { adapterId: providerId, model, input: turn.input, idempotencyKey: randomUUID() } },
@@ -2535,7 +2537,7 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
           if (ev.t === "text") io.out(ev.delta);
         }
       }
-      await handle.outcome();
+      turn.record(await handle.outcome());
       io.out("\n");
     }
     return 0;

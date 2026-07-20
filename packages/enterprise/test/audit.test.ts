@@ -234,6 +234,53 @@ describe("audit persistence", () => {
     expect(result.tampered.some((t) => t.reason === "anchor-mismatch")).toBe(true);
   });
 
+  it("verifyFile() detects DELETION of the whole chain file via the signed head anchor", () => {
+    // The highest-value attack on a tamper-evident log is not editing it — it
+    // is removing it. `rm audit.ndjson` leaves the signed anchor behind still
+    // asserting a record count, so this must report exactly like any other
+    // truncation, NOT as a clean chain.
+    const file = join(dir, "audit.ndjson");
+    const log = new AuditLog({ file, key: TEST_KEY });
+    log.append({ actor: "alice", action: "run.start" });
+    log.append({ actor: "alice", action: "run.end" });
+    expect(log.verifyFile().ok).toBe(true);
+
+    rmSync(file);
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(`${file}.anchor.json`)).toBe(true);
+
+    // A freshly opened log (the `nexus audit --verify` path — a new process
+    // that loads nothing because there is nothing to load) must still fail.
+    const reopened = new AuditLog({ file, key: TEST_KEY });
+    const result = reopened.verifyFile();
+    expect(result.ok).toBe(false);
+    expect(result.tampered.some((t) => t.reason === "anchor-mismatch")).toBe(true);
+    expect(result.tampered[0]?.detail).toMatch(/expects 2 record\(s\)/);
+    expect(result.tampered[0]?.detail).toMatch(/MISSING \(deleted\)/);
+  });
+
+  it("verifyFile() reports a FRESH install (no anchor, no file) as clean", () => {
+    // The counterpart guard: a first run has neither file nor anchor and must
+    // never look tampered.
+    const file = join(dir, "does-not-exist-yet.ndjson");
+    const log = new AuditLog({ file, key: TEST_KEY });
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(`${file}.anchor.json`)).toBe(false);
+    expect(log.verifyFile()).toEqual({ ok: true, count: 0, tampered: [] });
+  });
+
+  it("verifyFile() detects a zero-byte chain file (same finding as deletion)", () => {
+    const file = join(dir, "audit.ndjson");
+    const log = new AuditLog({ file, key: TEST_KEY });
+    log.append({ actor: "alice", action: "run.start" });
+    log.append({ actor: "alice", action: "run.end" });
+
+    writeFileSync(file, "");
+    const result = log.verifyFile();
+    expect(result.ok).toBe(false);
+    expect(result.tampered.some((t) => t.reason === "anchor-mismatch")).toBe(true);
+  });
+
   it("verifyFile() detects the anchor itself being forged without the key", () => {
     const file = join(dir, "audit.ndjson");
     const log = new AuditLog({ file, key: TEST_KEY });

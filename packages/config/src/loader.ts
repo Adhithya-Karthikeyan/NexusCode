@@ -189,10 +189,27 @@ export function envOverrides(env: NodeJS.ProcessEnv): NexusConfigInput {
   return out;
 }
 
+/**
+ * The user-config filenames probed inside the user config dir, in PRECEDENCE
+ * order — the FIRST one that exists wins outright and the rest are never read.
+ *
+ * Exported because anything that WRITES user config has to target the same file
+ * this list resolves to. A writer that always emits `config.json` while this
+ * list puts `config.yaml` first produces a silent no-op: the write succeeds, and
+ * the shadowing YAML keeps winning every subsequent load.
+ */
+export const USER_CONFIG_FILENAMES = [
+  "config.yaml",
+  "config.yml",
+  "config.json",
+  ".nexusrc",
+  ".nexusrc.json",
+] as const;
+
 async function loadUserConfig(dir: string): Promise<{ data: Plain; filepath: string } | null> {
   // `.load()` targets an explicit file, so no search strategy is involved.
   const explorer = cosmiconfig("nexuscode");
-  for (const name of ["config.yaml", "config.yml", "config.json", ".nexusrc", ".nexusrc.json"]) {
+  for (const name of USER_CONFIG_FILENAMES) {
     try {
       const res = await explorer.load(join(dir, name));
       if (res && !res.isEmpty && isPlainObject(res.config)) {

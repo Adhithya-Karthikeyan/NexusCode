@@ -6,6 +6,19 @@
 
 import type { Pricing, Usage } from "@nexuscode/shared";
 
+/**
+ * The principal a usage entry is attributed to when its SOURCE records no
+ * principal at all — notably the SQLite `run_summary` table, whose columns
+ * carry tokens/cost but no identity. Ingesting such rows under a real
+ * principal id would INVENT attribution: it would tell whoever happens to be
+ * running the report that every historical run was theirs, and let a report
+ * scoped to one person silently include everyone else's spend. Rows land under
+ * this sentinel instead, so a report is honestly un-attributed rather than
+ * confidently wrong. Real attribution requires the producer to record the
+ * acting principal alongside the run.
+ */
+export const UNATTRIBUTED_PRINCIPAL = "(unattributed)";
+
 /** A single usage event fed into the store (one model call / run). */
 export interface UsageEntry {
   /** Timestamp of the call (ms since epoch). */
