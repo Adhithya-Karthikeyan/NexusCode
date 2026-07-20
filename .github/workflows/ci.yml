@@ -31,11 +31,14 @@ jobs:
       - name: Install
         run: npm install
 
-      - name: Typecheck
-        run: npm run typecheck
-
+      # Build MUST precede typecheck: workspace packages import each other through
+      # their built .d.ts files, so `tsc --noEmit` cannot resolve a sibling package
+      # until that package has been built.
       - name: Build
         run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Test
         run: npm test
