@@ -40,7 +40,11 @@ const richCaps: Partial<Capabilities> = {
 const ANSI = /\[[0-9;]*m/g;
 const strip = (s: string | undefined): string => (s ?? "").replace(ANSI, "");
 /** Let Ink flush effects (input listener attach / timers) before asserting. */
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+// 40ms (not 0) so ink has really mounted and registered its input handlers before
+// the next stdin.write lands. A 0ms tick is enough on a fast dev machine but races
+// on slower CI runners, where the keystroke arrives before the handler exists and
+// silently does nothing. Matches the other TUI test files.
+const tick = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 function wrap(node: React.ReactNode, caps: Partial<Capabilities> = richCaps): React.JSX.Element {
   return (
