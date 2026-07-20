@@ -4,15 +4,18 @@ import {
   createEngine,
   type Engine,
   type Labeled,
+  type OrchestrationOutcome,
   type RunContext,
+  type RunResult,
 } from "@nexuscode/core";
-import type { StreamChunk } from "@nexuscode/shared";
+import type { FinishReason, StreamChunk } from "@nexuscode/shared";
 import { PermissionGate, ToolRegistry, okText, errText, type Tool } from "@nexuscode/tools";
 import { openTasks, type TaskStore } from "@nexuscode/tasks";
 import { createMockAdapter } from "@nexuscode/provider-mock";
 import {
   Agent,
   createAgentRegistry,
+  defaultEvaluate,
   defaultVerify,
   isAgentMeta,
   parseVerdict,
@@ -21,6 +24,8 @@ import {
   type AgentDeps,
   type AgentPhase,
   type EvaluateFn,
+  type EvaluateInput,
+  type Reflection,
 } from "../src/index.js";
 
 // ── Tools (offline, deterministic) ────────────────────────────────────────────
@@ -596,6 +601,64 @@ describe("Agent — a step that runs out of budget is not a step that succeeded"
     expect(result.progress.percent).toBeLessThan(100);
 
     await engine.dispose();
+  });
+});
+
+describe("defaultEvaluate — the two paths that used to manufacture a success", () => {
+  /** A clean, successful single-lane outcome, optionally truncated by a budget. */
+  function outcomeOf(text: string, finishReason: FinishReason = "stop"): OrchestrationOutcome {
+    const run: RunResult = {
+      runId: "run_1",
+      adapterId: "mock",
+      model: "mock-fast",
+      status: "ok",
+      finishReason,
+      text,
+      toolCalls: [],
+      diffs: [],
+      usage: { inputTokens: 1, outputTokens: 1 },
+    };
+    return { kind: "single", runs: [run], winner: run, usage: run.usage, partial: false };
+  }
+
+  function evaluateStep(over: Partial<EvaluateInput> = {}): Reflection {
+    return defaultEvaluate({
+      role: "coder",
+      goal: { objective: "do the work" },
+      step: 0,
+      maxSteps: 4,
+      retriesUsed: 0,
+      maxRetries: 2,
+      outcome: outcomeOf("some answer"),
+      stepText: "some answer",
+      toolResults: [],
+      evidence: "some answer",
+      criterionTaskIds: [],
+      rootTaskId: "root",
+      cancelled: false,
+      ...over,
+    });
+  }
+
+  it("non-empty text on a clean step is not a met goal when nothing declares what success is", () => {
+    const r = evaluateStep();
+    expect(r.goalMet).toBe(false);
+    expect(r.verdict).toBe("indeterminate");
+    expect(r.progress).toBe(0);
+  });
+
+  it("a step truncated by its turn/output budget is a failure, not a clean step", () => {
+    const r = evaluateStep({
+      goal: { objective: "do the work", successCriteria: ["some answer"] },
+      outcome: outcomeOf("[agent] max turns reached", "length"),
+      evidence: "some answer",
+    });
+    // The criterion text IS present in the evidence, and the kernel called the
+    // run "ok" — the goal must still not be reported as met off a truncated step.
+    expect(r.goalMet).toBe(false);
+    expect(r.verdict).toBe("unmet");
+    expect(r.failure).toBe(true);
+    expect(r.critique).toContain("budget");
   });
 });
 
