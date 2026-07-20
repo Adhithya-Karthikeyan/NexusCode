@@ -390,7 +390,16 @@ export async function cmdBudget(args: ParsedArgs, io: Io = defaultIo): Promise<n
     if (args.flags.get("downgrade-to")) budget.downgradeTo = args.flags.get("downgrade-to");
     if (args.flags.get("warn-threshold")) budget.warnThreshold = Number(args.flags.get("warn-threshold"));
 
-    const raw = readUserConfig() as Record<string, unknown>;
+    // Both the read and the write refuse when the config file in force cannot
+    // be updated here (a YAML config shadowing what the CLI can write) — report
+    // that on stderr as a command failure rather than letting it escape.
+    let raw: Record<string, unknown>;
+    try {
+      raw = readUserConfig() as Record<string, unknown>;
+    } catch (err) {
+      io.err(`nexus budget set: ${(err as Error).message}\n`);
+      return 1;
+    }
     const ent = (raw.enterprise as Record<string, unknown>) ?? {};
     const budgets = Array.isArray(ent.budgets) ? (ent.budgets as Record<string, unknown>[]) : [];
     const next = budgets.filter((b) => b.id !== id);

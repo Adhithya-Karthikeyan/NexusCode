@@ -12,7 +12,7 @@
  * no network, no real provider call.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -238,6 +238,64 @@ describe("default context stays inside its budget", () => {
     });
     expect(res.report.realTokens).toBeLessThanOrEqual(200);
     expect(messageText(res.messages)).toContain("hi");
+  });
+});
+
+describe("first-run safety: the default sources never sink the turn", () => {
+  /** Assemble with the DEFAULT config rooted at `cwd`; must always resolve. */
+  async function assembleAt(cwd: string) {
+    const config = NexusConfigSchema.parse({});
+    // Constructing the sources must not throw either (it opens memory / probes
+    // the RAG path), which is what a brand-new user hits on their first command.
+    const sources = buildPowerSources(config, { cwd });
+    return new ContextEngine().assemble({
+      budgetTokens: 4000,
+      sources,
+      userMessage: "hi",
+      cwd,
+      now: 0,
+    });
+  }
+
+  it("an empty, non-git directory yields no context and still answers", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "nx-empty-"));
+    try {
+      const res = await assembleAt(empty);
+      expect(res.report.overBudget).toBe(false);
+      expect(messageText(res.messages)).toContain("hi");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("a cwd that does not exist degrades instead of throwing", async () => {
+    const missing = join(tmpdir(), "nx-does-not-exist-", String(Date.now()));
+    const res = await assembleAt(missing);
+    expect(messageText(res.messages)).toContain("hi");
+  });
+
+  it("an unreadable directory degrades instead of throwing", async () => {
+    const locked = mkdtempSync(join(tmpdir(), "nx-locked-"));
+    chmodSync(locked, 0o000);
+    try {
+      const res = await assembleAt(locked);
+      expect(messageText(res.messages)).toContain("hi");
+    } finally {
+      // Restore so the temp dir can be removed on any platform.
+      chmodSync(locked, 0o700);
+      rmSync(locked, { recursive: true, force: true });
+    }
+  });
+
+  it("a non-UTF8 / binary instruction file degrades instead of throwing", async () => {
+    const bin = mkdtempSync(join(tmpdir(), "nx-bin-"));
+    try {
+      writeFileSync(join(bin, "CLAUDE.md"), Buffer.from([0xff, 0xfe, 0x00, 0x01, 0x02]));
+      const res = await assembleAt(bin);
+      expect(messageText(res.messages)).toContain("hi");
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 });
 
