@@ -25,25 +25,30 @@ import type { ViewState } from "../store/viewState.js";
 import { useTextStyle } from "../theme/ThemeProvider.js";
 import type { PanelId, RenderMode } from "../layout/tree.js";
 
-/** Dynamic panel title (with live counts, §2.2). */
-export function panelTitle(panel: PanelId, v: ViewState): string {
+/**
+ * Panel title (§2.2). Deliberately a **stable noun with no live count baked in**:
+ * titles double as tab labels, and `Logs · 2 err` inside a tab strip read as two
+ * separate tabs. Counts live in {@link panelRailSummary} and are rendered as a
+ * dim badge beside the strip instead.
+ */
+export function panelTitle(panel: PanelId, _v: ViewState): string {
   switch (panel) {
     case "conversation":
       return "Conversation";
     case "explorer":
       return "Files";
     case "tool_activity":
-      return "Tool Activity";
+      return "Tools";
     case "plan":
       return "Plan";
     case "git_diff":
-      return "Git Diff";
+      return "Diff";
     case "logs":
-      return `Logs · ${selectErrorCount(v)} err`;
+      return "Logs";
     case "tasks":
-      return "Running Tasks";
+      return "Tasks";
     case "notifications":
-      return "Notifications";
+      return "Alerts";
     case "model_info":
       return "Model";
     case "hud":
@@ -51,17 +56,26 @@ export function panelTitle(panel: PanelId, v: ViewState): string {
   }
 }
 
-/** 1-line rail summary shown when a panel is collapsed (§2.2 "Collapsed rail"). */
+/**
+ * 1-line rail summary — shown when a panel is collapsed (§2.2 "Collapsed rail")
+ * and as the dim count badge beside a dock's tab strip.
+ *
+ * A zero is deliberately rendered as *nothing*: a permanent `0 err` / `0 notes`
+ * is noise that trains the eye to ignore the very field that matters when it
+ * finally becomes non-zero.
+ */
 export function panelRailSummary(panel: PanelId, v: ViewState): string {
+  const plural = (n: number, one: string, many = `${one}s`): string =>
+    n === 0 ? "" : `${n} ${n === 1 ? one : many}`;
   switch (panel) {
     case "conversation":
-      return `${selectMessageCount(v)} msgs`;
+      return plural(selectMessageCount(v), "msg");
     case "tool_activity":
-      return `${selectRunningToolCount(v)} running`;
+      return selectRunningToolCount(v) > 0 ? `${selectRunningToolCount(v)} running` : "";
     case "logs":
-      return `${selectErrorCount(v)} err`;
+      return plural(selectErrorCount(v), "err", "err");
     case "notifications":
-      return `${selectNotifications(v).length} notes`;
+      return plural(selectNotifications(v).length, "note");
     case "model_info":
       return selectModel(v).model;
     default:
