@@ -48,6 +48,20 @@ export {
 export { deriveFocusRing, nextFocus, prevFocus, reconcileFocus } from "./layout/focusRing.js";
 export { buildPreset, FOUNDATION_PRESETS } from "./layout/presets.js";
 export { computeLineWindow, scrollThumb, type LineWindow, type ScrollThumb } from "./layout/viewport.js";
+export {
+  distribute,
+  layoutTree,
+  isVisible,
+  rectFor,
+  truncate,
+  PANE_GAP,
+  MIN_PANE_WIDTH,
+  PANE_CHROME_X,
+  PANE_CHROME_Y,
+  type Rect,
+  type LayoutMap,
+} from "./layout/measure.js";
+export { useViewport, FALLBACK_VIEWPORT } from "./layout/useViewport.js";
 export { PaneFrame, type PaneFrameProps } from "./layout/PaneFrame.js";
 export { Splitter, type SplitterProps } from "./layout/Splitter.js";
 export { PaneSplit } from "./layout/PaneSplit.js";

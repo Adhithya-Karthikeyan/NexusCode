@@ -101,10 +101,23 @@ export function StatusHud({ view, cols, contextMax = 200000, forceCompact = fals
     </Text>
   );
 
+  // The failover light only appears when something actually failed over. It used
+  // to render as a permanent `⚡?` — a bolt plus a question mark, which states
+  // nothing, occupies the most alarming glyph in the set, and trains the eye to
+  // ignore the one indicator that matters when it does fire.
+  const failoverSegment = failover ? (
+    <Text>
+      <Text {...muted}>{sep}</Text>
+      <Text {...boltStyle}>
+        {glyph(caps, "bolt")} failover
+      </Text>
+    </Text>
+  ) : null;
+
   if (!tier1) {
     // Tier 0 — single line.
     return (
-      <Box>
+      <Box width={cols}>
         {contextSegment}
         <Text {...muted}>{sep}</Text>
         <Text {...costStyle}>${sessionUsd.toFixed(2)}</Text>
@@ -114,36 +127,30 @@ export function StatusHud({ view, cols, contextMax = 200000, forceCompact = fals
             <HealthDot health={active} active />
           </Text>
         ) : null}
-        <Text {...muted}> </Text>
-        <Text {...boltStyle}>
-          {glyph(caps, "bolt")}
-          {failover ? "!" : "?"}
-        </Text>
+        {failoverSegment}
       </Box>
     );
   }
 
-  // Tier 1 — two rows.
+  // Tier 1 — ONE line, wider bar, plus run cost and every provider's health.
+  // It was previously two rows that between them said less than the single
+  // compact row: the gauge sat alone on a line ~100 columns wide while the costs
+  // wrapped underneath. A wide terminal should mean more information per row,
+  // not the same information spread over more rows.
   return (
-    <Box flexDirection="column">
-      <Box>{contextSegment}</Box>
-      <Box>
-        <Text {...costStyle}>${sessionUsd.toFixed(2)} session</Text>
-        <Text {...muted}>{sep}</Text>
-        <Text {...costOk}>${runUsd.toFixed(2)} run</Text>
-        {health.map((h) => (
-          <Text key={h.provider}>
-            <Text {...muted}>{sep}</Text>
-            <HealthDot health={h} active={h.provider === active?.provider} showName />
-          </Text>
-        ))}
-        {failover ? (
-          <Text>
-            <Text {...muted}>{sep}</Text>
-            <Text {...boltStyle}>{glyph(caps, "bolt")} failover</Text>
-          </Text>
-        ) : null}
-      </Box>
+    <Box width={cols}>
+      {contextSegment}
+      <Text {...muted}>{sep}</Text>
+      <Text {...costStyle}>${sessionUsd.toFixed(2)} session</Text>
+      <Text {...muted}>{sep}</Text>
+      <Text {...costOk}>${runUsd.toFixed(2)} run</Text>
+      {health.map((h) => (
+        <Text key={h.provider}>
+          <Text {...muted}>{sep}</Text>
+          <HealthDot health={h} active={h.provider === active?.provider} showName />
+        </Text>
+      ))}
+      {failoverSegment}
     </Box>
   );
 }

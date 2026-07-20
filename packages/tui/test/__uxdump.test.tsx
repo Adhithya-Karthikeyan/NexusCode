@@ -22,9 +22,11 @@ import {
   type UiEvent,
 } from "../src/index.js";
 
+// Neutral default: a suite-wide `vitest run` must never overwrite a captured
+// before/after snapshot. Pass UX_OUT explicitly to capture one.
 const OUT =
   process.env.UX_OUT ??
-  "/private/tmp/claude-501/-Users-adhithya-Projects-apps-NexusCode/ed2e7802-772a-4ed6-a358-f7e8f4c3a538/scratchpad/ux/before";
+  "/private/tmp/claude-501/-Users-adhithya-Projects-apps-NexusCode/ed2e7802-772a-4ed6-a358-f7e8f4c3a538/scratchpad/ux/_scratch";
 mkdirSync(OUT, { recursive: true });
 
 function strip(s: string): string {

@@ -14,7 +14,7 @@
 
 import { Box } from "ink";
 import { isVisible } from "./measure.js";
-import { PaneRenderer, type PaneRenderContext } from "./PaneRenderer.js";
+import { PaneRenderer, boxSize, type PaneRenderContext } from "./PaneRenderer.js";
 import type { SplitNode } from "./tree.js";
 
 export function PaneSplit({
@@ -31,9 +31,7 @@ export function PaneSplit({
     <Box
       flexDirection={isRow ? "row" : "column"}
       {...(isRow ? { gap: 1 } : {})}
-      {...(own
-        ? { width: own.width, height: own.height, flexShrink: 0 }
-        : { flexGrow: 1 })}
+      {...(own ? { ...boxSize(ctx, own), flexShrink: 0 } : { flexGrow: 1 })}
     >
       {node.children.map((child) => {
         const rect = ctx.layout?.get(child.id);
@@ -43,7 +41,7 @@ export function PaneSplit({
             key={child.id}
             flexDirection="column"
             {...(rect
-              ? { width: rect.width, height: rect.height, flexShrink: 0 }
+              ? { ...boxSize(ctx, rect), flexShrink: 0 }
               : { flexGrow: 1, flexShrink: 1 })}
           >
             <PaneRenderer node={child} ctx={ctx} />

@@ -8,6 +8,7 @@
 import { Box, Text } from "ink";
 import { useCaps } from "../caps/CapabilityProvider.js";
 import { useTextStyle } from "../theme/ThemeProvider.js";
+import { GUTTER } from "./MessageView.js";
 
 export interface UserPromptProps {
   text: string;
@@ -20,15 +21,20 @@ export function UserPrompt({ text, width }: UserPromptProps): React.JSX.Element 
   const markStyle = useTextStyle("accent.default");
   const textStyle = useTextStyle("text.secondary");
   const chevron = caps.unicode ? "›" : ">";
-  // First line carries the chevron; continuations align under a 2-cell gutter that
-  // matches the assistant marker, so user and assistant turns share one left edge.
+  // `› ` leads the first line — the idiom every prompt echo in this UI uses, and
+  // tight enough that the chevron reads as attached to the text. Continuation
+  // lines instead hang at `GUTTER`, the same column the assistant's body uses,
+  // so a wrapped multi-line prompt stays a clean block rather than stepping in
+  // and out. (Padding the chevron out to the full gutter on line one would align
+  // the two markers perfectly but leaves a distracting `›  ` gap on what is
+  // usually a single short line.)
   const lines = text.split("\n");
-  const bodyWidth = width ? Math.max(10, width - 2) : undefined;
+  const bodyWidth = width ? Math.max(10, width - GUTTER) : undefined;
   return (
     <Box flexDirection="column" marginBottom={1} {...(width ? { width } : {})}>
       {lines.map((line, i) => (
         <Box key={i}>
-          <Text {...markStyle}>{i === 0 ? `${chevron} ` : "  "}</Text>
+          <Text {...markStyle}>{i === 0 ? `${chevron} ` : " ".repeat(GUTTER)}</Text>
           <Box {...(bodyWidth ? { width: bodyWidth } : {})}>
             <Text {...textStyle}>{line}</Text>
           </Box>

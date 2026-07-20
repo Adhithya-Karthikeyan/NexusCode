@@ -5,6 +5,13 @@
  * the turn's tool calls as compact inline `<ToolLine>`s and file edits as collapsed
  * `<DiffSummary>`s. A typing indicator trails the text while the turn is live. Pure
  * renderer over one {@link ../store/viewState.Turn}.
+ *
+ * Layout: the marker is a **hanging indent**, not a heading. It used to sit alone
+ * on its own row with the answer starting underneath, which burned one row per
+ * turn — a third of an 80×24 screen across four turns, and it left the marker
+ * visually detached from the text it attributes. Now the marker occupies a fixed
+ * {@link GUTTER}-cell column and the first line of the answer sits beside it, so
+ * every line of the turn — prose, tool lines, diffs — shares one left edge.
  */
 
 import { Box, Text } from "ink";
@@ -27,62 +34,73 @@ export interface MessageViewProps {
   width?: number;
 }
 
+/**
+ * Width of the marker column (`●A` + one separating space). Every content row of
+ * a turn — and the user's prompt, which uses the same measure — hangs off this
+ * edge, so the transcript reads as one column rather than a ragged stack.
+ */
+export const GUTTER = 3;
+
 export function MessageView({ turn, provider, streaming = false, width = 80 }: MessageViewProps): React.JSX.Element {
   const caps = useCaps();
   const providerStyle = useTextStyle(providerToken(provider));
   const thinkStyle = useTextStyle("stream.thinking");
-  // Content sits under a 2-cell gutter (marker `●A`); wrap to the remaining width
-  // so long lines and code blocks never overflow past the right edge.
-  const gutter = 2;
-  const bodyWidth = Math.max(20, width - gutter);
+  // Content hangs to the right of the marker column; wrap to what is left so
+  // long lines and code blocks never overflow past the right edge.
+  const bodyWidth = Math.max(20, width - GUTTER);
 
   const hasText = turn.text.length > 0;
   const waiting = streaming && !hasText && turn.reasoning.length === 0;
 
   return (
-    <Box flexDirection="column" marginBottom={1} width={width}>
-      {/* Provider marker — hue + redundant letter (never color-only). */}
-      <Box>
+    <Box flexDirection="row" marginBottom={1} width={width}>
+      {/* Provider marker — hue + redundant letter (never colour-only). */}
+      <Box width={GUTTER} flexShrink={0}>
         <Text {...providerStyle}>
           {glyph(caps, "dotFilled")}
           {providerLetter(provider)}
         </Text>
-        {waiting ? (
-          <Text> <TypingIndicator active label="thinking" /></Text>
-        ) : null}
       </Box>
 
-      {/* Reasoning (thinking) — dim, above the answer. */}
-      {turn.reasoning ? (
-        <Box marginLeft={gutter} width={bodyWidth}>
-          <Text {...thinkStyle} italic>
-            {caps.unicode ? "⋯ " : "... "}
-            {turn.reasoning}
+      <Box flexDirection="column" width={bodyWidth}>
+        {waiting ? (
+          <Text>
+            <TypingIndicator active label="thinking" />
           </Text>
-        </Box>
-      ) : null}
+        ) : null}
 
-      {/* The answer, as streaming Markdown. */}
-      {hasText ? (
-        <Box marginLeft={gutter} width={bodyWidth} flexDirection="column">
-          <Markdown content={turn.text} width={bodyWidth} />
-          {streaming ? (
-            <Box>
-              <StreamingCursor active />
-            </Box>
-          ) : null}
-        </Box>
-      ) : null}
+        {/* Reasoning (thinking) — dim, above the answer. */}
+        {turn.reasoning ? (
+          <Box width={bodyWidth}>
+            <Text {...thinkStyle} italic>
+              {caps.unicode ? "⋯ " : "... "}
+              {turn.reasoning}
+            </Text>
+          </Box>
+        ) : null}
 
-      {/* Inline, compact tool activity. */}
-      {turn.tools.map((tool) => (
-        <ToolLine key={tool.id} tool={tool} width={width} />
-      ))}
+        {/* The answer, as streaming Markdown. */}
+        {hasText ? (
+          <Box width={bodyWidth} flexDirection="column">
+            <Markdown content={turn.text} width={bodyWidth} />
+            {streaming ? (
+              <Box>
+                <StreamingCursor active />
+              </Box>
+            ) : null}
+          </Box>
+        ) : null}
 
-      {/* Collapsed file-edit summaries. */}
-      {turn.diffs.map((diff, i) => (
-        <DiffSummary key={`${diff.path}-${i}`} diff={diff} width={width} />
-      ))}
+        {/* Inline, compact tool activity + collapsed file-edit summaries. Both
+            sit in the content column, so they line up with the prose above
+            instead of carrying their own private indent. */}
+        {turn.tools.map((tool) => (
+          <ToolLine key={tool.id} tool={tool} width={bodyWidth} />
+        ))}
+        {turn.diffs.map((diff, i) => (
+          <DiffSummary key={`${diff.path}-${i}`} diff={diff} width={bodyWidth} />
+        ))}
+      </Box>
     </Box>
   );
 }

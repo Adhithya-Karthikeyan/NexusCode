@@ -328,17 +328,30 @@ export function Markdown({ content, width }: MarkdownProps): React.JSX.Element {
           </Box>
         );
       }
-      case "list":
+      case "list": {
+        // The marker sits in a fixed, non-shrinking column and the item text
+        // hangs off it. Ink hard-codes `flexShrink: 1` on every `<Text>`, so
+        // without the guard a narrow pane shrank the marker itself — `• item`
+        // collapsed to `•item` and each item's wrapped continuation lined up a
+        // column off from its neighbour's.
+        const markers = b.items.map((_, idx) => (b.ordered ? `${idx + 1}.` : bullet));
+        const markerWidth = Math.max(...markers.map((m) => m.length)) + 1;
+        const itemWidth = width !== undefined ? Math.max(4, width - markerWidth) : undefined;
         return (
           <Box key={key} marginTop={marginTop} flexDirection="column">
             {b.items.map((item, idx) => (
               <Box key={idx}>
-                <Text {...muted}>{b.ordered ? `${idx + 1}.` : bullet} </Text>
-                <Inline text={item} />
+                <Box width={markerWidth} flexShrink={0}>
+                  <Text {...muted}>{markers[idx]}</Text>
+                </Box>
+                <Box {...(itemWidth !== undefined ? { width: itemWidth } : {})}>
+                  <Inline text={item} />
+                </Box>
               </Box>
             ))}
           </Box>
         );
+      }
       case "quote":
         return (
           <Box key={key} marginTop={marginTop}>

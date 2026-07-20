@@ -93,7 +93,15 @@ export function PaneFrame({
     borderStyle,
     paddingX: 1,
     ...(width !== undefined ? { width } : { flexGrow: 1 }),
-    ...(height !== undefined ? { height } : {}),
+    // `minHeight`, deliberately not `height`. Ink does not clip a Box whose
+    // content is taller than a fixed `height` — it overlays the surplus rows on
+    // top of each other, which turned a wrapped code line into
+    // `oString("base64url");ytes(32).t`. `overflow: hidden` produces the same
+    // corruption (and its X axis additionally disables soft wrapping). A
+    // minimum still makes short panes fill their allotment so siblings share a
+    // bottom edge, while an over-tall pane grows — legibly — instead of
+    // shredding its own text.
+    ...(height !== undefined ? { minHeight: height } : {}),
   };
   if (borderColor !== undefined) frameProps.borderColor = borderColor;
 
@@ -117,10 +125,15 @@ export function PaneFrame({
           </Text>
         ) : null}
       </Box>
+      {/* `overflowY` only: clipping the *vertical* overflow keeps a tall panel
+          inside its frame, but Ink's `overflowX: hidden` also suppresses soft
+          wrapping, which rendered a wrapped code block's rows on top of each
+          other (`oString("base64url");ytes(32).t`). Horizontal fit is already
+          guaranteed by the measured width, so X never needs clipping. */}
       <Box
         flexDirection="column"
         flexGrow={1}
-        overflow="hidden"
+        
         {...(inner !== undefined ? { width: inner } : {})}
       >
         {children}

@@ -26,7 +26,7 @@ import { collectLeaves, type StackNode } from "./tree.js";
 import { isEssentialPanel, PanelBody, panelRailSummary, panelTitle } from "../panels/panels.js";
 import { PANE_CHROME_X } from "./measure.js";
 import { PaneFrame } from "./PaneFrame.js";
-import { PaneRenderer, type PaneRenderContext } from "./PaneRenderer.js";
+import { PaneRenderer, sizeProps, type PaneRenderContext } from "./PaneRenderer.js";
 import { useTextStyle } from "../theme/ThemeProvider.js";
 
 function tabLabel(node: StackNode["children"][number], view: PaneRenderContext["view"]): string {
@@ -54,12 +54,12 @@ export function PaneStack({
   const inner = rect ? Math.max(1, rect.width - PANE_CHROME_X) : undefined;
 
   const labels = node.children.map((c) => tabLabel(c, ctx.view));
-  const caret = glyph(caps, "focus");
   const sep = caps.unicode ? " │ " : " | ";
 
-  // Every tab needs `caret + label` worth of room; below that the strip would
-  // truncate mid-name and read as garbage, so show the active tab alone plus a
-  // `2/3` position marker — still orienting, never mangled.
+  // The active tab is bracketed rather than caret-marked: `<PaneFrame>` already
+  // spends a `▸` on *focus*, and using the same glyph for *active tab* rendered
+  // a baffling `▸ ▸ Files` double caret on any focused dock. Brackets are a
+  // distinct, long-established tab idiom and survive no-colour just as well.
   const fullWidth = labels.reduce((a, l) => a + l.length + 2, 0) + sep.length * (labels.length - 1);
   const showAll = inner === undefined || fullWidth <= inner;
 
@@ -73,17 +73,17 @@ export function PaneStack({
             {i > 0 ? <Text {...dividerStyle}>{sep}</Text> : null}
             {i === node.active ? (
               <Text {...activeStyle} bold>
-                {caret} {labels[i]}
+                [{labels[i]}]
               </Text>
             ) : (
-              <Text {...inactiveStyle}>{labels[i]}</Text>
+              <Text {...inactiveStyle}> {labels[i]} </Text>
             )}
           </Text>
         ))
       ) : (
         <Text>
           <Text {...activeStyle} bold>
-            {caret} {labels[node.active] ?? labels[0]}
+            [{labels[node.active] ?? labels[0]}]
           </Text>
           {node.children.length > 1 ? (
             <Text {...inactiveStyle}>
@@ -112,7 +112,7 @@ export function PaneStack({
       focused={focused}
       collapsed={collapsed}
       {...(count ? { railSummary: count } : {})}
-      {...(rect ? { width: rect.width, height: rect.height } : {})}
+      {...sizeProps(ctx, rect)}
     >
       {activeChild.kind === "leaf" ? (
         <PanelBody

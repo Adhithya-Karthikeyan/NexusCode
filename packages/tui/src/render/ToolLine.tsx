@@ -67,12 +67,27 @@ export function ToolLine({ tool, width = 80 }: ToolLineProps): React.JSX.Element
   const arrow = caps.unicode ? "↳" : "->";
   const detailMax = Math.max(8, width - verb.length - 10);
 
+  // No private indent: the row starts at the caller's left edge so tool lines
+  // align with the prose of the turn they belong to (`<MessageView>` places
+  // them inside the same content column).
   return (
-    <Box>
-      <Text {...arrowStyle}>{"  "}{arrow} </Text>
-      <Text {...verbStyle}>{verb}</Text>
-      {detail ? <Text {...detailStyle}> {clamp(detail, detailMax)}</Text> : null}
-      <Text {...statusStyle}> {glyph(caps, status.glyph)}</Text>
+    <Box width={width} flexShrink={0}>
+      <Text {...arrowStyle} wrap="truncate-end">
+        {arrow}{" "}
+      </Text>
+      <Text {...verbStyle} wrap="truncate-end">
+        {verb}
+      </Text>
+      {detail ? (
+        <Text {...detailStyle} wrap="truncate-end">
+          {" "}
+          {clamp(detail, detailMax)}
+        </Text>
+      ) : null}
+      <Text {...statusStyle} wrap="truncate-end">
+        {" "}
+        {glyph(caps, status.glyph)}
+      </Text>
     </Box>
   );
 }

@@ -50,6 +50,10 @@ export interface StatusBarProps {
 /** Hard cap on the visible model id so a long id can never dominate the bar. */
 const MAX_MODEL_CHARS = 24;
 
+/** Blank columns guaranteed between the left cluster and the right-hand health
+ * state, so they can never render flush against each other. */
+const HEALTH_GUTTER = 2;
+
 /** A sliver reserved for the model id before optional segments (cost, context)
  * are allowed to claim space — keeps "brand + model" the top layout priority
  * even under narrowness; the model itself may still shrink further once Ink
@@ -131,6 +135,12 @@ export function StatusBar({
   // and model are never dropped; the optional segments drop whole — never
   // partially truncated — starting with the least important, until what's left
   // fits. Skipped entirely when no width budget is given (unconstrained render).
+  //
+  // `HEALTH_GUTTER` is the fix for the audit's 60-column frame, which rendered
+  // `…$0.53⟳ streaming` — the right cluster is flex-end justified, so when the
+  // left cluster happened to fill the row exactly the two clusters butted
+  // together with no space and read as one broken word. Budgeting a mandatory
+  // blank column makes the separation structural rather than incidental.
   let showContext = true;
   let showCost = true;
   let showHealth = true;
@@ -140,7 +150,7 @@ export function StatusBar({
       MODEL_MIN_RESERVE +
       (showContext ? contextSegLen : 0) +
       (showCost ? costSegLen : 0) +
-      (showHealth ? healthSegLen : 0);
+      (showHealth ? healthSegLen + HEALTH_GUTTER : 0);
     if (total() > width) showContext = false;
     if (total() > width) showCost = false;
     if (total() > width) showHealth = false;
@@ -201,7 +211,7 @@ export function StatusBar({
         ) : null}
       </Box>
       {showHealth ? (
-        <Box flexGrow={1} flexShrink={0} justifyContent="flex-end">
+        <Box flexGrow={1} flexShrink={0} justifyContent="flex-end" paddingLeft={HEALTH_GUTTER}>
           {view.streaming ? (
             <Text {...streamStyle} wrap="truncate-end">
               {glyph(caps, "streaming")} streaming

@@ -22,6 +22,7 @@ import { ViewportView } from "../render/ViewportView.js";
 import { CompareView } from "../render/CompareView.js";
 import { forcesCompactHud, isShort, selectResponsiveTree } from "./breakpoints.js";
 import { deriveFocusRing, nextFocus, reconcileFocus } from "./focusRing.js";
+import { layoutTree } from "./measure.js";
 import type { PaneRenderContext } from "./PaneRenderer.js";
 import { buildPreset } from "./presets.js";
 import type { LayoutPreset, PresetId } from "./tree.js";
@@ -169,21 +170,38 @@ export function Workspace({
     dims.cols < 60 ? "xnarrow" : dims.cols < 100 ? "narrow" : "medium",
   ) || short;
 
+  // Rows the persistent chrome owns: identity strip, HUD, composer, hint row.
+  const CHROME_ROWS = 4;
+  const paneRows = Math.max(3, dims.rows - CHROME_ROWS);
+
+  // Resolve the tree to exact integer rects BEFORE rendering. This is what keeps
+  // panes inside the terminal: Yoga was previously free to let a pane's content
+  // set its width, which overflowed `dashboard` 15 columns past the right edge
+  // at 100 cols and left ragged `││` seams where borders no longer met.
+  const paneLayout = useMemo(
+    () => layoutTree(tree, { width: dims.cols, height: paneRows }),
+    [tree, dims.cols, paneRows],
+  );
+
   const ctx: PaneRenderContext = {
     view,
     focusedId,
     collapsedIds: collapsedRef.current,
     mode: renderMode,
+    layout: paneLayout,
+    fitHeight: renderMode === "viewport",
   };
 
   const model = view.session?.model;
   const provider = view.session?.provider;
   const isCompare = layout.id === "compare";
   const laneCount = view.laneOrder.length;
+  // Identity only. `costUsd` and `streaming` used to live here *as well as* in
+  // the HUD directly below, so the same `$0.53` and `⟳` were printed twice, one
+  // row apart. The strip says who you are talking to; the HUD says what it is
+  // costing and doing.
   const headerProps = {
     mode,
-    streaming: view.streaming,
-    costUsd: view.totals.costUsd,
     ...(sessionName ? { session: sessionName } : {}),
     // COMPARE is a layout, not a ring mode (§6.3) — surface it in the badge and
     // show the live lane count so the header matches the §2.9.3 mockup.
@@ -199,23 +217,24 @@ export function Workspace({
     <Box flexDirection="column" width={dims.cols} minHeight={dims.rows}>
       {renderMode === "viewport" ? (
         <>
-          <HeaderMark {...headerProps} showWordmark />
+          <HeaderMark {...headerProps} showWordmark width={dims.cols} />
           {layout.id === "compare" ? (
-            <CompareView view={view} focusedLane={focusedLane} rows={dims.rows - 4} cols={dims.cols} />
+            <CompareView view={view} focusedLane={focusedLane} rows={paneRows} cols={dims.cols} />
           ) : (
-            <ViewportView tree={tree} ctx={ctx} rows={dims.rows - 4} />
+            <ViewportView tree={tree} ctx={ctx} rows={paneRows} cols={dims.cols} />
           )}
         </>
       ) : (
         <>
-          <ScrollbackView view={view} tree={tree} ctx={ctx} />
-          <HeaderMark {...headerProps} />
+          <ScrollbackView view={view} tree={tree} ctx={ctx} width={dims.cols} />
+          <HeaderMark {...headerProps} width={dims.cols} />
         </>
       )}
       <StatusHud view={view} cols={dims.cols} forceCompact={forceCompactHud} {...(contextMax !== undefined ? { contextMax } : {})} />
       <CommandBar
         mode={mode}
         view={view}
+        width={dims.cols}
         isActive={inputActive}
         onComposingChange={(composing) => setInputEmpty(!composing)}
         reserveDigitsWhenEmpty={layout.id === "compare"}

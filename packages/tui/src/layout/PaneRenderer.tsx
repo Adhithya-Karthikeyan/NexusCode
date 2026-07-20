@@ -26,11 +26,47 @@ export interface PaneRenderContext {
   mode: RenderMode;
   /** Exact rects for every node, from `layoutTree`. Absent → unconstrained. */
   layout?: LayoutMap;
+  /**
+   * Whether panes are pinned to the measured **height** as well as the width.
+   *
+   * True in Mode B, where the viewport owns a fixed region and panes tile it.
+   * False in Mode A, where the transcript above already fills the screen and a
+   * pane holds only the live tail — pinning height there produced the audit's
+   * worst offender: a `Conversation` box containing one line of text followed by
+   * seventeen blank rows, on an 80×24 terminal. Widths stay pinned either way,
+   * because that is what keeps content inside the terminal.
+   */
+  fitHeight?: boolean;
 }
 
 /** The rect a node was allotted, if the context carries a measurement. */
 export function useRect(ctx: PaneRenderContext, id: string): Rect | undefined {
   return ctx.layout?.get(id);
+}
+
+/**
+ * Geometry props for a measured `<PaneFrame>`: always a width, height only in
+ * Mode B (the frame turns that height into a `minHeight` — see PaneFrame).
+ */
+export function sizeProps(
+  ctx: PaneRenderContext,
+  rect: Rect | undefined,
+): { width?: number; height?: number } {
+  if (!rect) return {};
+  return ctx.fitHeight ? { width: rect.width, height: rect.height } : { width: rect.width };
+}
+
+/**
+ * The same geometry for a plain Ink `<Box>` wrapper. `minHeight`, never
+ * `height`: a fixed height on a Box whose content is taller does not clip in
+ * Ink, it overlays the surplus rows and corrupts the text.
+ */
+export function boxSize(
+  ctx: PaneRenderContext,
+  rect: Rect | undefined,
+): { width?: number; minHeight?: number } {
+  if (!rect) return {};
+  return ctx.fitHeight ? { width: rect.width, minHeight: rect.height } : { width: rect.width };
 }
 
 export function PaneRenderer({
@@ -62,7 +98,7 @@ export function PaneRenderer({
       collapsed={collapsed}
       collapsible={node.focusable}
       railSummary={panelRailSummary(node.panel, ctx.view)}
-      {...(rect ? { width: rect.width, height: rect.height } : {})}
+      {...sizeProps(ctx, rect)}
     >
       <PanelBody
         panel={node.panel}

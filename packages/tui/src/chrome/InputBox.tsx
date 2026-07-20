@@ -277,15 +277,23 @@ export function InputBox({
     { isActive: isActive && isRawModeSupported === true },
   );
 
-  const prompt = promptLabel ?? `${glyph(caps, "node")} ${glyph(caps, "prompt")}`;
+  const prompt = promptLabel ?? glyph(caps, "prompt");
   const openFence = hasOpenFence(buffer);
   const placeholder = "type a message…";
+  // Continuation lines hang under the first character of the draft, not under a
+  // fixed two spaces — with the old constant a `◆ ▸ ` prompt left every wrapped
+  // line two columns out of true.
+  const contIndent = " ".repeat(prompt.length + 1);
 
   return (
     <Box flexDirection="column">
       {buffer.lines.map((line, i) => (
         <Box key={i}>
-          {i === 0 ? <Text {...(openFence ? fenceStyle : promptStyle)}>{prompt} </Text> : <Text>{"  "}</Text>}
+          {i === 0 ? (
+            <Text {...(openFence ? fenceStyle : promptStyle)}>{prompt} </Text>
+          ) : (
+            <Text>{contIndent}</Text>
+          )}
           {isEmpty(buffer) && i === 0 ? (
             <Text {...mutedStyle}>{placeholder}</Text>
           ) : (

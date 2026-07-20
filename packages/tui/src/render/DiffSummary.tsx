@@ -32,7 +32,7 @@ export function countDiff(patch: string): { adds: number; dels: number } {
   return { adds, dels };
 }
 
-export function DiffSummary({ diff, expanded = false }: DiffSummaryProps): React.JSX.Element {
+export function DiffSummary({ diff, expanded = false, width }: DiffSummaryProps): React.JSX.Element {
   const caps = useCaps();
   const arrowStyle = useTextStyle("text.muted");
   const verbStyle = useTextStyle("text.secondary");
@@ -45,18 +45,35 @@ export function DiffSummary({ diff, expanded = false }: DiffSummaryProps): React
   const arrow = caps.unicode ? "↳" : "->";
   const minus = caps.unicode ? "−" : "-";
 
+  // The path is the only elastic segment: it shrinks and truncates so the
+  // `+A −B` counts — the part you actually scan for — always survive at the
+  // right edge instead of being pushed off it.
   return (
-    <Box flexDirection="column">
-      <Box>
-        <Text {...arrowStyle}>{"  "}{arrow} </Text>
-        <Text {...verbStyle}>Edit </Text>
-        <Text {...pathStyle}>{diff.path}</Text>
-        <Text {...addStyle}> +{adds}</Text>
-        <Text {...delStyle}> {minus}{dels}</Text>
-        {!expanded ? <Text {...hintStyle}>  ({glyph(caps, "chevronRight")} expand)</Text> : null}
+    <Box flexDirection="column" {...(width ? { width } : {})}>
+      <Box {...(width ? { width } : {})}>
+        <Box flexShrink={0}>
+          <Text {...arrowStyle}>{arrow} </Text>
+          <Text {...verbStyle}>Edit </Text>
+        </Box>
+        <Box flexShrink={1} minWidth={0}>
+          <Text {...pathStyle} wrap="truncate-start">
+            {diff.path}
+          </Text>
+        </Box>
+        <Box flexShrink={0}>
+          <Text {...addStyle}> +{adds}</Text>
+          <Text {...delStyle}>
+            {" "}
+            {minus}
+            {dels}
+          </Text>
+          {!expanded ? (
+            <Text {...hintStyle}> ({glyph(caps, "chevronRight")} expand)</Text>
+          ) : null}
+        </Box>
       </Box>
       {expanded ? (
-        <Box marginLeft={4} flexDirection="column">
+        <Box marginLeft={2} flexDirection="column">
           <DiffView patch={diff.patch} showHeader={false} />
         </Box>
       ) : null}

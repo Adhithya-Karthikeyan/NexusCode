@@ -17,6 +17,7 @@ import { ConversationInput } from "../chrome/ConversationInput.js";
 import type { SlashCommandSpec } from "../chrome/commands.js";
 import { ConversationView } from "../render/ConversationView.js";
 import { StatusBar } from "../render/StatusBar.js";
+import { useViewport } from "../layout/useViewport.js";
 import type { ViewState } from "../store/viewState.js";
 
 /** A thin full-width rule separating the transcript from the pinned chrome. */
@@ -73,7 +74,11 @@ export function Conversation({
   fallbackModel,
   fallbackProvider,
 }: ConversationProps): React.JSX.Element {
-  const cols = viewport?.cols ?? 80;
+  // The real terminal width, live across resizes. This surface used to hard-code
+  // 80 columns and never listen for `resize`, so on any terminal that was not
+  // exactly 80 wide the transcript, the divider and the status bar all measured
+  // against the wrong number.
+  const { cols } = useViewport(viewport);
   return (
     <Box flexDirection="column" width={cols}>
       <ConversationView

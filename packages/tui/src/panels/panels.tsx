@@ -22,7 +22,10 @@ import {
   selectToolActivity,
 } from "../store/selectors.js";
 import type { ViewState } from "../store/viewState.js";
+import { providerLetter, providerToken } from "../theme/providerToken.js";
 import { useTextStyle } from "../theme/ThemeProvider.js";
+import { truncate } from "../layout/measure.js";
+import { MessageView } from "../render/MessageView.js";
 import type { PanelId, RenderMode } from "../layout/tree.js";
 
 /**
@@ -119,12 +122,25 @@ function ConversationEmpty(): React.JSX.Element {
   );
 }
 
-function ConversationBody({ v, mode }: { v: ViewState; mode: RenderMode }): React.JSX.Element {
-  const caps = useCaps();
-  const textStyle = useTextStyle("stream.text");
-  const thinking = useTextStyle("stream.thinking");
-  const cursor = useTextStyle("stream.cursor");
+/**
+ * The conversation panel body. It renders through the SAME `<MessageView>` the
+ * conversation-first surface uses, so an answer looks identical whichever preset
+ * you are in: real Markdown (headings, lists, fenced code), the provider marker
+ * in the gutter, tool lines and diff summaries. Previously this printed
+ * `turn.text` into a bare `<Text>`, which is why `## What changed` and raw
+ * ``` fences showed up literally in every pane preset.
+ */
+function ConversationBody({
+  v,
+  mode,
+  width,
+}: {
+  v: ViewState;
+  mode: RenderMode;
+  width?: number;
+}): React.JSX.Element {
   const live = selectLiveTurn(v);
+  const provider = v.session?.provider ?? "custom";
   // Mode A: only the in-flight tail lives here (finalized turns go to <Static>).
   // Mode B: the viewport owns everything, so show finalized turns too.
   const finalized = mode === "viewport" ? selectAllFinalizedTurns(v) : [];
@@ -134,24 +150,16 @@ function ConversationBody({ v, mode }: { v: ViewState; mode: RenderMode }): Reac
   return (
     <Box flexDirection="column">
       {finalized.map((t) => (
-        <Text key={t.id} {...textStyle}>
-          {t.text || t.reasoning}
-        </Text>
+        <MessageView key={t.id} turn={t} provider={provider} {...(width ? { width } : {})} />
       ))}
       {live ? (
-        <Box flexDirection="column">
-          {live.reasoning ? <Text {...thinking}>⋯ {live.reasoning}</Text> : null}
-          <Text {...textStyle}>
-            {live.text}
-            <Text {...cursor}>{glyph(caps, "streaming")}</Text>
-          </Text>
-        </Box>
+        <MessageView turn={live} provider={provider} streaming {...(width ? { width } : {})} />
       ) : null}
     </Box>
   );
 }
 
-function ToolActivityBody({ v }: { v: ViewState }): React.JSX.Element {
+function ToolActivityBody({ v, width }: { v: ViewState; width?: number }): React.JSX.Element {
   const caps = useCaps();
   const ok = useTextStyle("success.fg");
   const err = useTextStyle("error.fg");
@@ -165,8 +173,8 @@ function ToolActivityBody({ v }: { v: ViewState }): React.JSX.Element {
         const mark =
           t.status === "ok" ? glyph(caps, "ok") : t.status === "error" ? glyph(caps, "error") : glyph(caps, "running");
         return (
-          <Text key={t.id} {...style}>
-            {mark} {t.name}
+          <Text key={t.id} {...style} wrap="truncate-end">
+            {mark} {width ? truncate(t.name, width - 2, caps.unicode) : t.name}
           </Text>
         );
       })}
@@ -174,7 +182,7 @@ function ToolActivityBody({ v }: { v: ViewState }): React.JSX.Element {
   );
 }
 
-function NotificationsBody({ v }: { v: ViewState }): React.JSX.Element {
+function NotificationsBody({ v, width }: { v: ViewState; width?: number }): React.JSX.Element {
   const caps = useCaps();
   const warn = useTextStyle("warning.fg");
   const err = useTextStyle("error.fg");
@@ -183,48 +191,62 @@ function NotificationsBody({ v }: { v: ViewState }): React.JSX.Element {
   return (
     <Box flexDirection="column">
       {notes.slice(-4).map((n, i) => (
-        <Text key={`${n.ts}-${i}`} {...(n.kind === "error" ? err : warn)}>
-          {n.kind === "error" ? glyph(caps, "error") : glyph(caps, "warn")} {n.title}
+        <Text key={`${n.ts}-${i}`} {...(n.kind === "error" ? err : warn)} wrap="truncate-end">
+          {n.kind === "error" ? glyph(caps, "error") : glyph(caps, "warn")}{" "}
+          {width ? truncate(n.title, width - 2, caps.unicode) : n.title}
         </Text>
       ))}
     </Box>
   );
 }
 
-function ModelBody({ v }: { v: ViewState }): React.JSX.Element {
+function ModelBody({ v, width }: { v: ViewState; width?: number }): React.JSX.Element {
   const caps = useCaps();
   const primary = useTextStyle("text.primary");
   const muted = useTextStyle("text.muted");
+  const providerStyle = useTextStyle(providerToken(selectModel(v).provider));
   const { model, provider } = selectModel(v);
   return (
     <Box flexDirection="column">
-      <Text {...primary}>
-        {glyph(caps, "dotFilled")} {model}
+      <Text {...primary} wrap="truncate-end">
+        {width ? truncate(model, width, caps.unicode) : model}
       </Text>
-      <Text {...muted}>{provider}</Text>
+      <Text wrap="truncate-end">
+        <Text {...providerStyle}>
+          {glyph(caps, "dotFilled")}
+          {providerLetter(provider)}
+        </Text>
+        <Text {...muted}> {provider}</Text>
+      </Text>
     </Box>
   );
 }
 
-/** Render a panel body from the view. Pure selector → ReactNode (§2.2). */
+/**
+ * Render a panel body from the view. Pure selector → ReactNode (§2.2).
+ * `width` is the pane's usable text column (border + padding already removed);
+ * bodies wrap and truncate against it so nothing widens its own frame.
+ */
 export function PanelBody({
   panel,
   v,
   mode,
+  width,
 }: {
   panel: PanelId;
   v: ViewState;
   mode: RenderMode;
+  width?: number;
 }): React.JSX.Element {
   switch (panel) {
     case "conversation":
-      return <ConversationBody v={v} mode={mode} />;
+      return <ConversationBody v={v} mode={mode} {...(width ? { width } : {})} />;
     case "tool_activity":
-      return <ToolActivityBody v={v} />;
+      return <ToolActivityBody v={v} {...(width ? { width } : {})} />;
     case "notifications":
-      return <NotificationsBody v={v} />;
+      return <NotificationsBody v={v} {...(width ? { width } : {})} />;
     case "model_info":
-      return <ModelBody v={v} />;
+      return <ModelBody v={v} {...(width ? { width } : {})} />;
     case "explorer":
       return <Empty label="no files tracked" />;
     case "plan":
