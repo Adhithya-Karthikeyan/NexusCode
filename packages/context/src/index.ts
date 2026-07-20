@@ -55,6 +55,7 @@ export {
   EnvSource,
   GitDiffSource,
   MemorySource,
+  ProjectConventionsSource,
   ProjectFilesSource,
   TerminalOutputSource,
 } from "./sources/index.js";
@@ -65,6 +66,7 @@ export type {
   GitDiffOptions,
   GitRunner,
   MemorySourceOptions,
+  ProjectConventionsOptions,
   ProjectFilesOptions,
   TerminalEntry,
   TerminalOutputOptions,

@@ -8,7 +8,7 @@
  * was active (colour alone carried it), or that `0 err` was a count rather than
  * a fourth tab. Three fixes:
  *
- *  - the active tab is marked **structurally**, with a `▸` caret and bold, so it
+ *  - the active tab is marked **structurally**, with brackets and bold, so it
  *    survives no-colour and colour-blindness;
  *  - tabs are separated by `│`, which reads as a boundary; `·` reads as prose;
  *  - live counts are no longer baked into tab *names* (see `panelTitle`) — the
@@ -21,7 +21,6 @@
 
 import { Text } from "ink";
 import { useCaps } from "../caps/CapabilityProvider.js";
-import { glyph } from "../caps/glyphs.js";
 import { collectLeaves, type StackNode } from "./tree.js";
 import { isEssentialPanel, PanelBody, panelRailSummary, panelTitle } from "../panels/panels.js";
 import { PANE_CHROME_X } from "./measure.js";

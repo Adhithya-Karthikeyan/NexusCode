@@ -159,8 +159,16 @@ export type EmbedderKind = z.infer<typeof EmbedderKind>;
 
 export const RagConfig = z
   .object({
-    /** Enable the RagSource in the Context Engine (retrieval into assembled context). */
-    enabled: z.boolean().default(false),
+    /**
+     * Allow the RagSource into the Context Engine (retrieval into assembled
+     * context). On by default, but this is a PERMISSION, not a promise: the
+     * source is only constructed when a persisted index actually exists and is
+     * non-empty (see `buildPowerSources`). Retrieval with no index would burn a
+     * query for zero chunks, so "no index ⇒ contribute nothing" is the rule and
+     * the out-of-the-box token cost of this flag is zero until `nexus index`
+     * has been run. Set false to keep retrieval out even when an index exists.
+     */
+    enabled: z.boolean().default(true),
     /** Which embedder to use. `hashing` is deterministic + offline (tests/default). */
     embedder: EmbedderKind.default("hashing"),
     /** Model id for the remote embedders (ollama/openai/provider); ignored by `hashing`. */
@@ -249,9 +257,15 @@ export type CacheConfig = z.infer<typeof CacheConfig>;
  */
 export const FileIntelConfig = z
   .object({
-    /** Enable the RepoMapSource in the Context Engine (structural context). */
-    repoMap: z.boolean().default(false),
-    /** Token budget for the rendered repo map. */
+    /**
+     * Enable the RepoMapSource in the Context Engine (structural context). On by
+     * default: a coding harness that cannot see the shape of the repo answers
+     * from generic priors instead of this project. Cost is bounded by
+     * `budgetTokens` below, and the map lands in the cache-stable static prefix
+     * so repeat turns hit the provider prompt-cache rather than re-paying.
+     */
+    repoMap: z.boolean().default(true),
+    /** Token budget for the rendered repo map — the hard cap on its context cost. */
     budgetTokens: z.number().int().positive().default(1024),
     /** Hard cap on the number of files the walker returns. */
     maxFiles: z.number().int().positive().optional(),

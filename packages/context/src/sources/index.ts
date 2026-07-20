@@ -9,6 +9,9 @@ export type { CurrentTaskOptions } from "./task.js";
 export { ProjectFilesSource } from "./files.js";
 export type { ProjectFilesOptions } from "./files.js";
 
+export { ProjectConventionsSource } from "./conventions.js";
+export type { ProjectConventionsOptions } from "./conventions.js";
+
 export { GitDiffSource } from "./git.js";
 export type { GitDiffOptions, GitRunner } from "./git.js";
 
