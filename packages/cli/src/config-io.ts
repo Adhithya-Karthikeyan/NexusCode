@@ -17,7 +17,7 @@
  * instead, naming the file that is winning.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   NexusConfig as NexusConfigSchema,
@@ -171,7 +171,21 @@ export function writeUserConfig(
   const target = resolveUserConfig(env);
   if (target.blocked) throw new UserConfigWriteError(target.blocked);
   mkdirSync(userConfigDir(env), { recursive: true });
-  writeFileSync(target.file, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  // Write to a temp file and rename: a crash or a full disk mid-write would
+  // otherwise leave a truncated config that fails schema validation and bricks
+  // every later command. 0600 because this file can hold principal tokens.
+  const tmp = `${target.file}.tmp-${process.pid}`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    renameSync(tmp, target.file);
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* best-effort cleanup; report the original failure */
+    }
+    throw err;
+  }
   return target.file;
 }
 

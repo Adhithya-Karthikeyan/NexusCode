@@ -256,6 +256,44 @@ describe("user-config writes target the file the loader actually reads", () => {
     expect(existsSync(join(box.configDir, "config.json"))).toBe(false);
   });
 
+  it("does not block on a config.yaml that is not a mapping (the loader skips it too)", async () => {
+    // YAML yielding a sequence/scalar/null is rejected by the loader's
+    // isPlainObject check, so it shadows nothing. Blocking on it would brick
+    // every mutation while blaming the wrong file.
+    const box = sandbox();
+    writeFileSync(join(box.configDir, "config.yaml"), "- one\n- two\n", "utf8");
+
+    const res = await runCli(box, [
+      "budget", "set",
+      "--id", "b1", "--scope", "org", "--key", "acme",
+      "--limit", "10", "--window", "day",
+    ]);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toMatch(/config\.json/);
+
+    const show = await runCli(box, ["budget", "show", "-o", "json"]);
+    const parsed = JSON.parse(show.stdout) as { budgets: { id: string }[] };
+    expect(parsed.budgets.map((b) => b.id)).toContain("b1");
+  });
+
+  it("makes `mcp rm` fail loudly under a shadowing config.yaml, not claim 'no such server'", async () => {
+    // The remove paths return BEFORE reaching the write, so a false empty
+    // baseline made them report a confident, wrong "no server" for a server
+    // the user can see in `mcp list`.
+    const box = sandbox();
+    writeFileSync(
+      join(box.configDir, "config.yaml"),
+      "mcp:\n  - name: myserver\n    transport: stdio\n    command: echo\n",
+      "utf8",
+    );
+
+    const res = await runCli(box, ["mcp", "rm", "myserver"]);
+    expect(res.code).not.toBe(0);
+    const message = `${res.stdout}${res.stderr}`;
+    expect(message).not.toMatch(/no server/i);
+    expect(message).toMatch(/config\.yaml/);
+  });
+
   it("still writes config.json on a fresh install and the budget takes effect", async () => {
     const box = sandbox();
     const res = await runCli(box, [

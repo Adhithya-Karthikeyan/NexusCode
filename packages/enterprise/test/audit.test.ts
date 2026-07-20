@@ -259,6 +259,59 @@ describe("audit persistence", () => {
     expect(result.tampered[0]?.detail).toMatch(/MISSING \(deleted\)/);
   });
 
+  it("a later append CANNOT heal a deleted chain back to clean", () => {
+    // Deletion is only caught while the anchor still remembers the lost
+    // records. If the next `append()` were allowed to re-sign the anchor
+    // against the now-shorter file, `rm audit.ndjson` plus any one ordinary
+    // audited action would launder the loss away completely.
+    const file = join(dir, "audit.ndjson");
+    const log = new AuditLog({ file, key: TEST_KEY });
+    log.append({ actor: "alice", action: "run.start" });
+    log.append({ actor: "alice", action: "run.end" });
+
+    rmSync(file);
+    const attacker = new AuditLog({ file, key: TEST_KEY });
+    attacker.append({ actor: "mallory", action: "run.start" });
+
+    const result = attacker.verifyFile();
+    expect(result.ok).toBe(false);
+    expect(result.tampered.some((t) => t.reason === "anchor-mismatch")).toBe(true);
+    // A fresh reader reaches the same verdict — the evidence is on disk.
+    expect(new AuditLog({ file, key: TEST_KEY }).verifyFile().ok).toBe(false);
+  });
+
+  it("a later append cannot heal a TRUNCATED chain back to clean either", () => {
+    const file = join(dir, "audit.ndjson");
+    const log = new AuditLog({ file, key: TEST_KEY });
+    log.append({ actor: "alice", action: "run.start" });
+    log.append({ actor: "alice", action: "tool.call" });
+    log.append({ actor: "alice", action: "run.end" });
+
+    const lines = readFileSync(file, "utf8").trimEnd().split("\n");
+    lines.pop();
+    writeFileSync(file, `${lines.join("\n")}\n`);
+
+    const reopened = new AuditLog({ file, key: TEST_KEY });
+    reopened.append({ actor: "mallory", action: "run.start" });
+    expect(reopened.verifyFile().ok).toBe(false);
+  });
+
+  it("a corrupt line is reported as tamper, not thrown (verification stays usable)", () => {
+    // An attacker who can only APPEND must not be able to take down the
+    // verifier itself by writing one unparseable byte.
+    const file = join(dir, "audit.ndjson");
+    const log = new AuditLog({ file, key: TEST_KEY });
+    log.append({ actor: "alice", action: "run.start" });
+    writeFileSync(file, `${readFileSync(file, "utf8")}{ not json\n`);
+
+    // Constructing must not throw…
+    const reopened = new AuditLog({ file, key: TEST_KEY });
+    // …and verification must report the damage rather than crash.
+    const result = reopened.verifyFile();
+    expect(result.ok).toBe(false);
+    expect(result.tampered.some((t) => /not valid JSON/.test(t.detail))).toBe(true);
+  });
+
   it("verifyFile() reports a FRESH install (no anchor, no file) as clean", () => {
     // The counterpart guard: a first run has neither file nor anchor and must
     // never look tampered.

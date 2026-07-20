@@ -209,14 +209,24 @@ export async function cmdUsage(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   // Because the view is unavoidably org-wide, enterprise mode gates it on
   // `manage` over `command:usage`. Off-mode (single user, no org) is untouched:
   // `services.enabled` is false and there is nothing to leak.
+  //
+  // Scope of this gate: CLI identity is SELF-ASSERTED (`--principal` /
+  // `$NEXUS_PRINCIPAL` are unauthenticated — see `resolvePrincipal`), so this
+  // is role hygiene, not an access-control boundary against a local user who
+  // can simply claim another id. It is checked BEFORE the history is read, so
+  // no figure reaches any output branch on the denied path.
   if (services.enabled) {
     const decision = services.authorize(caller, "manage", USAGE_RESOURCE);
     if (!decision.allowed) {
-      io.err(
-        `DENY — ${caller.id} [${caller.roles.join(",") || "default"}] may not read org-wide usage ` +
-          `(manage on ${USAGE_RESOURCE})\n  source=${decision.source}: ${decision.reason}\n` +
-          `  note: run history records no per-principal attribution, so this report covers ALL users.\n`,
-      );
+      const detail =
+        `${caller.id} [${caller.roles.join(",") || "default"}] may not read org-wide usage ` +
+        `(manage on ${USAGE_RESOURCE}) — ${decision.source}: ${decision.reason}`;
+      // Machine consumers must not get prose on stderr where they expect JSON.
+      if (isJson(args) || args.flags.get("format") === "json") {
+        io.err(`${JSON.stringify({ error: "forbidden", principal: caller.id, detail })}\n`);
+      } else {
+        io.err(`DENY — ${detail}\n  note: ${UNATTRIBUTED_NOTE}.\n`);
+      }
       return 1;
     }
   }
@@ -281,7 +291,16 @@ export async function cmdAudit(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   const services = await buildEnterprise(config);
 
   if (args.bools.has("verify")) {
-    const result = services.auditLog.verifyFile();
+    // Never let a read/parse failure surface as a stack trace: `--verify` is the
+    // tool an operator reaches for when the log is suspect, so an unreadable
+    // chain must be REPORTED as a failure, not crash the reporter.
+    let result: ReturnType<typeof services.auditLog.verifyFile>;
+    try {
+      result = services.auditLog.verifyFile();
+    } catch (err) {
+      io.err(`audit chain UNVERIFIABLE — ${(err as Error).message}\n`);
+      return 1;
+    }
     if (isJson(args)) {
       io.out(`${JSON.stringify(result)}\n`);
     } else if (result.ok) {
