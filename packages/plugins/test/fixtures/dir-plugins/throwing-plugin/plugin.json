@@ -1,0 +1,8 @@
+{
+  "name": "throwing-plugin",
+  "version": "1.0.0",
+  "description": "Throws at module evaluation; the host must isolate it and survive.",
+  "engines": { "nexuscode": "^1.0.0" },
+  "entry": "index.mjs",
+  "contributes": { "tools": ["never"] }
+}

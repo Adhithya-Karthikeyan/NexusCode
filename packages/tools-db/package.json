@@ -1,0 +1,34 @@
+{
+  "name": "@nexuscode/tools-db",
+  "version": "0.1.0",
+  "description": "NexusCode database tools — db_query / db_schema over a DbDriver seam. SQLite (better-sqlite3) ships as the always-available offline driver; Postgres, MySQL, Snowflake and BigQuery are optional lazy dependencies loaded via dynamic import.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*",
+    "better-sqlite3": "^12.11.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@nexuscode/server",
+  "version": "0.1.0",
+  "description": "NexusCode REST daemon (system-spec §24) — `nexus serve`. An HTTP server that embeds a @nexuscode/sdk Nexus instance and exposes runs, live SSE event streams, provider/tool/session/config introspection, and health over the SAME engine the CLI drives. Bearer-authed, localhost-bound, secret-safe.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/config": "*",
+    "@nexuscode/core": "*",
+    "@nexuscode/sdk": "*",
+    "@nexuscode/tools": "*"
+  },
+  "devDependencies": {
+    "@nexuscode/enterprise": "*",
+    "@nexuscode/provider-mock": "*"
+  }
+}

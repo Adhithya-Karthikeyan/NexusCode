@@ -1,0 +1,15 @@
+{
+  "name": "good-plugin",
+  "version": "1.0.0",
+  "description": "A well-formed fixture plugin (register-function form).",
+  "author": "NexusCode tests",
+  "license": "MIT",
+  "engines": { "nexuscode": "^1.0.0" },
+  "entry": "index.mjs",
+  "contributes": {
+    "providers": ["fixture-llm"],
+    "tools": ["fixture_echo"],
+    "prompts": ["fixture.greeting"],
+    "commands": ["fixture"]
+  }
+}

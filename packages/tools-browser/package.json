@@ -1,0 +1,30 @@
+{
+  "name": "@nexuscode/tools-browser",
+  "version": "0.1.0",
+  "description": "NexusCode browser tools — Playwright-backed browser_navigate/click/extract/screenshot behind a BrowserDriver seam. Playwright is an OPTIONAL LAZY dependency (dynamic import, feature-detected); absent ⇒ a clean isError result, never a crash. Ships an in-memory FAKE driver for offline tests.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*"
+  }
+}

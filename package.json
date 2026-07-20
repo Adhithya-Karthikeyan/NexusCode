@@ -1,0 +1,29 @@
+{
+  "name": "nexuscode-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NexusCode — a provider-agnostic AI CLI harness. Monorepo root.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "packageManager": "npm@11.12.1",
+  "workspaces": [
+    "packages/*",
+    "packages/providers/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@nexuscode/shared && npm run build --workspace=@nexuscode/config && npm run build --workspace=@nexuscode/auth && npm run build --workspace=@nexuscode/memory && npm run build --workspace=@nexuscode/tools && npm run build --workspace=@nexuscode/tools-web && npm run build --workspace=@nexuscode/tools-db && npm run build --workspace=@nexuscode/tools-browser && npm run build --workspace=@nexuscode/tools-containers && npm run build --workspace=@nexuscode/mcp && npm run build --workspace=@nexuscode/prompt && npm run build --workspace=@nexuscode/context && npm run build --workspace=@nexuscode/tasks && npm run build --workspace=@nexuscode/fileintel && npm run build --workspace=@nexuscode/lsp && npm run build --workspace=@nexuscode/cache && npm run build --workspace=@nexuscode/observability && npm run build --workspace=@nexuscode/hooks && npm run build --workspace=@nexuscode/core && npm run build --workspace=@nexuscode/enterprise && npm run build --workspace=@nexuscode/provider-mock && npm run build --workspace=@nexuscode/runtime && npm run build --workspace=@nexuscode/agent && npm run build --workspace=@nexuscode/sdk && npm run build --workspace=@nexuscode/server && npm run build --workspace=@nexuscode/session && npm run build --workspace=@nexuscode/theme && npm run build --workspace=@nexuscode/provider-openai && npm run build --workspace=@nexuscode/provider-mock && npm run build --workspace=@nexuscode/provider-anthropic && npm run build --workspace=@nexuscode/provider-ollama && npm run build --workspace=@nexuscode/rag && npm run build --workspace=@nexuscode/git && npm run build --workspace=@nexuscode/tools-cloud && npm run build --workspace=@nexuscode/tools-ai && npm run build --workspace=@nexuscode/provider-azure && npm run build --workspace=@nexuscode/provider-subprocess && npm run build --workspace=@nexuscode/provider-claude-code && npm run build --workspace=@nexuscode/provider-codex && npm run build --workspace=@nexuscode/provider-gemini && npm run build --workspace=@nexuscode/provider-bedrock && npm run build --workspace=@nexuscode/provider-vertex && npm run build --workspace=@nexuscode/plugins && npm run build --workspace=@nexuscode/enterprise && npm run build --workspace=@nexuscode/tui && npm run build --workspace=@nexuscode/cli",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

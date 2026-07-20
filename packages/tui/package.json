@@ -1,0 +1,38 @@
+{
+  "name": "@nexuscode/tui",
+  "version": "0.1.0",
+  "description": "NexusCode TUI — a pure ink/react renderer over the engine's normalized UiEvent stream. Pane-tree layout, 6 themes, headless-testable.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/core": "*",
+    "@nexuscode/shared": "*",
+    "@nexuscode/theme": "*",
+    "ink": "^5.1.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@nexuscode/provider-mock": "*",
+    "@types/react": "^18.3.12",
+    "ink-testing-library": "^4.0.0"
+  }
+}

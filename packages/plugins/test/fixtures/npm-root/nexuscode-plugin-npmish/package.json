@@ -1,0 +1,17 @@
+{
+  "name": "nexuscode-plugin-npmish",
+  "version": "1.2.0",
+  "description": "An npm-published fixture plugin discovered by naming convention.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.mjs",
+  "keywords": ["nexuscode-plugin"],
+  "nexuscode": {
+    "engines": { "nexuscode": "^1.0.0" },
+    "contributes": {
+      "prompts": ["npmish.summary"],
+      "mcpServers": ["npmish-mcp"],
+      "uiPanels": ["npmish.panel"]
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@nexuscode/agent",
+  "version": "0.1.0",
+  "description": "NexusCode agent framework — the OODA loop (observe/reason/plan/act/evaluate), reflection, self-correction, dynamic replanning, specialized role agents, and provider-agnostic sub-agent delegation (system-spec §5).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/core": "*",
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*",
+    "@nexuscode/tasks": "*",
+    "@nexuscode/prompt": "*"
+  },
+  "devDependencies": {
+    "@nexuscode/provider-mock": "*"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@nexuscode/sdk",
+  "version": "0.1.0",
+  "description": "NexusCode public embeddable SDK (system-spec §24) — one import to embed the harness engine: ask/compare/race/consensus/chain/agent, provider + tool registration, and a live event stream, all over the same engine the CLI drives.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/config": "*",
+    "@nexuscode/core": "*",
+    "@nexuscode/runtime": "*",
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*"
+  },
+  "devDependencies": {
+    "@nexuscode/provider-mock": "*"
+  }
+}

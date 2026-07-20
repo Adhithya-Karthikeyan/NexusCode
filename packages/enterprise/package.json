@@ -1,0 +1,32 @@
+{
+  "name": "@nexuscode/enterprise",
+  "version": "0.1.0",
+  "description": "NexusCode enterprise subsystem (system-spec §25) — tamper-evident hash-chained audit log (append-only, redacted, verifiable NDJSON) and usage/cost analytics (per principal/role/provider/model over day/week/month windows, csv/json export). Reuses @nexuscode/shared Usage+computeCost and @nexuscode/tools redaction. Offline, no external identity provider.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*",
+    "@nexuscode/hooks": "*",
+    "@nexuscode/config": "*"
+  }
+}

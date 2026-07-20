@@ -1,0 +1,32 @@
+{
+  "name": "@nexuscode/mcp",
+  "version": "0.1.0",
+  "description": "NexusCode MCP subsystem — Model Context Protocol client, server, and tool bridge.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*",
+    "zod": "^3.24.1"
+  }
+}

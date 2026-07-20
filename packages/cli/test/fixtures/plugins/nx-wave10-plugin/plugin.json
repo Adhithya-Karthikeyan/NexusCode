@@ -1,0 +1,14 @@
+{
+  "name": "nexuscode-plugin-wave10",
+  "version": "1.0.0",
+  "description": "Wave-10 CLI wiring fixture: contributes one tool + one provider.",
+  "author": "NexusCode tests",
+  "license": "MIT",
+  "engines": { "nexuscode": "^1.0.0" },
+  "entry": "index.mjs",
+  "contributes": {
+    "providers": ["wave10-llm"],
+    "tools": ["wave10_ping"],
+    "prompts": ["wave10.greeting"]
+  }
+}

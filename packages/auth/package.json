@@ -1,0 +1,30 @@
+{
+  "name": "@nexuscode/auth",
+  "version": "0.1.0",
+  "description": "NexusCode OAuth 2.0 authentication framework — PKCE authorization-code (loopback) + device-code flows, token lifecycle, and a SecretStore-backed TokenStore.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/config": "*",
+    "@nexuscode/shared": "*"
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "name": "@nexuscode/cli",
+  "version": "0.1.0",
+  "description": "NexusCode CLI — the `nexus` binary (clipanion + clack).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "nexus": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "@nexuscode/agent": "*",
+    "@nexuscode/auth": "*",
+    "@nexuscode/cache": "*",
+    "@nexuscode/config": "*",
+    "@nexuscode/context": "*",
+    "@nexuscode/core": "*",
+    "@nexuscode/enterprise": "*",
+    "@nexuscode/fileintel": "*",
+    "@nexuscode/git": "*",
+    "@nexuscode/hooks": "*",
+    "@nexuscode/lsp": "*",
+    "@nexuscode/mcp": "*",
+    "@nexuscode/memory": "*",
+    "@nexuscode/observability": "*",
+    "@nexuscode/plugins": "*",
+    "@nexuscode/provider-anthropic": "*",
+    "@nexuscode/provider-azure": "*",
+    "@nexuscode/provider-bedrock": "*",
+    "@nexuscode/provider-claude-code": "*",
+    "@nexuscode/provider-codex": "*",
+    "@nexuscode/provider-gemini": "*",
+    "@nexuscode/provider-mock": "*",
+    "@nexuscode/provider-ollama": "*",
+    "@nexuscode/provider-subprocess": "*",
+    "@nexuscode/provider-vertex": "*",
+    "@nexuscode/prompt": "*",
+    "@nexuscode/provider-openai": "*",
+    "@nexuscode/rag": "*",
+    "@nexuscode/runtime": "*",
+    "@nexuscode/sdk": "*",
+    "@nexuscode/server": "*",
+    "@nexuscode/session": "*",
+    "@nexuscode/shared": "*",
+    "@nexuscode/tasks": "*",
+    "@nexuscode/tools": "*",
+    "@nexuscode/tools-ai": "*",
+    "@nexuscode/tools-browser": "*",
+    "@nexuscode/tools-cloud": "*",
+    "@nexuscode/tools-containers": "*",
+    "@nexuscode/tools-db": "*",
+    "@nexuscode/tools-web": "*",
+    "@nexuscode/tui": "*",
+    "better-sqlite3": "^12.11.1",
+    "clipanion": "^4.0.0-rc.4",
+    "env-paths": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
+  }
+}

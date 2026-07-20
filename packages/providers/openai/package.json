@@ -1,0 +1,31 @@
+{
+  "name": "@nexuscode/provider-openai",
+  "version": "0.1.0",
+  "description": "NexusCode OpenAI provider + generic OpenAI-compatible transport (reused by ollama, grok).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/core": "*",
+    "@nexuscode/shared": "*",
+    "openai": "^4.77.0"
+  }
+}

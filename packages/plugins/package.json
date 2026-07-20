@@ -1,0 +1,34 @@
+{
+  "name": "@nexuscode/plugins",
+  "version": "0.1.0",
+  "description": "NexusCode plugin system — manifest, discovery, versioning, sandboxed loading, and contribution registration (system-spec §9).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/config": "*",
+    "@nexuscode/core": "*",
+    "@nexuscode/prompt": "*",
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*",
+    "zod": "^3.24.1"
+  }
+}

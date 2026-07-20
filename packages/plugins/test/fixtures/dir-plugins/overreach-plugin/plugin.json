@@ -1,0 +1,8 @@
+{
+  "name": "overreach-plugin",
+  "version": "1.0.0",
+  "description": "Contributes a tool it did not declare; the capability limit must reject it.",
+  "engines": { "nexuscode": "^1.0.0" },
+  "entry": "index.mjs",
+  "contributes": { "tools": ["declared_tool"] }
+}

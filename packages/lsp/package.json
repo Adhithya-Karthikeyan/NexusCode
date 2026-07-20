@@ -1,0 +1,31 @@
+{
+  "name": "@nexuscode/lsp",
+  "version": "0.1.0",
+  "description": "NexusCode Code Intelligence (system-spec §12) — a JSON-RPC-over-stdio Language Server Protocol client: goto-definition, find-references, rename, formatting, diagnostics, hover, document symbols, and code actions (incl. auto-imports), with a feature-detecting server registry and graceful degradation when no server is installed.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/shared": "*",
+    "vscode-jsonrpc": "^9.0.1",
+    "vscode-languageserver-protocol": "^3.18.2"
+  }
+}

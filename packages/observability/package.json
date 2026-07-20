@@ -1,0 +1,30 @@
+{
+  "name": "@nexuscode/observability",
+  "version": "0.1.0",
+  "description": "NexusCode observability subsystem (system-spec §19) — an OpenTelemetry-shaped tracer (spans with parent/child nesting, trace/span ids), token/cost/latency/TTFT/tool/error metrics, InMemory + NDJSON-file + OTLP-HTTP (seam) exporters, and a TraceStore/timeline query. Plugs into the engine via CallContext.emit(TraceEvent). No heavy native deps.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*"
+  }
+}

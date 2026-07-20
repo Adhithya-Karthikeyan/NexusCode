@@ -1,0 +1,35 @@
+{
+  "name": "@nexuscode/config",
+  "version": "0.1.0",
+  "description": "NexusCode config loading (cosmiconfig + zod) and the SecretStore chain.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/shared": "*",
+    "cosmiconfig": "^9.0.0",
+    "env-paths": "^3.0.0",
+    "zod": "^3.24.1"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^1.1.6"
+  }
+}

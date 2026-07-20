@@ -1,0 +1,8 @@
+{
+  "name": "incompatible-plugin",
+  "version": "2.0.0",
+  "description": "Targets a future host version; must be rejected before its code runs.",
+  "engines": { "nexuscode": ">=99.0.0" },
+  "entry": "index.mjs",
+  "contributes": { "tools": ["should_never_register"] }
+}

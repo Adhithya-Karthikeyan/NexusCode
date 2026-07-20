@@ -1,0 +1,43 @@
+{
+  "name": "@nexuscode/runtime",
+  "version": "0.1.0",
+  "description": "NexusCode runtime bootstrap — turns a validated NexusConfig into a live ProviderRegistry + SecretStore + PricingTable. The single, shared assembly reused by the CLI, the SDK, and every other harness client.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/config": "*",
+    "@nexuscode/core": "*",
+    "@nexuscode/enterprise": "*",
+    "@nexuscode/provider-mock": "*",
+    "@nexuscode/shared": "*"
+  },
+  "optionalDependencies": {
+    "@nexuscode/provider-anthropic": "*",
+    "@nexuscode/provider-azure": "*",
+    "@nexuscode/provider-bedrock": "*",
+    "@nexuscode/provider-codex": "*",
+    "@nexuscode/provider-claude-code": "*",
+    "@nexuscode/provider-gemini": "*",
+    "@nexuscode/provider-openai": "*",
+    "@nexuscode/provider-vertex": "*"
+  }
+}

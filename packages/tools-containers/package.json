@@ -1,0 +1,30 @@
+{
+  "name": "@nexuscode/tools-containers",
+  "version": "0.1.0",
+  "description": "NexusCode container tools — read-oriented Docker / Kubernetes / OpenShift inspection via the docker/kubectl/oc CLIs (execFile, feature-detected, secret-scrubbed, timeout+output-capped).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist coverage"
+  },
+  "dependencies": {
+    "@nexuscode/shared": "*",
+    "@nexuscode/tools": "*"
+  }
+}
