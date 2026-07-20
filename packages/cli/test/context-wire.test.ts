@@ -128,6 +128,15 @@ describe("outgoing ChatRequest — what the provider actually receives", () => {
     expect(occurrences(bodyOf(last), "And what about indentation?")).toBe(1);
     const asked = last.messages.filter((m) => m.role === "user").map(textOf).join("\n");
     expect(occurrences(asked, SECRET)).toBe(1);
+    // The PRIOR turn must be the user's original words, with no context block of
+    // its own: enrichment happens at dispatch, the transcript keeps the raw turn.
+    // Storing the enriched turn instead would re-send stale retrieval every turn
+    // and grow the request without bound.
+    expect(textOf(last.messages[0]!)).toBe("What is the secret deploy incantation?");
+    expect(session.transcript.filter((m) => m.role === "user").map(textOf)).toEqual([
+      "What is the secret deploy incantation?",
+      "And what about indentation?",
+    ]);
     // The static lane must NOT also leak into the messages (that would double it).
     expect(bodyOf(last)).not.toContain(CONVENTION);
 
