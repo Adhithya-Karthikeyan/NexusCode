@@ -79,11 +79,20 @@ describe("default config assembles real project context", () => {
     expect(ids).toContain("memory");
   });
 
-  it("omits RAG retrieval when no index exists (permission, not a promise)", () => {
+  it("keeps RAG retrieval OFF by default (the index is global, not per-project)", () => {
     const config = NexusConfigSchema.parse({});
-    expect(config.rag.enabled).toBe(true);
-    // Enabled, but there is no persisted index in this temp data dir, so the
-    // source must not join — retrieval with no index costs a query for 0 chunks.
+    // The persisted index lives in a GLOBAL data dir, so "an index exists" does
+    // not mean "this project's index exists". Defaulting on would retrieve
+    // another repo's code into this repo's prompt — and parse an 81MB file to
+    // do it. Off until the index is project-scoped.
+    expect(config.rag.enabled).toBe(false);
+    expect(buildPowerSources(config, { cwd: root }).map((s) => s.id)).not.toContain("rag");
+  });
+
+  it("still contributes nothing when RAG is enabled but no index exists", () => {
+    const config = NexusConfigSchema.parse({ rag: { enabled: true } });
+    // Permission, not a promise: no persisted index in this temp data dir ⇒ the
+    // source must not join rather than spend a query for zero chunks.
     const ids = buildPowerSources(config, { cwd: root }).map((s) => s.id);
     expect(ids).not.toContain("rag");
   });
@@ -177,6 +186,45 @@ describe("default context stays inside its budget", () => {
     // The repo map honours its own `fileintel.budgetTokens` cap (default 1024).
     const repoMapLane = res.report.lanes.find((l) => l.lane === "repo-map");
     expect(repoMapLane!.tokens).toBeLessThanOrEqual(config.fileintel.budgetTokens + 64);
+  });
+
+  it("caps what the DEFAULT context adds to a request, even with huge inputs", async () => {
+    // Cost regression guard. Prompt caching is not wired on the provider path,
+    // so whatever this adds is re-paid on EVERY turn of an agent loop — an
+    // 8-turn run multiplies it by 8. Keep the per-request figure small.
+    const deep = join(root, "a", "b");
+    mkdirSync(deep, { recursive: true });
+    // Oversized instruction files at several scopes…
+    for (const dir of [root, join(root, "a"), deep]) {
+      writeFileSync(join(dir, "CLAUDE.md"), `# Rules\n${"rule text. ".repeat(20_000)}`);
+      writeFileSync(join(dir, "AGENTS.md"), `# More\n${"agent text. ".repeat(20_000)}`);
+    }
+    // …and plenty of files for the map.
+    for (let i = 0; i < 300; i++) {
+      writeFileSync(join(deep, `m${i}.ts`), `export const v${i} = ${i};\n`);
+    }
+
+    const config = NexusConfigSchema.parse({});
+    const res = await new ContextEngine().assemble({
+      budgetTokens: 4000,
+      sources: buildPowerSources(config, { cwd: deep }),
+      userMessage: "hi",
+      cwd: deep,
+      now: 0,
+    });
+
+    // Static lanes are what actually reach the model today (volatile is dropped
+    // by the assembler). This is the number that shows up on every request.
+    const staticCost = res.report.staticTokens;
+    expect(staticCost).toBeLessThan(3000);
+    // The repo map honours its own budget…
+    const repoMap = res.report.lanes.find((l) => l.lane === "repo-map");
+    expect(repoMap!.tokens).toBeLessThanOrEqual(config.fileintel.budgetTokens + 64);
+    // …and conventions cannot run away, however large the instruction files are.
+    const conv = res.report.lanes.find((l) => l.lane === "conventions");
+    expect(conv!.tokens).toBeLessThan(2600);
+    // Absolute ceiling: nothing the engine assembles exceeds the budget.
+    expect(res.report.realTokens).toBeLessThanOrEqual(4000);
   });
 
   it("respects a small budget without dropping the user's message", async () => {

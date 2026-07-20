@@ -851,14 +851,34 @@ export class EngineContextAssembler implements ContextAssembler {
     const systemParts = [input.system, res.system]
       .map((s) => s?.trim())
       .filter((s): s is string => !!s && s.length > 0);
-    // Preserve the FULL conversation. `res.messages` rebuilds ONLY the last user
-    // turn from `userMessage` (renderVolatile pushes the reconstructed query
-    // last), so returning it verbatim DROPS every prior turn — the multi-turn
-    // amnesia that surfaced once the agent/TUI loop started running the assembler.
-    // `res.messages.slice(0, -1)` is the history-lane preamble (empty until a
-    // ConversationHistorySource is wired); keep it, then the real conversation.
+    // Preserve the FULL conversation AND the retrieved context. Two failure modes
+    // have to be avoided at once, and fixing either one alone reintroduces the other:
+    //
+    //   * Returning `res.messages` verbatim drops every prior turn, because the
+    //     engine rebuilds ONLY the last user turn from `userMessage` (multi-turn
+    //     amnesia).
+    //   * Taking `res.messages.slice(0, -1)` drops the retrieved context, because
+    //     the engine packs the volatile lanes (memory, RAG) INTO that rebuilt final
+    //     turn — so slicing it off silently discarded everything the context engine
+    //     had just retrieved, on every single run.
+    //
+    // So: keep any history-lane preamble, keep the caller's REAL conversation, and
+    // splice the volatile context onto the caller's own final user turn. We use
+    // `res.volatilePreamble` (the same context WITHOUT the query) rather than the
+    // engine's rebuilt turn, because that rebuild is reconstructed from the last
+    // user message's TEXT — adopting it would silently drop any non-text content
+    // (images, tool results) the caller attached. The query appears exactly once.
     const preamble = res.messages.slice(0, -1);
-    const out: AssembledContext = { messages: [...preamble, ...input.messages] };
+    const conversation: Message[] = [...input.messages];
+    const lastUserIdx = conversation.map((m) => m.role).lastIndexOf("user");
+    if (res.volatilePreamble !== undefined && lastUserIdx >= 0) {
+      const last = conversation[lastUserIdx]!;
+      conversation[lastUserIdx] = {
+        ...last,
+        content: [{ type: "text", text: res.volatilePreamble }, ...last.content],
+      };
+    }
+    const out: AssembledContext = { messages: [...preamble, ...conversation] };
     if (systemParts.length > 0) out.system = systemParts.join("\n\n");
     return out;
   }

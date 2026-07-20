@@ -61,6 +61,21 @@ function isEffectivelyEmpty(text: string): boolean {
   });
 }
 
+/**
+ * Does this text parse as a YAML MAPPING — the only shape the loader accepts?
+ *
+ * A top-level `key:` at column 0 is the signature; a sequence (`- item`), a
+ * bare scalar or `null` is not a mapping, so the loader's `isPlainObject` check
+ * rejects it and moves on to the next candidate. Deliberately conservative: an
+ * unrecognized shape is treated as NOT shadowing, which resolves to the same
+ * file the loader would land on.
+ */
+function looksLikeYamlMapping(text: string): boolean {
+  return text
+    .split("\n")
+    .some((line) => /^(?![#\s-])[^:]*:(\s|$)/.test(line.replace(/\r$/, "")));
+}
+
 /** Where user config lives right now, and whether this module may rewrite it. */
 export interface UserConfigTarget {
   /** The file the loader actually reads. May not exist yet. */
@@ -98,8 +113,14 @@ export function resolveUserConfig(env: NodeJS.ProcessEnv = process.env): UserCon
         return { file: candidate, blocked: undefined, data: parsed as NexusConfigInput };
       }
     } catch {
-      /* not JSON — fall through to the blocked branch below */
+      /* not JSON — decide below whether it shadows anything */
     }
+    // Not JSON. The loader only accepts a candidate that parses to a plain
+    // OBJECT (`isPlainObject`), so YAML that yields a sequence, a scalar or
+    // null is skipped there too and shadows nothing — blocking on it would
+    // brick every mutation while blaming the wrong file. Keep probing unless
+    // this really is a mapping.
+    if (!looksLikeYamlMapping(raw)) continue;
     return {
       file: candidate,
       blocked:
@@ -121,8 +142,19 @@ export function userConfigFile(env: NodeJS.ProcessEnv = process.env): string {
   return resolveUserConfig(env).file;
 }
 
+/**
+ * The current user config, for a read-MODIFY-write cycle.
+ *
+ * Throws when the file in force cannot be parsed here. Returning `{}` instead
+ * would hand every caller a false empty baseline: `mcp rm` / `plugin remove`
+ * decide "no such entry" and return BEFORE reaching the write, so they would
+ * report a confident, wrong "no server X" for a server the user can plainly see
+ * in `mcp list`. Failing here makes those paths as loud as the `add` paths.
+ */
 export function readUserConfig(env: NodeJS.ProcessEnv = process.env): NexusConfigInput {
-  return resolveUserConfig(env).data;
+  const target = resolveUserConfig(env);
+  if (target.blocked) throw new UserConfigWriteError(target.blocked);
+  return target.data;
 }
 
 /**

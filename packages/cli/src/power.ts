@@ -480,7 +480,13 @@ export function buildPowerSources(config: NexusConfig, opts: PowerSourceOptions)
   // sits behind the cacheable prefix and is trimmed before any static context.
   // Outside a git repo the runner yields empty output ⇒ no chunks.
   if (config.context.git) {
-    sources.push(new GitDiffSource({ cwd: opts.cwd, maxBytes: config.context.gitMaxBytes }));
+    sources.push(
+      new GitDiffSource({
+        cwd: opts.cwd,
+        maxBytes: config.context.gitMaxBytes,
+        includeDiff: config.context.gitDiff,
+      }),
+    );
   }
 
   return sources;

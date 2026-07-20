@@ -161,14 +161,20 @@ export const RagConfig = z
   .object({
     /**
      * Allow the RagSource into the Context Engine (retrieval into assembled
-     * context). On by default, but this is a PERMISSION, not a promise: the
-     * source is only constructed when a persisted index actually exists and is
-     * non-empty (see `buildPowerSources`). Retrieval with no index would burn a
-     * query for zero chunks, so "no index ⇒ contribute nothing" is the rule and
-     * the out-of-the-box token cost of this flag is zero until `nexus index`
-     * has been run. Set false to keep retrieval out even when an index exists.
+     * context). OFF by default, deliberately: the persisted index is stored in a
+     * GLOBAL data dir (`ragStoreFile` → `ragDataDir`), not per-project. It is
+     * therefore not "this project's index" — enabling it by default retrieves
+     * chunks indexed from OTHER repositories into this repository's prompt.
+     * That is a correctness/leakage problem, not a tuning preference, and it is
+     * also expensive: a real-world index here was 81MB / 7914 items, parsed on
+     * every run (~200ms) to contribute ~1000 tokens of possibly-foreign code.
+     *
+     * Turn it on per-project once the index is scoped to the project (e.g. via
+     * `storeFile`). When on, it stays a PERMISSION rather than a promise: the
+     * source is only constructed if a non-empty index actually exists, so "no
+     * index ⇒ contribute nothing" still holds (see `buildPowerSources`).
      */
-    enabled: z.boolean().default(true),
+    enabled: z.boolean().default(false),
     /** Which embedder to use. `hashing` is deterministic + offline (tests/default). */
     embedder: EmbedderKind.default("hashing"),
     /** Model id for the remote embedders (ollama/openai/provider); ignored by `hashing`. */
@@ -265,8 +271,15 @@ export const FileIntelConfig = z
      * so repeat turns hit the provider prompt-cache rather than re-paying.
      */
     repoMap: z.boolean().default(true),
-    /** Token budget for the rendered repo map — the hard cap on its context cost. */
-    budgetTokens: z.number().int().positive().default(1024),
+    /**
+     * Token budget for the rendered repo map — the hard cap on its context cost,
+     * enforced inside `repoMap()` before the Context Engine even packs. Kept
+     * deliberately modest: prompt caching is NOT currently wired on the provider
+     * path (`anthropicPrefixBlocks` in cli/src/power.ts is defined but never
+     * called), so this is re-paid in full on EVERY turn of an agent loop rather
+     * than being served from a cached prefix. Raise it once caching is wired.
+     */
+    budgetTokens: z.number().int().positive().default(768),
     /** Hard cap on the number of files the walker returns. */
     maxFiles: z.number().int().positive().optional(),
     /** Extra gitignore-style globs to skip when mapping a project. */
@@ -304,10 +317,14 @@ export const ContextConfig = z
      * before this they were only reachable via `nexus memory ingest`.
      */
     conventions: z.boolean().default(true),
-    /** Per-file byte cap for instruction files (truncated past this). */
-    conventionsMaxBytes: z.number().int().positive().default(8192),
+    /**
+     * Per-file byte cap for instruction files (truncated past this). With
+     * `conventionsMaxFiles` this bounds the worst case at ~8KB ≈ 2k tokens —
+     * the nearest (project) rules survive, distant/global ones are what get cut.
+     */
+    conventionsMaxBytes: z.number().int().positive().default(4096),
     /** Cap on how many instruction files are emitted, nearest scope first. */
-    conventionsMaxFiles: z.number().int().positive().default(4),
+    conventionsMaxFiles: z.number().int().positive().default(2),
     /**
      * Include working-tree `git status` + `git diff` in the volatile `git` lane.
      * On by default: knowing what is currently modified is the difference
@@ -315,6 +332,15 @@ export const ContextConfig = z
      * prefix and is trimmed first when the budget is tight.
      */
     git: z.boolean().default(true),
+    /**
+     * Include the full `git diff` body, not just the status summary. OFF by
+     * default: the diff is the expensive half of the git lane and it changes
+     * every turn, so it is never cacheable and is re-sent in full on each turn
+     * of an agent loop. Status alone tells the model what is in flight for a
+     * fraction of the tokens, and an agent with tools can read the diff on
+     * demand. Turn on for review-style workflows where the diff IS the subject.
+     */
+    gitDiff: z.boolean().default(false),
     /** Byte cap applied to EACH git section (status, diff) before estimation. */
     gitMaxBytes: z.number().int().positive().default(2048),
     /**

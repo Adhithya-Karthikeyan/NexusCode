@@ -76,6 +76,14 @@ export class AuditLog {
   private readonly file?: string;
   private readonly anchorFile?: string;
   private readonly key: Buffer | string;
+  /** Line numbers (1-based) in `file` that were not parseable at load time. */
+  private readonly malformedLines: number[] = [];
+  /**
+   * Set when construction found FEWER records on disk than the signed anchor
+   * expects — i.e. records are missing. While set, the anchor is never
+   * rewritten (see `persistAnchor`), so the evidence of the loss survives.
+   */
+  private anchorFrozen = false;
 
   constructor(opts: AuditLogOptions) {
     this.key = opts.key;
@@ -83,8 +91,21 @@ export class AuditLog {
       this.file = opts.file;
       this.anchorFile = opts.anchorFile ?? `${opts.file}.anchor.json`;
     }
-    if (this.file && (opts.load ?? true) && existsSync(this.file)) {
-      for (const rec of readNdjsonRecords(this.file)) this.records.push(rec);
+    if (this.file && (opts.load ?? true)) {
+      if (existsSync(this.file)) {
+        const loaded = readNdjsonTolerant(this.file);
+        for (const rec of loaded.records) this.records.push(rec);
+        this.malformedLines.push(...loaded.malformedLines);
+      }
+      // Records missing relative to the signed anchor means the chain was
+      // truncated or deleted. Freeze the anchor so the next `append()` cannot
+      // quietly re-point it at the shortened file and launder the loss away —
+      // without this, `rm audit.ndjson` plus any one later audited action
+      // verifies perfectly clean. Only a SHORTFALL freezes: having MORE records
+      // than the anchor is the ordinary crash window between the line write and
+      // the anchor write, which must still be allowed to heal forward.
+      const anchor = this.readAnchor();
+      if (anchor && anchor.count > this.records.length) this.anchorFrozen = true;
     }
   }
 
@@ -175,9 +196,19 @@ export class AuditLog {
   verifyFile(): AuditVerifyResult {
     if (!this.file) return { ok: true, count: 0, tampered: [] };
     const fileMissing = !existsSync(this.file);
-    const records = fileMissing ? [] : readNdjsonRecords(this.file);
-    const result = verifyChain(records, this.key);
-    const anchorTamper = this.checkAnchor(records, { fileMissing });
+    const parsed = fileMissing
+      ? { records: [] as AuditRecord[], malformedLines: [] as number[] }
+      : readNdjsonTolerant(this.file);
+    const result = verifyChain(parsed.records, this.key);
+    for (const line of parsed.malformedLines) {
+      result.tampered.push({
+        seq: Math.max(0, parsed.records.length - 1),
+        reason: "hash-mismatch",
+        detail: `line ${line} of the chain file is not valid JSON (corrupted or spliced)`,
+      });
+      result.ok = false;
+    }
+    const anchorTamper = this.checkAnchor(parsed.records, { fileMissing });
     if (anchorTamper) {
       result.tampered.push(anchorTamper);
       result.ok = false;
@@ -189,8 +220,26 @@ export class AuditLog {
     return createHmac("sha256", this.key).update(`${count}:${head}`).digest("hex");
   }
 
-  /** Persist the signed head anchor (overwrites — it holds only the latest state). */
+  /** Read + authenticate the on-disk anchor. Null when absent, unparseable or forged. */
+  private readAnchor(): AuditAnchor | null {
+    const path = this.anchorFile;
+    if (!path || !existsSync(path)) return null;
+    try {
+      const anchor = JSON.parse(readFileSync(path, "utf8")) as AuditAnchor;
+      if (this.signAnchor(anchor.count, anchor.head) !== anchor.sig) return null;
+      return anchor;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Persist the signed head anchor (overwrites — it holds only the latest
+   * state), UNLESS the anchor is frozen because records went missing. Freezing
+   * is what stops an append from healing a truncated chain back to "clean".
+   */
   private persistAnchor(count: number, head: string): void {
+    if (this.anchorFrozen) return;
     const path = this.anchorFile as string;
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -289,7 +338,7 @@ export class AuditLog {
   }
 }
 
-/** Parse an NDJSON audit file into records (skips blank lines). */
+/** Parse an NDJSON audit file into records (skips blank lines). Throws on a bad line. */
 export function readNdjsonRecords(file: string): AuditRecord[] {
   const text = readFileSync(file, "utf8");
   const out: AuditRecord[] = [];
@@ -299,6 +348,32 @@ export function readNdjsonRecords(file: string): AuditRecord[] {
     out.push(JSON.parse(trimmed) as AuditRecord);
   }
   return out;
+}
+
+/**
+ * Parse an NDJSON audit file, collecting unparseable lines instead of throwing.
+ *
+ * A corrupt line is TAMPER EVIDENCE, not a crash: letting `JSON.parse` throw
+ * out of the constructor would let anyone who can append one garbage byte take
+ * down every enterprise command — including `audit --verify`, the very tool
+ * that would report the damage. `verifyFile` turns each bad line into a
+ * finding, so the log fails loudly as tampered while staying inspectable.
+ */
+function readNdjsonTolerant(file: string): { records: AuditRecord[]; malformedLines: number[] } {
+  const text = readFileSync(file, "utf8");
+  const records: AuditRecord[] = [];
+  const malformedLines: number[] = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = (lines[i] as string).trim();
+    if (!trimmed) continue;
+    try {
+      records.push(JSON.parse(trimmed) as AuditRecord);
+    } catch {
+      malformedLines.push(i + 1);
+    }
+  }
+  return { records, malformedLines };
 }
 
 /**

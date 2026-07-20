@@ -28,6 +28,16 @@ export interface GitDiffOptions {
   staged?: boolean;
   /** Byte cap per section (status/diff). */
   maxBytes?: number;
+  /**
+   * Emit the full diff body as well as the status (default true).
+   *
+   * Set false for a status-only summary. The diff is the expensive half of this
+   * source AND it changes every turn, so it is never cacheable — in an agent
+   * loop it is re-sent in full on each turn. An agent with shell/read tools can
+   * fetch the diff on demand, so status-only is often the better default:
+   * it still tells the model what is in flight, for a fraction of the tokens.
+   */
+  includeDiff?: boolean;
   priority?: number;
   /** Injectable runner (defaults to shelling out to `git`). */
   run?: GitRunner;
@@ -54,8 +64,9 @@ export class GitDiffSource implements ContextSource {
     const maxBytes = this.opts.maxBytes ?? 8192;
 
     const status = (await run(["status", "--porcelain"], cwd)).trim();
+    const includeDiff = this.opts.includeDiff ?? true;
     const diffArgs = this.opts.staged ? ["diff", "--staged"] : ["diff"];
-    const diff = (await run(diffArgs, cwd)).trim();
+    const diff = includeDiff ? (await run(diffArgs, cwd)).trim() : "";
 
     const chunks: ContextChunk[] = [];
     if (status.length > 0) {
