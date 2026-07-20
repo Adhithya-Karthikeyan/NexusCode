@@ -23,7 +23,7 @@ import { Text } from "ink";
 import { useCaps } from "../caps/CapabilityProvider.js";
 import { collectLeaves, type StackNode } from "./tree.js";
 import { isEssentialPanel, PanelBody, panelRailSummary, panelTitle } from "../panels/panels.js";
-import { PANE_CHROME_X } from "./measure.js";
+import { PANE_CHROME_X, PANE_CHROME_Y } from "./measure.js";
 import { PaneFrame } from "./PaneFrame.js";
 import { PaneRenderer, sizeProps, type PaneRenderContext } from "./PaneRenderer.js";
 import { useTextStyle } from "../theme/ThemeProvider.js";
@@ -119,6 +119,7 @@ export function PaneStack({
           v={ctx.view}
           mode={ctx.mode}
           {...(inner !== undefined ? { width: inner } : {})}
+          {...(rect && ctx.fitHeight ? { maxRows: Math.max(1, rect.height - PANE_CHROME_Y) } : {})}
         />
       ) : (
         <PaneRenderer node={activeChild} ctx={ctx} />

@@ -62,12 +62,13 @@ export function estimateMarkdownRows(content: string, width: number): number {
 }
 
 /** Rows one `<MessageView>` occupies at `width` columns, margin included. */
-export function estimateTurnRows(turn: Turn, width: number): number {
+export function estimateTurnRows(turn: Turn, width: number, streaming = false): number {
   const body = Math.max(1, width - GUTTER);
   let rows = 0;
   if (turn.reasoning) rows += wrappedRows(turn.reasoning, body);
   if (turn.text) rows += estimateMarkdownRows(turn.text, body);
   if (!turn.reasoning && !turn.text) rows += 1; // the "thinking" placeholder
+  if (streaming && turn.text) rows += 1; // the trailing <StreamingCursor> row
   rows += turn.tools.length + turn.diffs.length;
   return rows + 1; // marginBottom
 }

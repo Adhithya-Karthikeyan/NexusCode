@@ -288,6 +288,45 @@ export const FileIntelConfig = z
   .strict();
 export type FileIntelConfig = z.infer<typeof FileIntelConfig>;
 
+/**
+ * Context Engine settings (system-spec §3) for the project-context sources that
+ * are assembled on every request. These decide what a fresh install sends, so
+ * each default is chosen to be BOUNDED: the conventions files are byte-capped
+ * and the git lane is capped per section, and both degrade to contributing
+ * nothing when absent (no instruction files / not a repo) rather than failing.
+ */
+export const ContextConfig = z
+  .object({
+    /**
+     * Ingest the project's instruction files (CLAUDE.md / AGENTS.md, walking
+     * cwd→root plus the home dir) into the static `conventions` lane. On by
+     * default — these are the conventional "rules of this repo" files, and
+     * before this they were only reachable via `nexus memory ingest`.
+     */
+    conventions: z.boolean().default(true),
+    /** Per-file byte cap for instruction files (truncated past this). */
+    conventionsMaxBytes: z.number().int().positive().default(8192),
+    /** Cap on how many instruction files are emitted, nearest scope first. */
+    conventionsMaxFiles: z.number().int().positive().default(4),
+    /**
+     * Include working-tree `git status` + `git diff` in the volatile `git` lane.
+     * On by default: knowing what is currently modified is the difference
+     * between a harness and a chatbot. Volatile, so it sits behind the cacheable
+     * prefix and is trimmed first when the budget is tight.
+     */
+    git: z.boolean().default(true),
+    /** Byte cap applied to EACH git section (status, diff) before estimation. */
+    gitMaxBytes: z.number().int().positive().default(2048),
+    /**
+     * Environment variables to expose on the static `env` lane. Empty by default
+     * — env is opt-in to avoid leaking anything; secret-looking keys are masked
+     * even when listed.
+     */
+    envKeys: z.array(z.string()).default([]),
+  })
+  .strict();
+export type ContextConfig = z.infer<typeof ContextConfig>;
+
 export const HistoryConfig = z
   .object({
     enabled: z.boolean().default(true),
@@ -932,6 +971,8 @@ export const NexusConfig = z
     cache: CacheConfig.default({}),
     /** File Intelligence settings (repo map). */
     fileintel: FileIntelConfig.default({}),
+    /** Context Engine settings (project conventions, git lane, env lane). */
+    context: ContextConfig.default({}),
     /** Agent framework settings (OODA loop bounds, default role). */
     agent: AgentConfig.default({}),
     /** Task-management settings (durable plan store). */

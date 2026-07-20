@@ -28,7 +28,13 @@ import {
   type CachedResponse,
 } from "@nexuscode/cache";
 import type { CallContext, Pricing, ProviderAdapter } from "@nexuscode/core";
-import { MemorySource, type ContextSource } from "@nexuscode/context";
+import {
+  EnvSource,
+  GitDiffSource,
+  MemorySource,
+  ProjectConventionsSource,
+  type ContextSource,
+} from "@nexuscode/context";
 import {
   HashingEmbedder,
   RagIndex,
@@ -403,15 +409,42 @@ export interface PowerSourceOptions {
 }
 
 /**
- * Assemble the Context Engine source list for a run: durable memory always, plus
- * the structural {@link RepoMapSource} (static `repo-map` lane) and the
- * {@link RagRetrievalSource} (the cache-stable `retrieved` lane, ahead of the
- * volatile git/history/terminal tail) when their config sections are enabled.
- * Both carry citations/provenance so the `ContextReport` records their share.
+ * Assemble the Context Engine source list for a run — the project context every
+ * request carries. Out of the box this is what makes the tool behave like a
+ * harness rather than a chatbot:
+ *
+ *   - {@link MemorySource}            durable recalled memory (`retrieved`)
+ *   - {@link ProjectConventionsSource} CLAUDE.md / AGENTS.md (static `conventions`)
+ *   - {@link RepoMapSource}           structural repo map (static `repo-map`)
+ *   - {@link EnvSource}               opted-in env vars (static `env`)
+ *   - {@link RagRetrievalSource}      index retrieval (`retrieved`)
+ *   - {@link GitDiffSource}           working-tree status/diff (volatile `git`)
+ *
+ * Ordering here is irrelevant to the output — the engine places chunks by LANE,
+ * static prefix first — but every source is bounded, and each is individually
+ * disableable via config. Sources that find nothing (no instruction files, not a
+ * git repo, no RAG index) contribute zero chunks rather than erroring, and the
+ * engine additionally isolates a throwing source so it can never sink the turn.
+ *
+ * Cost note: the two always-on additions land almost entirely in the CACHE-STABLE
+ * static prefix (conventions + repo map), so their tokens are paid once and then
+ * served from the provider prompt-cache on subsequent turns of a session.
  */
 export function buildPowerSources(config: NexusConfig, opts: PowerSourceOptions): ContextSource[] {
   const sources: ContextSource[] = [];
   if (opts.memory ?? true) sources.push(new MemorySource({ store: openMemory() }));
+
+  // Project conventions: the repo's own rules. Previously only reachable via the
+  // manual `nexus memory ingest`, so a fresh user never sent them at all.
+  if (config.context.conventions) {
+    sources.push(
+      new ProjectConventionsSource({
+        cwd: opts.cwd,
+        maxBytesPerFile: config.context.conventionsMaxBytes,
+        maxFiles: config.context.conventionsMaxFiles,
+      }),
+    );
+  }
 
   if (config.fileintel.repoMap) {
     sources.push(
@@ -425,6 +458,14 @@ export function buildPowerSources(config: NexusConfig, opts: PowerSourceOptions)
     );
   }
 
+  // Env is opt-in by key list; with the default empty list this collects nothing.
+  if (config.context.envKeys.length > 0) {
+    sources.push(new EnvSource({ keys: config.context.envKeys }));
+  }
+
+  // `rag.enabled` is a permission, not a promise: retrieval only joins when a
+  // persisted, non-empty index actually exists — otherwise it would spend a
+  // query to contribute nothing.
   if (config.rag.enabled) {
     const file = ragStorePath(config);
     if (existsSync(file)) {
@@ -433,6 +474,13 @@ export function buildPowerSources(config: NexusConfig, opts: PowerSourceOptions)
         sources.push(new RagRetrievalSource({ index, topK: config.rag.topK }));
       }
     }
+  }
+
+  // Working-tree state, volatile by construction (it changes every turn), so it
+  // sits behind the cacheable prefix and is trimmed before any static context.
+  // Outside a git repo the runner yields empty output ⇒ no chunks.
+  if (config.context.git) {
+    sources.push(new GitDiffSource({ cwd: opts.cwd, maxBytes: config.context.gitMaxBytes }));
   }
 
   return sources;

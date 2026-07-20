@@ -13,7 +13,7 @@
 import { useCaps } from "../caps/CapabilityProvider.js";
 import { PanelBody, panelRailSummary, panelTitle, isEssentialPanel } from "../panels/panels.js";
 import type { ViewState } from "../store/viewState.js";
-import { isVisible, type LayoutMap, type Rect, PANE_CHROME_X } from "./measure.js";
+import { isVisible, type LayoutMap, type Rect, PANE_CHROME_X, PANE_CHROME_Y } from "./measure.js";
 import { PaneFrame } from "./PaneFrame.js";
 import { PaneSplit } from "./PaneSplit.js";
 import { PaneStack } from "./PaneStack.js";
@@ -105,6 +105,7 @@ export function PaneRenderer({
         v={ctx.view}
         mode={ctx.mode}
         {...(rect ? { width: Math.max(1, rect.width - PANE_CHROME_X) } : {})}
+        {...(rect && ctx.fitHeight ? { maxRows: Math.max(1, rect.height - PANE_CHROME_Y) } : {})}
       />
     </PaneFrame>
   );

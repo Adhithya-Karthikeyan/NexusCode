@@ -26,6 +26,7 @@ import { providerLetter, providerToken } from "../theme/providerToken.js";
 import { useTextStyle } from "../theme/ThemeProvider.js";
 import { truncate } from "../layout/measure.js";
 import { MessageView } from "../render/MessageView.js";
+import { estimateTurnRows, fitTrailingTurns } from "../render/estimate.js";
 import type { PanelId, RenderMode } from "../layout/tree.js";
 
 /**
@@ -134,16 +135,30 @@ function ConversationBody({
   v,
   mode,
   width,
+  maxRows,
 }: {
   v: ViewState;
   mode: RenderMode;
   width?: number;
+  maxRows?: number;
 }): React.JSX.Element {
   const live = selectLiveTurn(v);
   const provider = v.session?.provider ?? "custom";
   // Mode A: only the in-flight tail lives here (finalized turns go to <Static>).
   // Mode B: the viewport owns everything, so show finalized turns too.
-  const finalized = mode === "viewport" ? selectAllFinalizedTurns(v) : [];
+  const all = mode === "viewport" ? selectAllFinalizedTurns(v) : [];
+
+  // In Mode B the pane is one tile in a fixed grid, so an unbounded transcript
+  // would push its own frame taller than every sibling and leave the row with a
+  // ragged bottom edge. Keep the newest turns that fit the pane's row budget —
+  // the recent ones are what you are reading anyway, and the full history is
+  // still a scroll away in the conversation surface.
+  const budget =
+    maxRows !== undefined && width !== undefined
+      ? Math.max(1, maxRows - (live ? estimateTurnRows(live, width, true) : 0))
+      : undefined;
+  const finalized =
+    budget !== undefined && width !== undefined ? fitTrailingTurns(all, width, budget) : all;
 
   if (finalized.length === 0 && !live) return <ConversationEmpty />;
 
@@ -232,15 +247,25 @@ export function PanelBody({
   v,
   mode,
   width,
+  maxRows,
 }: {
   panel: PanelId;
   v: ViewState;
   mode: RenderMode;
   width?: number;
+  /** Usable body rows (pane height minus its chrome); bounds tall bodies. */
+  maxRows?: number;
 }): React.JSX.Element {
   switch (panel) {
     case "conversation":
-      return <ConversationBody v={v} mode={mode} {...(width ? { width } : {})} />;
+      return (
+        <ConversationBody
+          v={v}
+          mode={mode}
+          {...(width ? { width } : {})}
+          {...(maxRows ? { maxRows } : {})}
+        />
+      );
     case "tool_activity":
       return <ToolActivityBody v={v} {...(width ? { width } : {})} />;
     case "notifications":
