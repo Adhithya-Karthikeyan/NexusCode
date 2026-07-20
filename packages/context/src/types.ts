@@ -217,6 +217,18 @@ export interface AssembleResult {
   system: string;
   /** History turns plus a trailing user message bundling volatile context + the query. */
   messages: Message[];
+  /**
+   * The volatile context (retrieved / git / terminal / task lanes) that was
+   * bundled onto the trailing user message of {@link messages}, rendered on its
+   * own and WITHOUT the user's query.
+   *
+   * A caller that already owns the conversation transcript must discard the
+   * engine's reconstructed last turn — otherwise the query is duplicated — but
+   * doing so silently drops all volatile context with it. Such a caller should
+   * prepend this string to its own final user turn instead. Absent when no
+   * volatile context was assembled.
+   */
+  volatilePreamble?: string;
   report: ContextReport;
 }
 

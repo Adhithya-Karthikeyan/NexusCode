@@ -448,15 +448,16 @@ export class Nexus {
   /** Fan the same prompt across N backends; every lane settles independently. */
   compare(prompt: string, backends: Backend[], opts: MultiLaneOptions = {}): NexusRun {
     this.ensureLive();
-    const { runs, providerIds, ctx } = this.laneDispatch(prompt, backends, opts);
+    const { runs, providerIds, ctx, turn } = this.laneDispatch(prompt, backends, opts);
     const handle = dispatch({ kind: "compare", runs }, ctx);
+    this.recordOn(turn, handle);
     return new NexusRun(handle, { adapterIds: providerIds, single: false }, this.sink);
   }
 
   /** Race backends: `"first"` returns the earliest, `"best"` judges the field. */
   race(prompt: string, backends: Backend[], opts: RaceOptions = {}): NexusRun {
     this.ensureLive();
-    const { runs, providerIds, ctx } = this.laneDispatch(prompt, backends, opts);
+    const { runs, providerIds, ctx, turn } = this.laneDispatch(prompt, backends, opts);
     const mode = opts.mode ?? "first";
     const spec: OrchestrationSpec =
       mode === "best"
@@ -467,15 +468,17 @@ export class Nexus {
       ctx,
       opts.bestTimeoutMs !== undefined ? { bestTimeoutMs: opts.bestTimeoutMs } : {},
     );
+    this.recordOn(turn, handle);
     return new NexusRun(handle, { adapterIds: providerIds, single: false }, this.sink);
   }
 
   /** Consensus: run N lanes, then reduce to one answer with a judge. */
   consensus(prompt: string, backends: Backend[], opts: ConsensusOptions = {}): NexusRun {
     this.ensureLive();
-    const { runs, providerIds, ctx } = this.laneDispatch(prompt, backends, opts);
+    const { runs, providerIds, ctx, turn } = this.laneDispatch(prompt, backends, opts);
     const judge: JudgeSpec = opts.judge ?? { domain: "chat", strategy: "vote" };
     const handle = dispatch({ kind: "consensus", runs, judge }, ctx);
+    this.recordOn(turn, handle);
     return new NexusRun(handle, { adapterIds: providerIds, single: false }, this.sink);
   }
 
@@ -509,12 +512,16 @@ export class Nexus {
       return stage;
     });
 
+    // Stage 0 is the turn's user input, so it carries the session transcript;
+    // later stages receive the previous stage's hand-off, as before.
     const turn = session.newTurn({ messages: chainStages[0]?.run.input ?? [] });
+    if (chainStages[0]) chainStages[0].run.input = turn.input;
     const handle = dispatch(
       { kind: "chain", stages: chainStages },
       turn.context(),
       opts.confirm ? { confirm: opts.confirm } : {},
     );
+    this.recordOn(turn, handle);
     return new NexusRun(handle, { adapterIds: providerIds, single: false }, this.sink);
   }
 
@@ -544,6 +551,7 @@ export class Nexus {
       maxTurns: opts.maxTurns ?? 8,
       cwd: opts.cwd ?? this.cwd,
     });
+    this.recordOn(turn, handle);
     return new NexusRun(handle, { adapterIds: [providerId], single: true }, this.sink);
   }
 
@@ -650,7 +658,7 @@ export class Nexus {
     prompt: string,
     backends: Backend[],
     opts: SamplingOptions & { session?: NexusSession },
-  ): { runs: RunSpec[]; providerIds: string[]; ctx: RunContext } {
+  ): { runs: RunSpec[]; providerIds: string[]; ctx: RunContext; turn: Turn } {
     if (backends.length === 0) throw new Error("nexus: at least one backend is required");
     const session = this.sessionOf(opts);
     const turn = session.newTurn({ messages: userText(prompt) });
@@ -664,7 +672,7 @@ export class Nexus {
       const params = this.buildParams(opts);
       runs.push(this.makeRunSpec(provider, model, turn.input, params));
     }
-    return { runs, providerIds, ctx: turn.context() };
+    return { runs, providerIds, ctx: turn.context(), turn };
   }
 }
 

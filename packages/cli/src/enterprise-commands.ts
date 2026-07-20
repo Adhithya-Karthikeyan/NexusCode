@@ -386,7 +386,16 @@ export async function cmdBudget(args: ParsedArgs, io: Io = defaultIo): Promise<n
       io.err(`nexus budget set: invalid config — ${(err as Error).message}\n`);
       return 1;
     }
-    const file = writeUserConfig(raw);
+    // writeUserConfig targets the config file the loader actually reads, and
+    // refuses rather than write somewhere shadowed — report that as a failure
+    // instead of printing a success the effective config would not reflect.
+    let file: string;
+    try {
+      file = writeUserConfig(raw);
+    } catch (err) {
+      io.err(`nexus budget set: ${(err as Error).message}\n`);
+      return 1;
+    }
     io.out(`budget "${id}" set: $${Number(limitRaw)}/${window} for ${scope}:${key} → ${file}\n`);
     return 0;
   }

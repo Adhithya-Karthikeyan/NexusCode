@@ -51,6 +51,7 @@ import type {
   PlanDirective,
   StepToolResult,
   VerifyFn,
+  VerifyInput,
 } from "./types.js";
 
 /** Everything the runner needs, wired once by the caller. */
@@ -286,10 +287,19 @@ export class Agent {
     let finalText = "";
     let retriesUsed = 0;
     let stopReason: AgentStopReason = "max-steps";
+    // The run's verdict is only ever as strong as the last step's evidence. It
+    // starts `"indeterminate"` so a run that never completes a step (cancelled
+    // before step 0) reports uncertainty rather than a negative it never tested.
+    let verdict: GoalVerdict = "indeterminate";
+    let unverifiedStreak = 0;
 
     const buildResult = (reason: AgentStopReason): AgentRunResult => {
       const progress = rootCreated ? store.progress(rootTaskId) : store.progress();
       const plan = rootCreated ? store.subtree(rootTaskId) : store.all();
+      // A run that stopped for any other reason (cancelled, blocked, budget)
+      // never advertises "met", even if a policy claimed it on the way out.
+      const finalVerdict: GoalVerdict =
+        reason === "goal-met" ? "met" : verdict === "met" ? "indeterminate" : verdict;
       return {
         role,
         goal: goal.objective,
@@ -299,6 +309,7 @@ export class Agent {
         plan,
         progress,
         goalMet: reason === "goal-met",
+        verdict: finalVerdict,
         usage: sumUsage(usages),
         subAgents,
         systemPrompt: def.systemPrompt,
@@ -386,6 +397,42 @@ export class Agent {
         rootTaskId,
         cancelled,
       });
+      // A policy that only sets `goalMet` still works: the boolean is the verdict.
+      verdict = reflection.verdict ?? (reflection.goalMet ? "met" : "unmet");
+
+      // ── EVALUATE (explicit) ─────────────────────────────────────────────────
+      // The deterministic evaluator could not judge this step (no success
+      // criteria to check against). Rather than let "the model said something"
+      // stand in for "the goal is achieved", spend one tool-free provider turn
+      // on an actual evaluation. Anything short of an unambiguous verdict stays
+      // `"indeterminate"`.
+      if (verdict === "indeterminate" && verifyFn && !cancelled && !scope.signal.aborted) {
+        const assessment = await this.verifyGoal(verifyFn, {
+          role,
+          goal,
+          step,
+          stepText,
+          toolResults: stepToolResults,
+          evidence,
+          ask: (prompt, system) =>
+            this.evaluationTurn(ctx, { adapterId, model, prompt, system, key: `${agentRunId}:s${step}:evaluate` }, usages),
+        });
+        verdict = assessment.verdict;
+        reflection.goalMet = verdict === "met";
+        reflection.critique =
+          verdict === "met"
+            ? `Goal verified on step ${step} by explicit evaluation: ${assessment.reason}`
+            : verdict === "unmet"
+              ? `Evaluation on step ${step} found the objective not yet achieved: ${assessment.reason}`
+              : `Step ${step} could NOT be verified (${assessment.reason}); the outcome is unknown, not successful.`;
+        if (verdict === "unmet") {
+          reflection.correction = `The objective is not yet achieved: ${assessment.reason}. Do the remaining work — do not restate it.`;
+        }
+        yield agentMetaChunk(agentRunId, role, "goal", step, reflection.critique, { assessment });
+      }
+      reflection.verdict = verdict;
+      unverifiedStreak = verdict === "indeterminate" ? unverifiedStreak + 1 : 0;
+
       if (reflection.planEdits && reflection.planEdits.length > 0) {
         applyDirectives(store, reflection.planEdits);
       }
@@ -455,6 +502,12 @@ export class Agent {
         stopReason = "goal-met";
         break;
       }
+      // Nothing can recognize completion for this run, so looping further would
+      // only burn the budget before guessing. Stop and report the uncertainty.
+      if (verdict === "indeterminate" && unverifiedStreak >= maxUnverified) {
+        stopReason = "indeterminate";
+        break;
+      }
 
       if (reflection.needsReplan) {
         retriesUsed += 1;
@@ -479,9 +532,61 @@ export class Agent {
       messages = [...messages, ...userText(correction)];
     }
 
+    const result = buildResult(stopReason);
     yield agentMetaChunk(agentRunId, role, "stop", steps.length, `Run finished: ${stopReason}.`, {
       stopReason,
+      verdict: result.verdict,
     });
-    setResult(buildResult(stopReason));
+    if (result.verdict === "indeterminate") {
+      yield agentMetaChunk(
+        agentRunId,
+        role,
+        "goal",
+        steps.length,
+        "Outcome UNVERIFIED: this run could not establish whether the objective was achieved. " +
+          "Declare success criteria (goal.successCriteria) to make it checkable.",
+        { verdict: result.verdict },
+      );
+    }
+    setResult(result);
+  }
+
+  /** Run the verification policy, treating any thrown error as "unverifiable". */
+  private async verifyGoal(verify: VerifyFn, input: VerifyInput): Promise<GoalAssessment> {
+    try {
+      return await verify(input);
+    } catch (e) {
+      return { verdict: "indeterminate", reason: `the evaluation step failed: ${String(e)}` };
+    }
+  }
+
+  /**
+   * One tool-free provider turn used by the explicit Evaluate phase. It runs on
+   * its own lane (its chunks never enter the agent's own stream), its tokens are
+   * accounted to the run, and a turn that does not finish cleanly — including
+   * one truncated by its own output budget — returns `undefined` so the caller
+   * reports uncertainty instead of parsing half an answer.
+   */
+  private async evaluationTurn(
+    ctx: RunContext,
+    opts: { adapterId: string; model: string; prompt: string; system?: string; key: string },
+    usages: Usage[],
+  ): Promise<string | undefined> {
+    const params: SamplingParams = { temperature: 0 };
+    if (opts.system !== undefined) params.system = opts.system;
+    const spec: RunSpec = {
+      adapterId: opts.adapterId,
+      model: opts.model,
+      input: userText(opts.prompt),
+      idempotencyKey: opts.key,
+      params,
+    };
+    const handle = dispatch({ kind: "single", run: spec }, ctx);
+    for await (const _ of handle.events()) void _;
+    const winner = (await handle.outcome()).winner;
+    if (!winner) return undefined;
+    usages.push(winner.usage);
+    if (winner.status !== "ok" || winner.finishReason === "length") return undefined;
+    return winner.text;
   }
 }

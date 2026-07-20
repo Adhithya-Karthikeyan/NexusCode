@@ -145,7 +145,7 @@ export class ContextEngine {
     const includedStatic = included.filter((c) => laneKind(c.lane) === "static");
     const includedVolatile = included.filter((c) => laneKind(c.lane) === "volatile");
     const system = renderStatic(includedStatic);
-    const messages = renderVolatile(includedVolatile, opts.userMessage);
+    const { messages, preamble } = renderVolatile(includedVolatile, opts.userMessage);
 
     // Reporting.
     const report = buildReport({
@@ -163,7 +163,12 @@ export class ContextEngine {
       maxBreakpoints,
     });
 
-    return { system, messages, report };
+    const result: AssembleResult = { system, messages, report };
+    // Surfaced separately so a caller that supplies its OWN conversation (and so
+    // must discard the engine's reconstructed last turn) can still splice the
+    // volatile context in, instead of losing it with that message.
+    if (preamble.length > 0) result.volatilePreamble = preamble;
+    return result;
   }
 }
 
@@ -332,7 +337,10 @@ function renderStatic(chunks: ResolvedChunk[]): string {
   return sections.join("\n\n");
 }
 
-function renderVolatile(chunks: ResolvedChunk[], userMessage: string): Message[] {
+function renderVolatile(
+  chunks: ResolvedChunk[],
+  userMessage: string,
+): { messages: Message[]; preamble: string } {
   const messages: Message[] = [];
 
   // History turns become real messages, in chronological order.
@@ -354,14 +362,15 @@ function renderVolatile(chunks: ResolvedChunk[], userMessage: string): Message[]
     preambleSections.push(`# ${laneTitle(lane)}\n${body}`);
   }
 
+  const preamble = preambleSections.join("\n\n");
   const content: ContentBlock[] = [];
-  if (preambleSections.length > 0) {
-    content.push({ type: "text", text: preambleSections.join("\n\n") });
+  if (preamble.length > 0) {
+    content.push({ type: "text", text: preamble });
   }
   content.push({ type: "text", text: userMessage });
   messages.push({ role: "user", content });
 
-  return messages;
+  return { messages, preamble };
 }
 
 // ── Reporting ──────────────────────────────────────────────────────────────────
