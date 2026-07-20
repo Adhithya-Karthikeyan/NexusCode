@@ -81,10 +81,16 @@ interface Harness {
 async function harness(opts: {
   toolName: string;
   cancel?: boolean;
+  /** Script the non-tool models' answers (used to script the evaluation turn). */
+  transform?: (prompt: string, model: string) => string;
 }): Promise<Harness> {
   const registry = new ProviderRegistry();
   await registry.register(
-    createMockAdapter({ toolName: opts.toolName, toolInput: (p) => ({ text: p }) }),
+    createMockAdapter({
+      toolName: opts.toolName,
+      toolInput: (p) => ({ text: p }),
+      ...(opts.transform ? { transform: opts.transform } : {}),
+    }),
   );
   const engine = createEngine({ registry });
   const session = await engine.openSession();

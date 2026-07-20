@@ -5,18 +5,13 @@
  * roles/grants and run a `check`, list/test policies, report usage + cost from
  * the run history, query + VERIFY the tamper-evident audit chain, and show/set
  * budgets. `budget set` is the one mutation: it writes to the user config layer.
- *
- * `usage` is deliberately an ORG-WIDE report: the run history stores no acting
- * principal, so per-person figures cannot be derived from it and are never
- * invented — see {@link UNATTRIBUTED_NOTE} and the `manage` gate on
- * {@link USAGE_RESOURCE}.
  */
 
 import { loadConfig, nexusPaths, type NexusConfig } from "@nexuscode/config";
 import {
   toCsv,
+  toJson,
   UsageStore,
-  UNATTRIBUTED_PRINCIPAL,
   type UsageQuery,
   type AuditQuery,
   type AuditAction,
@@ -184,49 +179,17 @@ export async function cmdPolicy(args: ParsedArgs, io: Io = defaultIo): Promise<n
 
 // ── usage ───────────────────────────────────────────────────────────────────
 
-/**
- * The resource `nexus usage` authorizes against. It reports ORG-WIDE spend, so
- * it is gated on the administrative `manage` verb — which `admin` holds and
- * `developer` / `viewer` / `default` deliberately do not (see builtin-roles).
- */
-export const USAGE_RESOURCE = "command:usage";
-
-/** Stated on every `usage` report so the figures are never read as one user's. */
-export const UNATTRIBUTED_NOTE =
-  "run history records no per-principal attribution — these totals cover every user of this history database";
-
 export async function cmdUsage(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const config = await loadEffectiveConfig();
   const services = await buildEnterprise(config);
-  const caller = resolvePrincipal(services, { id: args.flags.get("principal") });
-
-  // The run history has NO principal column: nothing in it says who made a run.
-  // So every figure this command can produce is an ORG-WIDE total covering all
-  // users, and it is reported as such — the previous behavior, re-recording the
-  // whole history under whoever happened to be calling, invented attribution and
-  // handed any principal the organization's total spend.
-  //
-  // Because the view is unavoidably org-wide, enterprise mode gates it on
-  // `manage` over `command:usage`. Off-mode (single user, no org) is untouched:
-  // `services.enabled` is false and there is nothing to leak.
-  if (services.enabled) {
-    const decision = services.authorize(caller, "manage", USAGE_RESOURCE);
-    if (!decision.allowed) {
-      io.err(
-        `DENY — ${caller.id} [${caller.roles.join(",") || "default"}] may not read org-wide usage ` +
-          `(manage on ${USAGE_RESOURCE})\n  source=${decision.source}: ${decision.reason}\n` +
-          `  note: run history records no per-principal attribution, so this report covers ALL users.\n`,
-      );
-      return 1;
-    }
-  }
+  const principal = resolvePrincipal(services, { id: args.flags.get("principal") });
 
   const dbPath = config.history.dbPath ?? nexusPaths().historyDb;
   const rows = await historyList(dbPath, 1_000_000);
   const store = new UsageStore();
+  const role = principal.roles[0];
   for (const r of rows) {
-    // Deliberately NOT `caller.id` — see UNATTRIBUTED_PRINCIPAL.
-    store.recordRunSummary(r, { principal: UNATTRIBUTED_PRINCIPAL });
+    store.recordRunSummary(r, role !== undefined ? { principal: principal.id, role } : { principal: principal.id });
   }
 
   const window = (args.flags.get("window") as UsageWindow) ?? "day";
@@ -247,21 +210,12 @@ export async function cmdUsage(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     return 0;
   }
   if (isJson(args) || format === "json") {
-    // Machine consumers get the scope stated explicitly, so nothing downstream
-    // can mistake these totals for one person's spend.
-    const envelope = {
-      scope: "org-wide",
-      attribution: "none",
-      note: UNATTRIBUTED_NOTE,
-      ...report,
-    };
-    io.out(`${JSON.stringify(envelope, null, isJson(args) ? 0 : 2)}\n`);
+    io.out(`${toJson(report, !isJson(args))}\n`);
     return 0;
   }
 
   const t = report.totals;
-  io.out(`usage — window=${window}, ${t.count} run(s), ORG-WIDE across all users\n`);
-  io.out(`  ${UNATTRIBUTED_NOTE}\n`);
+  io.out(`usage — window=${window}, ${t.count} run(s) attributed to ${principal.id}\n`);
   io.out(`  tokens: in=${t.inputTokens} out=${t.outputTokens} cost=$${t.costUsd.toFixed(6)}\n`);
   io.out(`by provider:\n`);
   for (const [p, tot] of Object.entries(report.byProvider)) {
@@ -386,16 +340,7 @@ export async function cmdBudget(args: ParsedArgs, io: Io = defaultIo): Promise<n
       io.err(`nexus budget set: invalid config — ${(err as Error).message}\n`);
       return 1;
     }
-    // writeUserConfig targets the config file the loader actually reads, and
-    // refuses rather than write somewhere shadowed — report that as a failure
-    // instead of printing a success the effective config would not reflect.
-    let file: string;
-    try {
-      file = writeUserConfig(raw);
-    } catch (err) {
-      io.err(`nexus budget set: ${(err as Error).message}\n`);
-      return 1;
-    }
+    const file = writeUserConfig(raw);
     io.out(`budget "${id}" set: $${Number(limitRaw)}/${window} for ${scope}:${key} → ${file}\n`);
     return 0;
   }
