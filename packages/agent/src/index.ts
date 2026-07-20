@@ -26,7 +26,14 @@ export {
 } from "./roles.js";
 export type { AgentRegistry } from "./roles.js";
 
-export { defaultPlan, defaultEvaluate } from "./policies.js";
+export {
+  defaultPlan,
+  defaultEvaluate,
+  defaultVerify,
+  parseVerdict,
+  VERDICT_TOKEN,
+  VERIFY_SYSTEM,
+} from "./policies.js";
 
 export { agentMetaChunk, isAgentMeta } from "./events.js";
 export type { AgentMeta, AgentPhase } from "./events.js";
@@ -42,9 +49,13 @@ export type {
   DelegateDirective,
   EvaluateFn,
   EvaluateInput,
+  GoalAssessment,
+  GoalVerdict,
   PlanDirective,
   PlanFn,
   PlanInput,
   Reflection,
   StepToolResult,
+  VerifyFn,
+  VerifyInput,
 } from "./types.js";

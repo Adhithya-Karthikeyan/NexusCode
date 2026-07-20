@@ -569,7 +569,7 @@ export class Agent {
    */
   private async evaluationTurn(
     ctx: RunContext,
-    opts: { adapterId: string; model: string; prompt: string; system?: string; key: string },
+    opts: { adapterId: string; model: string; prompt: string; system: string | undefined; key: string },
     usages: Usage[],
   ): Promise<string | undefined> {
     const params: SamplingParams = { temperature: 0 };
