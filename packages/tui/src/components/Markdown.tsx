@@ -318,7 +318,9 @@ export function Markdown({ content, width }: MarkdownProps): React.JSX.Element {
             marginTop={marginTop}
             flexDirection="column"
             paddingLeft={1}
-            borderStyle="single"
+            // `classic` (`|`) on a terminal without box-drawing glyphs; the
+            // rule is the only thing marking the block, so it must not vanish.
+            borderStyle={caps.unicode ? "single" : "classic"}
             borderTop={false}
             borderBottom={false}
             borderRight={false}

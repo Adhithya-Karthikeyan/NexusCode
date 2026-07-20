@@ -214,7 +214,15 @@ export function Workspace({
   };
 
   return (
-    <Box flexDirection="column" width={dims.cols} minHeight={dims.rows}>
+    // `minHeight` only in Mode B. In Mode A the finalized transcript is already
+    // printed above (Ink `<Static>`), so forcing the *live* region to a full
+    // screen height on top of it padded the frame with a screen's worth of blank
+    // rows below the composer — 8 of them at 60x20, 13 at 80x24.
+    <Box
+      flexDirection="column"
+      width={dims.cols}
+      {...(renderMode === "viewport" ? { minHeight: dims.rows } : {})}
+    >
       {renderMode === "viewport" ? (
         <>
           <HeaderMark {...headerProps} showWordmark width={dims.cols} />
