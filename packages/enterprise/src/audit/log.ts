@@ -173,7 +173,7 @@ export class AuditLog {
    * ever appended — verifies clean.
    */
   verifyFile(): AuditVerifyResult {
-    if (!this.file || !existsSync(this.file)) return { ok: true, count: 0, tampered: [] };
+    if (!this.file) return { ok: true, count: 0, tampered: [] };
     const fileMissing = !existsSync(this.file);
     const records = fileMissing ? [] : readNdjsonRecords(this.file);
     const result = verifyChain(records, this.key);

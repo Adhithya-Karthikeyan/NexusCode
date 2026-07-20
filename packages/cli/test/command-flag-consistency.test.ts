@@ -256,7 +256,10 @@ describe("#7 `plan` phase narration is one line per phase (not a run-on blob)", 
     // "…and plan.Plan updated (1 edit).Goal satisfied…Progress: 100%Run finished…".
     expect(r.stderr).toMatch(/observing context and plan\.\n/);
     expect(r.stderr).toMatch(/\nPlan updated \(1 edit\)\.\n/);
-    expect(r.stderr).toMatch(/\nRun finished: goal-met\.\n/);
+    // Outcome-agnostic on purpose: this test is about line separation, not about
+    // which verdict the run reaches (against the echo mock the goal is not
+    // verifiable, so the honest terminal line is "indeterminate").
+    expect(r.stderr).toMatch(/\nRun finished: [a-z-]+\.\n/);
     // The specific run-on concatenations must NOT appear.
     expect(r.stderr).not.toMatch(/plan\.Plan updated/);
     expect(r.stderr).not.toMatch(/100%Run finished/);

@@ -13,7 +13,10 @@ import { createMockAdapter } from "@nexuscode/provider-mock";
 import {
   Agent,
   createAgentRegistry,
+  defaultVerify,
   isAgentMeta,
+  parseVerdict,
+  VERDICT_TOKEN,
   type AgentDefinition,
   type AgentDeps,
   type AgentPhase,
@@ -362,5 +365,315 @@ describe("Agent — OODA loop over the native tool loop", () => {
     expect(phasesIn(events)).toContain("stop");
 
     await engine.dispose();
+  });
+});
+
+// ── Honest goal detection ─────────────────────────────────────────────────────
+
+/** The evaluation turn is the one whose prompt carries the verdict contract. */
+function isEvaluationPrompt(prompt: string): boolean {
+  return prompt.includes(VERDICT_TOKEN) && prompt.includes("EVIDENCE:");
+}
+
+describe("Agent — a run may only claim success it can actually evidence", () => {
+  it("does NOT report goalMet/100% just because the model emitted text on a clean step", async () => {
+    // The regression: with no success criteria, ANY non-empty answer on a clean
+    // step was reported as "Goal satisfied · 100% · goalMet=true" — so an
+    // impossible objective the model merely restated came back as a success.
+    const { engine, ctx, store } = await harness({ toolName: "echo" });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+    const agent = new Agent(deps(store, tools));
+
+    const handle = agent.run(ctx, customDef({ role: "coder", allowedTools: ["echo"] }), {
+      // No successCriteria — exactly what the CLI and SDK pass today.
+      goal: { objective: "rewrite the entire kernel in rust and prove it memory-safe" },
+      model: "mock-fast",
+      maxSteps: 4,
+    });
+
+    const events = await drain(handle.events());
+    const result = await handle.result();
+
+    // The model DID answer (the old "evidence" of success)...
+    expect(result.finalText.trim().length).toBeGreaterThan(0);
+    expect(result.steps[0]?.status).toBe("ok");
+    // ...and the run still refuses to call that a met goal.
+    expect(result.goalMet).toBe(false);
+    expect(result.verdict).toBe("indeterminate");
+    expect(result.stopReason).toBe("indeterminate");
+    expect(result.progress.percent).toBeLessThan(100);
+    expect(result.steps[0]?.reflection.goalMet).toBe(false);
+
+    // And it SAYS so, rather than going quiet about the uncertainty.
+    const narration = events
+      .map((e) => (e.chunk.type === "text-delta" && e.chunk.channel === "reasoning" ? e.chunk.text : ""))
+      .join("\n");
+    expect(narration).toMatch(/UNVERIFIED/);
+    expect(narration).not.toMatch(/Goal satisfied/);
+
+    await engine.dispose();
+  });
+
+  it("promotes to goal-met when the explicit evaluation turn returns a MET verdict", async () => {
+    const { engine, ctx, store } = await harness({
+      toolName: "echo",
+      // A scripted evaluator: the work turn answers normally, the evaluation
+      // turn returns the one-line verdict the contract asks for.
+      transform: (prompt) =>
+        isEvaluationPrompt(prompt)
+          ? `${VERDICT_TOKEN} MET - the evidence shows the requested summary was produced`
+          : "Wrote the summary as requested.",
+    });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+    const agent = new Agent(deps(store, tools));
+
+    const handle = agent.run(ctx, customDef({ role: "coder", allowedTools: ["echo"] }), {
+      goal: { objective: "summarize the config" },
+      model: "mock-fast",
+      maxSteps: 4,
+    });
+
+    await drain(handle.events());
+    const result = await handle.result();
+
+    expect(result.verdict).toBe("met");
+    expect(result.goalMet).toBe(true);
+    expect(result.stopReason).toBe("goal-met");
+    expect(result.progress.percent).toBe(100);
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]?.reflection.critique).toContain("verified");
+    // The evaluation turn's tokens are accounted to the run, not hidden.
+    expect(result.usage.inputTokens).toBeGreaterThan(0);
+
+    await engine.dispose();
+  });
+
+  it("keeps working — and never claims success — while the evaluation returns NOT_MET", async () => {
+    const { engine, ctx, store } = await harness({
+      toolName: "echo",
+      transform: (prompt) =>
+        isEvaluationPrompt(prompt)
+          ? `${VERDICT_TOKEN} NOT_MET - nothing was written, the answer only describes the plan`
+          : "Here is how I would do it.",
+    });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+    const agent = new Agent(deps(store, tools));
+
+    const handle = agent.run(ctx, customDef({ role: "coder", allowedTools: ["echo"] }), {
+      goal: { objective: "write the migration" },
+      model: "mock-fast",
+      maxSteps: 3,
+    });
+
+    await drain(handle.events());
+    const result = await handle.result();
+
+    // A determinate negative: the budget ran out with the goal known-unmet.
+    expect(result.stopReason).toBe("max-steps");
+    expect(result.verdict).toBe("unmet");
+    expect(result.goalMet).toBe(false);
+    expect(result.steps).toHaveLength(3);
+    expect(result.progress.percent).toBeLessThan(100);
+    // The evaluator's reason is fed back as corrective context, not swallowed.
+    expect(result.steps[0]?.reflection.correction).toContain("nothing was written");
+
+    await engine.dispose();
+  });
+
+  it("treats an unusable evaluation answer as unknown — never as a pass", async () => {
+    // A model that ignores the contract and echoes its instructions back names
+    // BOTH verdicts; that must resolve to "unknown", not the more flattering one.
+    const { engine, ctx, store } = await harness({
+      toolName: "echo",
+      transform: (prompt) => (isEvaluationPrompt(prompt) ? prompt : "done"),
+    });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+    const agent = new Agent(deps(store, tools));
+
+    const handle = agent.run(ctx, customDef({ role: "coder", allowedTools: ["echo"] }), {
+      goal: { objective: "do the thing" },
+      model: "mock-fast",
+      maxSteps: 4,
+    });
+
+    await drain(handle.events());
+    const result = await handle.result();
+
+    expect(result.verdict).toBe("indeterminate");
+    expect(result.goalMet).toBe(false);
+    expect(result.stopReason).toBe("indeterminate");
+
+    await engine.dispose();
+  });
+
+  it("reports an unverified outcome when verification is disabled entirely", async () => {
+    const { engine, ctx, store } = await harness({ toolName: "echo" });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+    const agent = new Agent(deps(store, tools, { verify: false }));
+
+    const handle = agent.run(ctx, customDef({ role: "coder", allowedTools: ["echo"] }), {
+      goal: { objective: "anything at all" },
+      model: "mock-fast",
+      maxSteps: 4,
+    });
+
+    await drain(handle.events());
+    const result = await handle.result();
+
+    expect(result.verdict).toBe("indeterminate");
+    expect(result.goalMet).toBe(false);
+    expect(result.stopReason).toBe("indeterminate");
+    expect(result.steps).toHaveLength(1);
+
+    await engine.dispose();
+  });
+
+  it("declared success criteria still settle the goal deterministically (no evaluation turn)", async () => {
+    // With criteria, the caller's contract is the signal — the model is never
+    // asked to grade its own work, so a scripted MET verdict cannot rescue it.
+    const { engine, ctx, store } = await harness({
+      toolName: "echo",
+      transform: () => `${VERDICT_TOKEN} MET - trust me`,
+    });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+    const agent = new Agent(deps(store, tools));
+
+    const handle = agent.run(ctx, customDef({ role: "coder", allowedTools: ["echo"] }), {
+      goal: { objective: "do the impossible", successCriteria: ["UNREACHABLE_ZZZ"] },
+      model: "mock-fast",
+      maxSteps: 2,
+    });
+
+    await drain(handle.events());
+    const result = await handle.result();
+
+    expect(result.stopReason).toBe("max-steps");
+    expect(result.verdict).toBe("unmet");
+    expect(result.goalMet).toBe(false);
+
+    await engine.dispose();
+  });
+});
+
+describe("Agent — a step that runs out of budget is not a step that succeeded", () => {
+  it("surfaces turn-budget exhaustion as a failed step, even though the kernel calls it ok", async () => {
+    // `mock-tools` always asks for a tool, so a one-turn budget is spent before
+    // it can answer. The kernel synthesizes finishReason "length" with
+    // status "ok" (transport-level success) — the agent must not read that as a
+    // completed step.
+    const { engine, ctx, store } = await harness({ toolName: "echo" });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+    const agent = new Agent(deps(store, tools, { maxTurnsPerStep: 1 }));
+
+    const handle = agent.run(ctx, customDef({ role: "coder", allowedTools: ["echo"] }), {
+      goal: { objective: "read the config", successCriteria: ["config"] },
+      maxSteps: 3,
+      maxRetries: 0,
+    });
+
+    await drain(handle.events());
+    const result = await handle.result();
+
+    const first = result.steps[0]!;
+    // The kernel's own view of the step: "ok", but truncated by the budget.
+    expect(first.status).toBe("ok");
+    // The agent's view: not a success.
+    expect(first.reflection.failure).toBe(true);
+    expect(first.reflection.goalMet).toBe(false);
+    expect(first.reflection.verdict).toBe("unmet");
+    expect(first.reflection.critique).toContain("budget");
+
+    // With no retry budget left, that is a blocked run — not an "ok" one.
+    expect(result.stopReason).toBe("blocked");
+    expect(result.goalMet).toBe(false);
+    expect(result.progress.percent).toBeLessThan(100);
+
+    await engine.dispose();
+  });
+});
+
+describe("parseVerdict — the verdict contract cannot be satisfied by accident", () => {
+  it("accepts exactly one unambiguous verdict", () => {
+    expect(parseVerdict(`${VERDICT_TOKEN} MET - the tests pass`)).toEqual({
+      verdict: "met",
+      reason: "the tests pass",
+    });
+    expect(parseVerdict(`thinking…\n${VERDICT_TOKEN} NOT_MET - the file is still empty`)).toEqual({
+      verdict: "unmet",
+      reason: "the file is still empty",
+    });
+  });
+
+  it("returns unknown for an echo of the instructions, conflicts, or silence", () => {
+    // The prompt names both verdicts, so echoing it is self-contradictory.
+    const echoed = `${VERDICT_TOKEN} MET - <justification>\n${VERDICT_TOKEN} NOT_MET - <what is missing>`;
+    expect(parseVerdict(echoed).verdict).toBe("indeterminate");
+    expect(parseVerdict("Yes, that all looks done to me!").verdict).toBe("indeterminate");
+    expect(parseVerdict("").verdict).toBe("indeterminate");
+  });
+});
+
+describe("defaultVerify — every uncertain path resolves to unknown", () => {
+  const goal = { objective: "ship it" };
+
+  it("asks the model with the evidence and returns its verdict", async () => {
+    let seen = "";
+    const out = await defaultVerify({
+      role: "coder",
+      goal,
+      step: 0,
+      stepText: "shipped",
+      toolResults: [],
+      evidence: "built and deployed v2",
+      ask: async (prompt) => {
+        seen = prompt;
+        return `${VERDICT_TOKEN} MET - v2 is deployed`;
+      },
+    });
+
+    expect(out).toEqual({ verdict: "met", reason: "v2 is deployed" });
+    expect(seen).toContain("built and deployed v2");
+    expect(seen).toContain("ship it");
+  });
+
+  it("never asks — and never passes — when there is no evidence at all", async () => {
+    let asked = false;
+    const out = await defaultVerify({
+      role: "coder",
+      goal,
+      step: 0,
+      stepText: "",
+      toolResults: [],
+      evidence: "   \n  ",
+      ask: async () => {
+        asked = true;
+        return `${VERDICT_TOKEN} MET - sure`;
+      },
+    });
+
+    expect(asked).toBe(false);
+    expect(out.verdict).toBe("indeterminate");
+  });
+
+  it("reports unknown when the evaluation turn itself does not complete", async () => {
+    const out = await defaultVerify({
+      role: "coder",
+      goal,
+      step: 0,
+      stepText: "x",
+      toolResults: [],
+      evidence: "some work happened",
+      ask: async () => undefined,
+    });
+
+    expect(out.verdict).toBe("indeterminate");
+    expect(out.reason).toContain("did not complete");
   });
 });

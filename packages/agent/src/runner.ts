@@ -428,7 +428,15 @@ export class Agent {
         if (verdict === "unmet") {
           reflection.correction = `The objective is not yet achieved: ${assessment.reason}. Do the remaining work — do not restate it.`;
         }
-        yield agentMetaChunk(agentRunId, role, "goal", step, reflection.critique, { assessment });
+        // The verdict itself; the reasoning behind it rides the reflect chunk.
+        yield agentMetaChunk(
+          agentRunId,
+          role,
+          "goal",
+          step,
+          `Evaluation verdict: ${verdict}.`,
+          { assessment },
+        );
       }
       reflection.verdict = verdict;
       unverifiedStreak = verdict === "indeterminate" ? unverifiedStreak + 1 : 0;
