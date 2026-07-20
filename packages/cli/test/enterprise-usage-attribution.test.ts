@@ -212,6 +212,23 @@ describe("user-config writes target the file the loader actually reads", () => {
     rmSync(box.configDir, { recursive: true, force: true });
   });
 
+  it("fails `config set` loudly (not with a stack trace) under a shadowing config.yaml", async () => {
+    // Every writeUserConfig caller is affected, not just `budget set`. The
+    // message must stay readable — it is the only thing telling the user which
+    // file is winning.
+    const box = sandbox();
+    writeFileSync(join(box.configDir, "config.yaml"), "defaultProvider: mock\n", "utf8");
+
+    const res = await runCli(box, ["config", "set", "defaultModel", "gpt-4o"]);
+    expect(res.code).toBe(1);
+    const message = `${res.stdout}${res.stderr}`;
+    expect(message).toMatch(/config\.yaml/);
+    expect(message).toMatch(/precedence/);
+    // A raw stack trace would bury the explanation.
+    expect(message).not.toMatch(/\s+at .+:\d+:\d+/);
+    expect(existsSync(join(box.configDir, "config.json"))).toBe(false);
+  });
+
   it("writes into the .nexusrc the loader reads instead of a shadowed config.json", async () => {
     const box = sandbox();
     // `.nexusrc` outranks `config.json` and holds JSON, so it can be updated

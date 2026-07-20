@@ -10,10 +10,15 @@
  *             tool-call/tool-result flows through the engine bus as StreamChunks.
  *   Evaluate  self-critique the step (Evaluate policy): detect failure, mark
  *             progress, and decide retry / self-correction / dynamic replanning /
- *             delegation / stop.
+ *             delegation / stop. When the deterministic policy cannot judge the
+ *             goal (no success criteria), this phase spends one explicit,
+ *             tool-free provider turn actually evaluating it (Verify policy) —
+ *             and reports `"indeterminate"` if even that cannot settle it.
  *
  * The loop repeats until the goal is met, the step budget is hit, the run is
- * cancelled, or it is blocked. Coordinator-level progress (plan drafts,
+ * cancelled, it is blocked, or the outcome proves unverifiable. Success is only
+ * ever claimed on evidence: a met criterion or an explicit verdict — never
+ * merely because a step produced text. Coordinator-level progress (plan drafts,
  * reflections, replans, delegations) is surfaced as reasoning-channel
  * StreamChunks carrying structured `raw.agent` metadata — never a side channel.
  */
@@ -415,7 +420,11 @@ export class Agent {
           toolResults: stepToolResults,
           evidence,
           ask: (prompt, system) =>
-            this.evaluationTurn(ctx, { adapterId, model, prompt, system, key: `${agentRunId}:s${step}:evaluate` }, usages),
+            this.evaluationTurn(
+              ctx,
+              { adapterId, model, prompt, system, key: `${agentRunId}:s${step}:evaluate` },
+              usages,
+            ),
         });
         verdict = assessment.verdict;
         reflection.goalMet = verdict === "met";
