@@ -100,6 +100,7 @@ import {
   openResponseCache,
   preferAffineProvider,
   ragStorePath,
+  repoMapBudgetTokens,
   sessionAffinity,
 } from "./power.js";
 import {
@@ -118,7 +119,7 @@ import {
   validateUserConfig,
   writeUserConfig,
 } from "./config-io.js";
-import { historyList, historyShow, openHistory } from "./history.js";
+import { historyList, historyShow, latestStoredSession, openHistory } from "./history.js";
 import { buildObservability, loadTraceSpans, type ObservabilityRuntime } from "./observability.js";
 import { attachMcpTools, startMcpSession } from "./mcp.js";
 import {
@@ -961,7 +962,7 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   const assembler = new EngineContextAssembler(
     new ContextEngine(),
     buildPowerSources(config, { cwd }),
-    4000,
+    config.context.budgetTokens,
   );
 
   const maxTurnsRaw = args.flags.get("max-turns");
@@ -1204,7 +1205,7 @@ async function runAgentOoda(
   const assembler = new EngineContextAssembler(
     new ContextEngine(),
     buildPowerSources(config, { cwd }),
-    4000,
+    config.context.budgetTokens,
   );
 
   const maxStepsRaw = args.flags.get("max-steps");
@@ -2510,6 +2511,48 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
 
 // ── chat (line REPL, headless-safe) ──────────────────────────────────────────
 
+/**
+ * Resolve `--resume <id>` / `--continue` to a session id to rehydrate, or
+ * `undefined` for a fresh session.
+ *
+ * Resume depends on `history.storePrompts`, which is OFF by default because it
+ * is the only setting that writes what you typed to disk. When it is off — or
+ * when nothing was ever stored — this says so on stderr and returns undefined,
+ * so the user is never handed a half-restored conversation and told it is theirs.
+ */
+async function resolveResumeTarget(
+  args: ParsedArgs,
+  config: NexusConfig,
+  historyDb: string,
+  io: Io,
+): Promise<string | undefined> {
+  const explicit = args.flags.get("resume");
+  const wantsLatest = args.bools.has("continue");
+  if (explicit === undefined && !wantsLatest) return undefined;
+
+  if (!config.history.enabled) {
+    io.err("nexus chat: history is disabled, so there is nothing to resume\n");
+    return undefined;
+  }
+  if (!config.history.storePrompts) {
+    io.err(
+      "nexus chat: cannot resume — your prompts are not stored on disk " +
+        "(history.storePrompts is off, the default).\n" +
+        "  Enable it with: nexus config set history.storePrompts true\n" +
+        "  Conversations started AFTER that can be resumed; earlier ones cannot.\n",
+    );
+    return undefined;
+  }
+  if (explicit !== undefined && explicit.length > 0) return explicit;
+
+  const latest = await latestStoredSession(historyDb);
+  if (!latest) {
+    io.err("nexus chat: no stored conversation to continue yet\n");
+    return undefined;
+  }
+  return latest;
+}
+
 export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const config = await loadEffectiveConfig();
   const runtime = await buildAuthedRuntime(config);
@@ -2540,9 +2583,30 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   }
 
   const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
-  const store = await openHistory({ enabled: config.history.enabled, dbPath: historyDb });
+  const store = await openHistory({
+    enabled: config.history.enabled,
+    dbPath: historyDb,
+    storePrompts: config.history.storePrompts,
+  });
   const engine = createEngine({ registry: runtime.registry, pricing: runtime.pricing, store });
-  const session = await engine.openSession();
+
+  // `--resume <id>` / `--continue` rehydrate a previous conversation. Resume is
+  // only possible when prompts were stored, which is opt-in — so every failure
+  // path here says exactly what is missing instead of quietly starting fresh.
+  const resumeId = await resolveResumeTarget(args, config, historyDb, io);
+  const session = await engine.openSession(resumeId !== undefined ? { resume: resumeId } : {});
+  if (resumeId !== undefined) {
+    const restored = session.transcript.length;
+    io.err(
+      restored > 0
+        ? `[resume] ${session.id} — restored ${restored} message${restored === 1 ? "" : "s"} ` +
+            `(text only; tool calls are not replayed)\n`
+        : `nexus chat: no stored transcript to resume for session "${resumeId}" ` +
+            `(nothing stored, or no completed exchange yet) — starting a fresh conversation\n`,
+    );
+  }
+  // Print the id unconditionally: without it there is nothing to pass to --resume.
+  io.err(`[session] ${session.id}\n`);
   try {
     for (const line of lines) {
       // One session across every line: `turn.input` already carries the prior
@@ -2646,7 +2710,7 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   const assembler = new EngineContextAssembler(
     new ContextEngine(),
     buildPowerSources(config, { cwd: process.cwd() }),
-    4000,
+    config.context.budgetTokens,
   );
 
   const obs = buildObservability(config);
@@ -4049,7 +4113,13 @@ export async function cmdDoctor(_args: ParsedArgs, io: Io = defaultIo): Promise<
     ragDetail = "no index (run `nexus index`)";
   }
   io.out(`  [ok] rag     — ${config.rag.enabled ? "enabled" : "disabled"}, ${config.rag.embedder} embedder — ${ragDetail}\n`);
-  io.out(`  [ok] repomap — ${config.fileintel.repoMap ? "enabled" : "disabled"} (budget ${config.fileintel.budgetTokens} tokens)\n`);
+  // Report the EFFECTIVE budget (clamped against `context.budgetTokens`), not the
+  // raw setting — those differ exactly when a misconfiguration would otherwise
+  // have silently produced no map at all.
+  io.out(
+    `  [ok] repomap — ${config.fileintel.repoMap ? "enabled" : "disabled"} ` +
+      `(budget ${repoMapBudgetTokens(config)} of ${config.context.budgetTokens} context tokens)\n`,
+  );
   const counts = await cacheEntryCounts(config);
   io.out(
     `  [ok] cache   — response ${config.cache.enabled && config.cache.responses ? "on" : "off"} (${counts.responses}), ` +

@@ -12,7 +12,7 @@ import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { EventStore, RunResult, StreamChunk } from "@nexuscode/core";
 import { redactArgs } from "@nexuscode/tools";
-import type { ContentBlock } from "@nexuscode/shared";
+import type { ContentBlock, Message } from "@nexuscode/shared";
 
 interface SqliteStmt {
   run(...params: unknown[]): unknown;
@@ -109,6 +109,20 @@ CREATE TABLE IF NOT EXISTS run_summary (
   cost_usd      REAL,
   created_at    INTEGER NOT NULL
 );
+
+-- The resumable conversation. This is the ONLY table holding the user's own
+-- words, which is why it is written only when history.storePrompts is on.
+CREATE TABLE IF NOT EXISTS turn_message (
+  session_id  TEXT NOT NULL,
+  turn_id     TEXT NOT NULL,
+  seq         INTEGER NOT NULL,
+  idx         INTEGER NOT NULL,
+  role        TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (session_id, seq, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_turn_message_session ON turn_message(session_id, seq, idx);
 `;
 
 /**
@@ -118,6 +132,13 @@ CREATE TABLE IF NOT EXISTS run_summary (
 export async function openHistory(opts: {
   enabled: boolean;
   dbPath: string;
+  /**
+   * Persist user prompts so a conversation can be resumed later. OFF unless the
+   * caller passes `true` (config `history.storePrompts`) — see the schema doc:
+   * everything else in this db is provider output, and what the user typed is
+   * only written on an explicit opt-in.
+   */
+  storePrompts?: boolean;
 }): Promise<HistoryStore> {
   if (!opts.enabled) return NOOP_STORE;
 
@@ -173,6 +194,17 @@ export async function openHistory(opts: {
        cost_usd=excluded.cost_usd`,
   );
 
+  const clearTranscriptSeq = db.prepare(
+    `DELETE FROM turn_message WHERE session_id = ? AND seq = ?`,
+  );
+  const insertTranscript = db.prepare(
+    `INSERT INTO turn_message (session_id, turn_id, seq, idx, role, content, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const selectTranscript = db.prepare(
+    `SELECT role, content FROM turn_message WHERE session_id = ? ORDER BY seq ASC, idx ASC`,
+  );
+
   return {
     append(entry: {
       sessionId: string;
@@ -218,6 +250,52 @@ export async function openHistory(opts: {
         Date.now(),
       );
     },
+    appendTranscript(entry: {
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      messages: Message[];
+    }): void {
+      // Opt-in only. Without it the table stays empty and `--resume` reports that
+      // honestly, rather than the user's prompts landing on disk unasked.
+      if (!opts.storePrompts) return;
+      const now = Date.now();
+      // Replace, so a turn re-recorded with its winning answer supersedes the
+      // auto-captured one instead of stacking a second reply.
+      clearTranscriptSeq.run(entry.sessionId, entry.seq);
+      for (let idx = 0; idx < entry.messages.length; idx++) {
+        const message = entry.messages[idx]!;
+        // A prompt can contain a pasted key. Same redaction pass tool results
+        // get — nothing secret-shaped is written in the clear.
+        const content = redactArgs(message.content) as ContentBlock[];
+        insertTranscript.run(
+          entry.sessionId,
+          entry.turnId,
+          entry.seq,
+          idx,
+          message.role,
+          JSON.stringify(content),
+          now,
+        );
+      }
+    },
+    loadTranscript(sessionId: string): Message[] {
+      if (!opts.storePrompts) return [];
+      try {
+        const rows = selectTranscript.all(sessionId) as { role: string; content: string }[];
+        const out: Message[] = [];
+        for (const row of rows) {
+          try {
+            out.push({ role: row.role as Message["role"], content: JSON.parse(row.content) as ContentBlock[] });
+          } catch {
+            /* skip an unparseable row rather than fail the whole resume */
+          }
+        }
+        return out;
+      } catch {
+        return [];
+      }
+    },
     close(): void {
       try {
         db.close();
@@ -243,6 +321,29 @@ async function openReadonly(dbPath: string): Promise<SqliteDb | null> {
     return new Database(dbPath, { readonly: true, fileMustExist: true });
   } catch {
     return null;
+  }
+}
+
+/**
+ * The most recently used session that has a STORED TRANSCRIPT (drives
+ * `chat --continue`). Returns null when nothing was stored — which the caller
+ * must surface, since the usual cause is `history.storePrompts` being off.
+ */
+export async function latestStoredSession(dbPath: string): Promise<string | null> {
+  const db = await openReadonly(dbPath);
+  if (!db) return null;
+  try {
+    const row = db
+      .prepare(
+        `SELECT session_id FROM turn_message
+         GROUP BY session_id ORDER BY MAX(created_at) DESC LIMIT 1`,
+      )
+      .get() as { session_id?: string } | undefined;
+    return row?.session_id ?? null;
+  } catch {
+    return null;
+  } finally {
+    db.close();
   }
 }
 

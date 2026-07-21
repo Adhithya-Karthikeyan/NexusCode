@@ -278,6 +278,10 @@ export const FileIntelConfig = z
      * path (`anthropicPrefixBlocks` in cli/src/power.ts is defined but never
      * called), so this is re-paid in full on EVERY turn of an agent loop rather
      * than being served from a cached prefix. Raise it once caching is wired.
+     *
+     * Clamped by `buildPowerSources` to half of `context.budgetTokens` (see
+     * `repoMapBudgetTokens`), so raising it past the total context budget yields
+     * the largest map that still fits rather than — as it used to — no map at all.
      */
     budgetTokens: z.number().int().positive().default(768),
     /** Hard cap on the number of files the walker returns. */
@@ -310,6 +314,17 @@ export type FileIntelConfig = z.infer<typeof FileIntelConfig>;
  */
 export const ContextConfig = z
   .object({
+    /**
+     * TOTAL token budget for everything the Context Engine assembles onto a
+     * request — the ceiling the per-source caps below sit underneath. Until now
+     * this was a hard-coded `4000` at each `EngineContextAssembler` construction
+     * site, invisible from config, which made it possible to raise a SUB-budget
+     * (e.g. `fileintel.budgetTokens`) past the total: the engine then dropped
+     * that whole source rather than packing it, so asking for MORE repo map
+     * silently produced NONE. It is a real setting now, and `buildPowerSources`
+     * clamps each source against it so the two can never contradict.
+     */
+    budgetTokens: z.number().int().positive().default(4096),
     /**
      * Ingest the project's instruction files (CLAUDE.md / AGENTS.md, walking
      * cwd→root plus the home dir) into the static `conventions` lane. On by
@@ -357,6 +372,18 @@ export const HistoryConfig = z
   .object({
     enabled: z.boolean().default(true),
     dbPath: z.string().optional(),
+    /**
+     * Persist USER PROMPTS to the history db so a conversation can be resumed in
+     * a later process (`nexus chat --resume <id>` / `--continue`).
+     *
+     * OFF by default, deliberately: everything else in history is provider
+     * OUTPUT, and writing what you typed to disk is a privacy decision that
+     * belongs to you, not to a default. With it off, `--resume` says so plainly
+     * rather than silently restoring half a conversation. Prompts are run
+     * through the same secret-redaction pass as tool results before they are
+     * written.
+     */
+    storePrompts: z.boolean().default(false),
   })
   .strict();
 

@@ -409,6 +409,28 @@ export interface PowerSourceOptions {
 }
 
 /**
+ * The repo map's EFFECTIVE token budget: `fileintel.budgetTokens`, clamped so a
+ * single source can never claim more than half of `context.budgetTokens`.
+ *
+ * Two budgets used to be able to contradict each other. `fileintel.budgetTokens`
+ * caps the map inside `repoMap()`; `context.budgetTokens` caps everything the
+ * engine assembles. The engine packs whole chunks — a chunk that does not fit is
+ * DROPPED, not shrunk — so setting the sub-budget at or above the total made the
+ * map vanish entirely: measured on this repo, `fileintel.budgetTokens: 3900`
+ * yielded a 3898-token map, and `4096` yielded ZERO. Asking for more produced
+ * none, silently.
+ *
+ * Half the total is the share, not a tuning knob: the remainder has to hold the
+ * conventions + git lanes and the user's own message, all of which the engine
+ * would otherwise trim to make room for the map. Callers that raise the sub-budget
+ * past that point now get the largest map that still fits instead of nothing.
+ */
+export function repoMapBudgetTokens(config: NexusConfig): number {
+  const ceiling = Math.max(1, Math.floor(config.context.budgetTokens / 2));
+  return Math.min(config.fileintel.budgetTokens, ceiling);
+}
+
+/**
  * Assemble the Context Engine source list for a run — the project context every
  * request carries. Out of the box this is what makes the tool behave like a
  * harness rather than a chatbot:
@@ -432,6 +454,7 @@ export interface PowerSourceOptions {
  */
 export function buildPowerSources(config: NexusConfig, opts: PowerSourceOptions): ContextSource[] {
   const sources: ContextSource[] = [];
+  const repoMapBudget = repoMapBudgetTokens(config);
   if (opts.memory ?? true) sources.push(new MemorySource({ store: openMemory() }));
 
   // Project conventions: the repo's own rules. Previously only reachable via the
@@ -450,7 +473,7 @@ export function buildPowerSources(config: NexusConfig, opts: PowerSourceOptions)
     sources.push(
       new RepoMapSource({
         root: opts.cwd,
-        budgetTokens: config.fileintel.budgetTokens,
+        budgetTokens: repoMapBudget,
         extraIgnore: config.fileintel.ignore,
         maxTotalBytes: config.fileintel.maxTotalBytes,
         maxFiles: config.fileintel.maxFiles ?? config.fileintel.maxTotalFiles,

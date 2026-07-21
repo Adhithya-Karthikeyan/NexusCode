@@ -167,6 +167,28 @@ export interface EventStore {
     chunk: StreamChunk;
   }): void | Promise<void>;
   summarize(result: RunResult & { sessionId: string; turnId: string }): void | Promise<void>;
+
+  /**
+   * OPTIONAL durable transcript seam — what makes a conversation resumable in a
+   * LATER process. Everything else here is provider OUTPUT; this is the only
+   * place the user's own messages are persisted, so a store may legitimately
+   * refuse to implement it (or implement it as a no-op when the user has not
+   * opted in). Called once per turn with that turn's NEW messages, and again
+   * with the assistant's reply; re-calling with the same `seq` REPLACES it.
+   */
+  appendTranscript?(entry: {
+    sessionId: string;
+    turnId: string;
+    seq: number;
+    messages: Message[];
+  }): void | Promise<void>;
+
+  /**
+   * OPTIONAL counterpart: the stored conversation for a session, oldest first.
+   * An empty array means "nothing stored" — which callers must report honestly
+   * rather than presenting as a resumed conversation.
+   */
+  loadTranscript?(sessionId: string): Message[] | Promise<Message[]>;
 }
 
 /** The model-ready request an assembler produces from a raw turn input. */

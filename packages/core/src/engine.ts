@@ -218,6 +218,20 @@ export function boundTranscript(
   return [...kept, ...tail];
 }
 
+/**
+ * Trim a REHYDRATED transcript to complete exchanges: drop trailing `user`/`tool`
+ * messages whose reply was never recorded (the process died, the run errored).
+ * Resuming onto an unanswered user turn would append a second user message back
+ * to back, which providers requiring strict role alternation reject outright —
+ * and the dangling question was never answered anyway, so replaying it as
+ * "history" would misrepresent the conversation.
+ */
+function resumable(messages: readonly Message[]): Message[] {
+  const out = [...messages];
+  while (out.length > 0 && out[out.length - 1]!.role !== "assistant") out.pop();
+  return out;
+}
+
 /** Normalize whatever a caller recorded into the assistant messages to append. */
 function replyMessages(reply: TurnReply): Message[] {
   if (reply === undefined) return [];
@@ -259,6 +273,43 @@ class EngineImpl implements Engine {
       transcript.push(...messages);
     };
 
+    // Durable-transcript sequence. After a resume it restarts at the MESSAGE
+    // count, which is always >= the number of stored sequence groups — so a
+    // resumed session's new turns can never overwrite its stored ones. It may
+    // leave gaps in `seq`; that is harmless, since `seq` only orders rows.
+    let seq = 0;
+    const persist = (turnId: string, at: number, messages: readonly Message[]): void => {
+      if (!remembers || messages.length === 0) return;
+      try {
+        const written = this.config.store?.appendTranscript?.({
+          sessionId: id,
+          turnId,
+          seq: at,
+          messages: [...messages],
+        });
+        // Best-effort, exactly like every other store call: a persistence failure
+        // must never sink a live conversation.
+        if (written instanceof Promise) written.catch(() => {});
+      } catch {
+        /* ignore */
+      }
+    };
+
+    // Resume: rehydrate the stored conversation before the first turn. The bound
+    // is the SAME one live turns use, so resuming a 500-turn session cannot blow
+    // the context window.
+    if (opts.resume !== undefined && remembers) {
+      try {
+        const loaded = await this.config.store?.loadTranscript?.(id);
+        if (loaded && loaded.length > 0) {
+          setAll(boundTranscript(resumable(loaded), maxTokens, 1));
+          seq = loaded.length;
+        }
+      } catch {
+        /* a store that cannot read degrades to a fresh session, never a crash */
+      }
+    }
+
     const session: Session = {
       id,
       scope: sessionScope,
@@ -276,12 +327,17 @@ class EngineImpl implements Engine {
         // Thread the prior conversation ahead of the new input — unless the
         // caller already did it itself, in which case history stays exactly once.
         let messages = incoming;
+        const turnSeq = seq;
         if (remembers) {
           const at = threadedAt(incoming, transcript);
           const combined = at === undefined ? [...transcript, ...incoming] : incoming;
           const fresh = at === undefined ? incoming.length : incoming.length - at;
           messages = boundTranscript(combined, maxTokens, fresh);
           setAll(messages);
+          // Persist only this turn's NEW messages (never the re-threaded history),
+          // so the durable transcript grows linearly, not quadratically.
+          persist(turnId, turnSeq, messages.slice(messages.length - fresh));
+          seq = turnSeq + 2; // [turnSeq] = this turn's input, [turnSeq+1] = its reply
         }
 
         // This turn's reply slot. Both the automatic capture below and an
@@ -297,6 +353,9 @@ class EngineImpl implements Engine {
           recorded = reply;
           transcript.push(...reply);
           setAll(boundTranscript(transcript, maxTokens, 1));
+          // Same seq every time, so a later explicit `record(...)` REPLACES the
+          // auto-captured reply on disk instead of appending a second one.
+          persist(turnId, turnSeq + 1, reply);
         };
 
         // Persistence seam + automatic reply capture. The orchestrator summarizes

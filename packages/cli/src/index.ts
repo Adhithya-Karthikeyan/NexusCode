@@ -124,6 +124,8 @@ const FLAG_SPEC: FlagSpec = {
     "warn-threshold": [],
     decision: [],
     actor: [],
+    // `chat --resume <session-id>`: rehydrate a stored conversation.
+    resume: [],
   },
   multi: {
     backend: ["b"],
@@ -153,6 +155,8 @@ const FLAG_SPEC: FlagSpec = {
     // Opt in to auto-opening a browser to a provider's key page during a
     // guided api-key login (default: off — the URL is printed instead).
     open: [],
+    // `chat --continue` (-c): resume the most recent stored conversation.
+    continue: ["c"],
   },
 };
 
@@ -169,7 +173,8 @@ Commands:
   jobs list|run|history background jobs, command history, PTY seam
   tools list|run         list/run the tool framework's tools (web/db/cloud/… groups)
   code <task>           drive a subprocess coding CLI (--agent claude-code | codex)
-  chat                  headless line REPL (pipe lines in; works on TERM=dumb)
+  chat [--resume <id>]  headless line REPL (pipe lines in; works on TERM=dumb)
+                        --continue/-c resumes the last stored conversation
   compare <prompt>      fan out across -b providers, aligned
   race <prompt>         race -b providers; --mode first (fastest ok) | best (judged)
   consensus <prompt>    fan across -b providers, then reconcile via a judge
@@ -365,7 +370,21 @@ class CodeCommand extends HandlerCommand {
 
 class ChatCommand extends HandlerCommand {
   static override paths = [["chat"]];
-  static override usage = Command.Usage({ description: "Headless line REPL over the engine." });
+  static override usage = Command.Usage({
+    description: "Headless line REPL over the engine.",
+    details:
+      "Every line is one turn, and later turns remember earlier ones. " +
+      "`--resume <session-id>` / `--continue` (-c) carry a conversation across processes; " +
+      "the session id is printed on stderr as `[session] <id>`. Resume requires " +
+      "`history.storePrompts` (off by default — it is what writes your prompts to disk) " +
+      "and restores text turns only; tool calls are not replayed.",
+    examples: [
+      ["Pipe a conversation", "printf 'hi\\nwhat did I say?\\n' | nexus chat -p mock"],
+      ["Continue the last conversation", "nexus chat --continue"],
+      ["Resume a specific session", "nexus chat --resume s_1234"],
+      ["Enable resumable chats", "nexus config set history.storePrompts true"],
+    ],
+  });
   protected handler(): Handler {
     return cmdChat;
   }
