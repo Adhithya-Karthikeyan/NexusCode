@@ -12,8 +12,8 @@
  *   - the SUB-budget (`fileintel.budgetTokens`) was configurable and could be set
  *     ABOVE it, at which point the engine — which packs whole chunks and drops
  *     what will not fit — discarded the entire repo map. Asking for a bigger map
- *     produced no map, silently. Measured on this repo before the fix: 3900 →
- *     3898 tokens of map, 4096 → 0.
+ *     produced no map, silently. Measured on this repo against that hard-coded
+ *     4000: `fileintel.budgetTokens` 3900 gave 3898 tokens of map, 4096 gave 0.
  *
  * These tests pin both halves: the total budget is real and configurable, and no
  * sub-budget setting can push a source off the cliff.
