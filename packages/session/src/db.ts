@@ -10,6 +10,8 @@
  * surface a clear error rather than crash the importing process at module load.
  */
 
+import { migrateMindDb } from "@nexuscode/transfer";
+
 export interface SqliteStmt {
   run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   all(...params: unknown[]): unknown[];
@@ -97,5 +99,12 @@ export async function openSessionDb(dbPath: string): Promise<SqliteDb> {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(HISTORY_SCHEMA);
   db.exec(SESSION_SCHEMA);
+  // ZLCTS knowledge-core tables (additive, idempotent). The frozen history
+  // contract is untouched; a failed mind migration must not break session reads.
+  try {
+    migrateMindDb(db);
+  } catch {
+    /* best-effort: keep the read side working even if zlcts tables cannot be created */
+  }
   return db;
 }

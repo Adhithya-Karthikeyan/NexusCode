@@ -1,7 +1,7 @@
 {
-  "name": "@nexuscode/session",
+  "name": "@nexuscode/transfer",
   "version": "0.1.0",
-  "description": "NexusCode session management over the event_log: list/show/name/branch, snapshots, replay, export, and the local Code Receipt.",
+  "description": "NexusCode Zero-Loss Context Transfer System (ZLCTS) — a harness-owned, provider-neutral knowledge core so switching LLM providers loses virtually no understanding.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,15 +24,7 @@
     "clean": "rm -rf dist coverage"
   },
   "dependencies": {
-    "@nexuscode/core": "*",
-    "@nexuscode/shared": "*",
-    "@nexuscode/tools": "*",
-    "@nexuscode/transfer": "*"
-  },
-  "optionalDependencies": {
-    "better-sqlite3": "^12.11.1"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12"
+    "@nexuscode/config": "*",
+    "@nexuscode/shared": "*"
   }
 }

@@ -368,6 +368,48 @@ export const ContextConfig = z
   .strict();
 export type ContextConfig = z.infer<typeof ContextConfig>;
 
+/**
+ * Zero-Loss Context Transfer (ZLCTS) settings. The harness — not the LLM — owns
+ * project knowledge in a provider-neutral store (`zlcts_*` tables sidecar to the
+ * history db). A provider becomes a disposable execution engine; switching
+ * providers (auto on rate-limit/failover, or `--resume` into a different
+ * provider) loses virtually no understanding. Non-destructive: the legacy
+ * `MemoryStore` / `nexus memory` commands continue to work unchanged.
+ */
+export const ContextTransferConfig = z
+  .object({
+    /** Master switch. When false, ZLCTS tables are still migrated (additive) but unused. */
+    enabled: z.boolean().default(true),
+    /** Override the zlcts db path; defaults to the same file as `history.db`. */
+    dbPath: z.string().optional(),
+    /**
+     * Embedder id for knowledge-item + graph embeddings. `hashing` (default) is a
+     * deterministic no-model embedder (zero cost, zero new deps); set e.g.
+     * `openai:text-embedding-3-small` for real semantic embeddings via an
+     * OpenAI-compat provider with an `embed()` capability. The embedder-mismatch
+     * gate re-embeds or falls back to BM25-only if this changes across runs.
+     */
+    embedder: z.string().default("hashing"),
+    /** Compression strategy for assembled context. `truncateMiddle` is forbidden for never-compress kinds. */
+    compressionPolicy: z.enum(["semantic", "truncateMiddle"]).default("semantic"),
+    /** Validation strictness for the post-restore ValidationGate. */
+    validationStrictness: z.enum(["strict", "relaxed"]).default("strict"),
+    /** Handoff protocol knobs. */
+    handoff: z
+      .object({
+        /** `full` hands off execution; `consult` lets a chat-only provider advise while pending actions stay blocked. */
+        mode: z.enum(["full", "consult"]).default("full"),
+        /** Milliseconds to wait for an idempotent in-flight tool call before force-cancelling (after capturing partialEffect). */
+        inflightWaitMs: z.number().int().positive().default(30000),
+        /** Turns after a switch during which the per-action preventRetry gate is enforced. */
+        preventRetryWindow: z.number().int().positive().default(5),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict();
+export type ContextTransferConfig = z.infer<typeof ContextTransferConfig>;
+
 export const HistoryConfig = z
   .object({
     enabled: z.boolean().default(true),
@@ -1026,6 +1068,8 @@ export const NexusConfig = z
     fileintel: FileIntelConfig.default({}),
     /** Context Engine settings (project conventions, git lane, env lane). */
     context: ContextConfig.default({}),
+    /** Zero-Loss Context Transfer (ZLCTS) — harness-owned, provider-neutral knowledge store. */
+    transfer: ContextTransferConfig.default({}),
     /** Agent framework settings (OODA loop bounds, default role). */
     agent: AgentConfig.default({}),
     /** Task-management settings (durable plan store). */

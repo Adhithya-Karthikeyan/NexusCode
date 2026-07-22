@@ -58,6 +58,7 @@
     "@nexuscode/rag": "*",
     "@nexuscode/runtime": "*",
     "@nexuscode/sdk": "*",
+    "@nexuscode/transfer": "*",
     "@nexuscode/server": "*",
     "@nexuscode/session": "*",
     "@nexuscode/shared": "*",

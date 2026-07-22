@@ -13,6 +13,7 @@ import { dirname } from "node:path";
 import type { EventStore, RunResult, StreamChunk } from "@nexuscode/core";
 import { redactArgs } from "@nexuscode/tools";
 import type { ContentBlock, Message } from "@nexuscode/shared";
+import { migrateMindDb } from "@nexuscode/transfer";
 
 interface SqliteStmt {
   run(...params: unknown[]): unknown;
@@ -165,6 +166,13 @@ export async function openHistory(opts: {
     db = new Database(opts.dbPath);
     db.exec("PRAGMA journal_mode = WAL;");
     db.exec(SCHEMA);
+    // ZLCTS knowledge-core tables (additive, idempotent). Non-fatal: a failed
+    // mind migration degrades to history-only and never crashes a run.
+    try {
+      migrateMindDb(db);
+    } catch {
+      /* best-effort: keep history working even if zlcts tables cannot be created */
+    }
   } catch {
     return NOOP_STORE;
   }
