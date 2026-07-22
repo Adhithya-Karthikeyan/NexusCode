@@ -1136,6 +1136,17 @@ async function executeToolCall(
 }
 
 /**
+ * Isolate ZLCTS transfer-handle failures: a throwing capture/project/boundary
+ * call must never crash the agent run (mirrors the toolInterceptor isolation
+ * pattern above). Surfaces the failure on the existing store-error trace
+ * channel, prefixed `[transfer]`, so observers see capture gaps without the
+ * run sinking. No-op when no handle is attached.
+ */
+function emitTransferError(ctx: RunContext, e: unknown): void {
+  ctx.emit?.({ type: "store-error", traceId: ctx.turnId, ts: Date.now(), data: `[transfer] ${String(e)}` });
+}
+
+/**
  * The agentic stream: invoke the provider, and whenever it asks for tools,
  * execute them (through the gate), emit `tool-result` chunks, append the results
  * to the conversation, and re-invoke — looping until the model stops calling
@@ -1161,6 +1172,10 @@ async function* agentStream(
 
   let system = run.params?.system;
   let messages: Message[] = [...run.input];
+  // ZLCTS capture handle — optional. When present, the runner externalizes
+  // every chunk (verbatim + projected), tool output, and turn boundary into the
+  // Provider-Neutral Knowledge Core. When absent, behavior is unchanged.
+  const transfer = ctx.transfer;
 
   // Optional context assembly before the first provider call. A failure here is
   // non-fatal: we fall back to the raw messages rather than sink the run.
@@ -1194,6 +1209,15 @@ async function* agentStream(
       return;
     }
 
+    // Mark the turn-start boundary in the WAL (best-effort, isolated).
+    if (transfer) {
+      try {
+        await transfer.turnBoundary("start", turn);
+      } catch (e) {
+        emitTransferError(ctx, e);
+      }
+    }
+
     const req: ChatRequest = { model: run.model, messages };
     if (system !== undefined) req.system = system;
     // On the FINAL permitted turn, DROP the tools so the model must summarize
@@ -1220,6 +1244,21 @@ async function* agentStream(
 
     for await (const chunk of adapter.stream(req, callCtx)) {
       const stamped: StreamChunk = chunk.runId === runId ? chunk : ({ ...chunk, runId } as StreamChunk);
+      // ZLCTS: capture every adapter chunk verbatim (unredacted, before
+      // SessionStore.append redacts) and project it into the PNKC. Both are
+      // isolated so a transfer failure never sinks the run.
+      if (transfer) {
+        try {
+          transfer.captureVerbatim(stamped);
+        } catch (e) {
+          emitTransferError(ctx, e);
+        }
+        try {
+          await transfer.project(stamped);
+        } catch (e) {
+          emitTransferError(ctx, e);
+        }
+      }
       switch (stamped.type) {
         case "run-start":
           // Only the very first provider invocation's run-start reaches consumers.
@@ -1303,6 +1342,14 @@ async function* agentStream(
         if (total) end.usage = total;
         yield end;
       }
+      // Mark the terminal turn-end boundary (no tools → this turn ends the run).
+      if (transfer) {
+        try {
+          await transfer.turnBoundary("end", turn);
+        } catch (e) {
+          emitTransferError(ctx, e);
+        }
+      }
       return;
     }
 
@@ -1323,10 +1370,33 @@ async function* agentStream(
         }),
       );
       const result = await executeToolCall(opts, call, scope, runId, ctx.turnId);
+      // ZLCTS: record the completed tool output for mid-tool-call-termination
+      // resume, then capture the runner-synthesized tool-result chunk (it is
+      // NOT emitted by the adapter, so the per-chunk hook above misses it).
+      if (transfer) {
+        try {
+          transfer.recordToolOutput(call.name ?? "tool", JSON.stringify(result.content));
+        } catch (e) {
+          emitTransferError(ctx, e);
+        }
+      }
       ctx.emit?.(
         spanEnd(ctx.turnId, toolKey, { status: result.isError ? "error" : "ok", runId }),
       );
-      yield toolResultChunk(runId, call.id, result);
+      const trChunk = toolResultChunk(runId, call.id, result);
+      if (transfer) {
+        try {
+          transfer.captureVerbatim(trChunk);
+        } catch (e) {
+          emitTransferError(ctx, e);
+        }
+        try {
+          await transfer.project(trChunk);
+        } catch (e) {
+          emitTransferError(ctx, e);
+        }
+      }
+      yield trChunk;
       const toolMsg: Message = { role: "tool", toolCallId: call.id, content: result.content };
       if (call.name) toolMsg.name = call.name;
       toolMessages.push(toolMsg);
@@ -1350,6 +1420,14 @@ async function* agentStream(
     ts: Date.now(),
   };
   if (total) end.usage = total;
+  // Mark the final turn-end boundary (maxTurns exhausted → synthesized terminal).
+  if (transfer) {
+    try {
+      await transfer.turnBoundary("end", opts.maxTurns - 1);
+    } catch (e) {
+      emitTransferError(ctx, e);
+    }
+  }
   yield end;
 }
 

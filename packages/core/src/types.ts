@@ -212,6 +212,31 @@ export interface ContextAssembler {
   ): Promise<AssembledContext>;
 }
 
+/**
+ * The ZLCTS capture seam. When attached to a {@link RunContext}, the agent
+ * runner externalizes every chunk, tool output, and turn boundary into the
+ * Provider-Neutral Knowledge Core so a mid-run provider switch loses nothing.
+ *
+ * Structural: `@nexuscode/transfer`'s `createTransferHandle` returns an object
+ * that satisfies this shape, so core and the transfer package do not
+ * build-couple. Every method is best-effort and MUST be isolated by the caller:
+ * a throwing handle never crashes the run. When `undefined`, the runner
+ * captures nothing and behaves exactly as before.
+ */
+export interface TransferHandle {
+  readonly sessionId: string;
+  /** Capture a raw, unredacted chunk BEFORE the redacting SessionStore.append. */
+  captureVerbatim(chunk: StreamChunk): void;
+  /** Project a chunk to typed deltas and fold them into the PNKC (WAL + items). */
+  project(chunk: StreamChunk): Promise<void>;
+  /** Record a completed tool's output for mid-tool-call-termination resume. */
+  recordToolOutput(tool: string, stdout: string): void;
+  /** Emit a turn-boundary lifecycle marker into the WAL. */
+  turnBoundary(kind: "start" | "end", turn: number): Promise<void>;
+  /** Durability barrier: mark the WAL durably written up to the high-water lamport. */
+  flush(): void;
+}
+
 /** Everything a dispatched orchestration needs, produced by `Turn.context()`. */
 export interface RunContext {
   sessionId: string;
@@ -225,4 +250,6 @@ export interface RunContext {
   emit?: (e: TraceEvent) => void;
   /** Optional Context Engine run before the first provider dispatch. */
   contextAssembler?: ContextAssembler;
+  /** Optional ZLCTS capture handle; when set, the runner externalizes the run. */
+  transfer?: TransferHandle;
 }

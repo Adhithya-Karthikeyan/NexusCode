@@ -6,6 +6,13 @@
  * NEVER silently skip — they emit an execution-event delta with
  * `result: "unknown"` and `rawType` set. `projectorVersion` is bumped whenever
  * the registry changes so replayed projections can be invalidated.
+ *
+ * One projector instance is created per run (by the TransferHandle). It keeps a
+ * per-run `callId → toolName` map so that `tool-call-end` / `tool-result`
+ * chunks — whose StreamChunk shapes carry only a call id, not the tool name —
+ * still materialize execution-events named after the tool (recovered from the
+ * preceding `tool-call-start`). Without this, a provider switch would see
+ * anonymous "tool-call-end" items instead of "bash ended".
  */
 
 import type { StreamChunk } from "@nexuscode/shared";
@@ -28,59 +35,27 @@ export interface EventProjector {
   project(chunk: StreamChunk, ctx: ProjectionContext): Delta[];
 }
 
+/** A chunk handler, closing over the per-run callId→toolName map. */
+type ChunkHandler = (
+  chunk: StreamChunk,
+  ctx: ProjectionContext,
+  callNames: Map<string, string>,
+) => Delta[];
+
 /** Create an EventProjector with the Phase 1 chunk-type registry. */
 export function createEventProjector(): EventProjector {
+  // Per-run map: tool call id → tool name, populated on tool-call-start.
+  const callNames = new Map<string, string>();
   return {
     project(chunk, ctx): Delta[] {
       const handler = REGISTRY[chunk.type];
-      if (handler) return handler(chunk, ctx);
+      if (handler) return handler(chunk, ctx, callNames);
       // UNKNOWN type — never silently skip.
       return [unknownDelta(chunk, ctx)];
     },
   };
 }
 
-/** A chunk handler. */
-type ChunkHandler = (chunk: StreamChunk, ctx: ProjectionContext) => Delta[];
-
-function execDelta(
-  sessionId: string,
-  lamportTs: number,
-  action: string,
-  result: EpisodicFields["result"],
-  target: string | undefined,
-  rawType: string | undefined,
-  rawRef: string | undefined,
-  title: string,
-  body: string,
-): Delta {
-  const fields: EpisodicFields = {
-    runId: "", // filled below
-    turnId: "",
-    action,
-    result,
-    projectorVersion: PROJECTOR_VERSION,
-    deltaKids: { added: [], updated: [], invalidated: [] },
-    deltaFiles: [],
-    tokensIn: 0,
-    tokensOut: 0,
-  };
-  if (target !== undefined) fields.target = target;
-  if (rawType !== undefined) fields.rawType = rawType;
-  if (rawRef !== undefined) fields.rawRef = rawRef;
-  return {
-    op: "execution-event",
-    sessionId,
-    lamportTs,
-    actionId: `${action}-${lamportTs}`,
-    entityId: `${sessionId}-${lamportTs}-${action}`,
-    title,
-    body,
-    fields: { ...fields, runId: "", turnId: "" },
-  };
-}
-
-// Patch execDelta to also stamp runId/turnId — done inline below instead.
 function makeExecDelta(
   ctx: ProjectionContext,
   action: string,
@@ -118,8 +93,9 @@ function makeExecDelta(
 }
 
 const REGISTRY: Record<string, ChunkHandler> = {
-  "tool-call-start": (chunk, ctx) => {
+  "tool-call-start": (chunk, ctx, callNames) => {
     const c = chunk as Extract<StreamChunk, { type: "tool-call-start" }>;
+    if (c.name) callNames.set(c.id, c.name);
     return [
       makeExecDelta(
         ctx,
@@ -133,34 +109,36 @@ const REGISTRY: Record<string, ChunkHandler> = {
       ),
     ];
   },
-  "tool-call-end": (chunk, ctx) => {
+  "tool-call-end": (chunk, ctx, callNames) => {
     const c = chunk as Extract<StreamChunk, { type: "tool-call-end" }>;
+    const name = callNames.get(c.id) ?? "tool-call-end";
     return [
       makeExecDelta(
         ctx,
-        c.name,
+        name,
         "success",
         c.id,
         undefined,
         undefined,
-        `Tool call: ${c.name}`,
-        `Completed tool ${c.name} (call ${c.id})`,
+        `Tool call end: ${name}`,
+        `Completed tool ${name} (call ${c.id})`,
       ),
     ];
   },
-  "tool-result": (chunk, ctx) => {
+  "tool-result": (chunk, ctx, callNames) => {
     const c = chunk as Extract<StreamChunk, { type: "tool-result" }>;
+    const name = callNames.get(c.toolCallId) ?? "tool-result";
     const result: EpisodicFields["result"] = c.isError ? "failure" : "success";
     return [
       makeExecDelta(
         ctx,
-        "tool-result",
+        name,
         result,
         c.toolCallId,
         undefined,
         undefined,
-        `Tool result: ${c.toolCallId}`,
-        `${c.isError ? "Errored" : "Succeeded"} tool call ${c.toolCallId}`,
+        `Tool result: ${name}`,
+        `${c.isError ? "Errored" : "Succeeded"} tool ${name} (call ${c.toolCallId})`,
       ),
     ];
   },
@@ -181,14 +159,14 @@ const REGISTRY: Record<string, ChunkHandler> = {
       ),
     ];
   },
-  "text-delta": (_chunk, _ctx) => [], // scratch/working-memory — noop for Phase 1
-  "reasoning-delta": (_chunk, _ctx) => [],
-  "run-start": (_chunk, _ctx) => [],
-  "session-init": (_chunk, _ctx) => [],
-  "tool-call-delta": (_chunk, _ctx) => [],
-  "file-edit": (_chunk, _ctx) => [],
-  "approval-request": (_chunk, _ctx) => [],
-  "usage": (_chunk, _ctx) => [],
+  "text-delta": () => [], // scratch/working-memory — noop for Phase 1
+  "reasoning-delta": () => [],
+  "run-start": () => [],
+  "session-init": () => [],
+  "tool-call-delta": () => [],
+  "file-edit": () => [],
+  "approval-request": () => [],
+  "usage": () => [],
   "error": (chunk, ctx) => {
     const c = chunk as Extract<StreamChunk, { type: "error" }>;
     return [

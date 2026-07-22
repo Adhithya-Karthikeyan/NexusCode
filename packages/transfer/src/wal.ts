@@ -48,7 +48,7 @@ export function createDeltaWAL(db: DbLike, blobs: BlobStore): DeltaWAL {
         payload_ref, checksum, written_at, durably_written, folded)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
   );
-  const lastSeq = db.prepare("SELECT last_insert_rowid() AS seq").get() as { seq?: number };
+  const lastSeqStmt = db.prepare("SELECT last_insert_rowid() AS seq");
 
   return {
     append(entry: WalEntry): WalAppendResult {
@@ -70,7 +70,7 @@ export function createDeltaWAL(db: DbLike, blobs: BlobStore): DeltaWAL {
         checksum,
         new Date().toISOString(),
       );
-      const row = lastSeq.get() as { seq?: number };
+      const row = lastSeqStmt.get() as { seq?: number };
       const seq = row.seq ?? 0;
       return { seq, lamportTs: entry.lamportTs, payloadRef, checksum };
     },

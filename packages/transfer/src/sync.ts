@@ -31,7 +31,7 @@ export function createDeltaSyncBus(db: DbLike, blobs: BlobStore, mutex: Mutex): 
 
   return {
     async apply(delta: Delta): Promise<WalAppendResult> {
-      return mutex.run(() => {
+      return mutex.run(async () => {
         const entry = walEntryFor(delta);
         const result = wal.append(entry);
         fold(db, store, delta);
@@ -42,11 +42,23 @@ export function createDeltaSyncBus(db: DbLike, blobs: BlobStore, mutex: Mutex): 
   };
 }
 
-/** Build the WAL entry for a delta. */
+/**
+ * Build the WAL entry for a delta.
+ *
+ * CRITICAL CONTRACT: the payload is the FULL serialized delta (the entire Delta
+ * object including `op`). A WAL row's payload blob is therefore a complete,
+ * replayable delta — `refold` parses it back to a Delta and routes it through
+ * `fold`. Storing sub-fields only (item / fields / node / edge) loses the
+ * surrounding delta shape and made recovery impossible (reviewer finding #3).
+ *
+ * `lamportTs`/`sessionId`/`subId` are pulled from the delta where available so
+ * the WAL row's indexed columns match the payload; upsert-item derives them
+ * from the item itself (no explicit sessionId on that variant).
+ */
 function walEntryFor(delta: Delta): WalEntry {
+  const payload = JSON.stringify(delta);
   switch (delta.op) {
-    case "upsert-item": {
-      const payload = JSON.stringify(delta.item);
+    case "upsert-item":
       return {
         sessionId: delta.item.source.ref,
         lamportTs: delta.item.updatedAt,
@@ -56,7 +68,6 @@ function walEntryFor(delta: Delta): WalEntry {
         entityId: delta.item.id,
         payload,
       };
-    }
     case "supersede-item":
       return {
         sessionId: delta.sessionId,
@@ -65,7 +76,7 @@ function walEntryFor(delta: Delta): WalEntry {
         opType: "supersede-item",
         entityType: "item",
         entityId: delta.id,
-        payload: JSON.stringify({ id: delta.id, byId: delta.byId }),
+        payload,
       };
     case "put-node":
       return {
@@ -75,7 +86,7 @@ function walEntryFor(delta: Delta): WalEntry {
         opType: "put-node",
         entityType: "node",
         entityId: delta.node.id,
-        payload: JSON.stringify(delta.node),
+        payload,
       };
     case "put-edge":
       return {
@@ -85,45 +96,47 @@ function walEntryFor(delta: Delta): WalEntry {
         opType: "put-edge",
         entityType: "edge",
         entityId: delta.edge.edgeId,
-        payload: JSON.stringify(delta.edge),
+        payload,
       };
-    case "execution-event":
-      return {
+    case "execution-event": {
+      const e: WalEntry = {
         sessionId: delta.sessionId,
-        subId: delta.subId,
         lamportTs: delta.lamportTs,
         actionId: delta.actionId,
         opType: "execution-event",
         entityType: "item",
         entityId: delta.entityId,
-        payload: JSON.stringify(delta.fields),
+        payload,
       };
-    case "capture":
-      return {
+      if (delta.subId !== undefined) e.subId = delta.subId;
+      return e;
+    }
+    case "capture": {
+      const e: WalEntry = {
         sessionId: delta.sessionId,
-        subId: delta.subId,
         lamportTs: delta.lamportTs,
         actionId: `capture-${delta.lamportTs}`,
         opType: "capture",
         entityType: "raw",
         entityId: `${delta.sessionId}-${delta.lamportTs}`,
-        payload: delta.payload,
+        payload,
       };
-    case "handoff":
-      return {
+      if (delta.subId !== undefined) e.subId = delta.subId;
+      return e;
+    }
+    case "handoff": {
+      const e: WalEntry = {
         sessionId: delta.sessionId,
-        subId: delta.subId,
         lamportTs: delta.lamportTs,
         actionId: `handoff-${delta.lamportTs}`,
         opType: "handoff",
         entityType: "handoff",
         entityId: `${delta.sessionId}-${delta.lamportTs}`,
-        payload: JSON.stringify({
-          fromProvider: delta.fromProvider,
-          toProvider: delta.toProvider,
-          reason: delta.reason,
-        }),
+        payload,
       };
+      if (delta.subId !== undefined) e.subId = delta.subId;
+      return e;
+    }
   }
 }
 
@@ -143,8 +156,10 @@ function fold(db: DbLike, store: ItemStore, delta: Delta): void {
       store.putEdge(delta.edge);
       return;
     case "execution-event": {
-      const item = buildExecutionEventItem(db, delta.entityId, delta.title, delta.body, delta.fields);
+      const item = buildExecutionEventItem(delta.entityId, delta.title, delta.body, delta.fields);
       store.put(item);
+      // Persist the EpisodicFields as fields_json after the row exists.
+      store_putFields(db, item.id, delta.fields);
       return;
     }
     case "capture":
@@ -156,7 +171,6 @@ function fold(db: DbLike, store: ItemStore, delta: Delta): void {
 
 /** Build an execution-event KnowledgeItem from EpisodicFields. */
 function buildExecutionEventItem(
-  db: DbLike,
   id: string,
   title: string,
   body: string,
@@ -182,14 +196,10 @@ function buildExecutionEventItem(
     embeddingKey: makeEmbeddingKey({ title, body, tags: [`result:${fields.result}`] }),
     source: { origin: "provider", ref: fields.runId },
   };
-  // Persist the EpisodicFields as fields_json via a direct update — the store's
-  // `put` does not currently expose a fields parameter, so we write the column
-  // after the upsert. This keeps the fold atomic from the caller's view.
-  store_putFields(db, item.id, fields);
   return item;
 }
 
-/** Low-level fields_json write (used by the execution-event fold). */
+/** Low-level fields_json write (used by the execution-event fold, after put). */
 function store_putFields(db: DbLike, id: string, fields: EpisodicFields): void {
   db.prepare(`UPDATE zlcts_items SET fields_json = ? WHERE id = ?`).run(
     JSON.stringify(fields),

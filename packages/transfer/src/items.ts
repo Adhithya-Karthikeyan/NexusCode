@@ -9,7 +9,8 @@
  * lands in a later phase).
  */
 
-import type { ContentBlock, Message } from "@nexuscode/shared";
+// Re-export the shared message types the projector consumes (convenience).
+export type { ContentBlock, Message } from "@nexuscode/shared";
 
 /** The 22 provider-neutral item kinds. */
 export type ItemKind =
@@ -469,11 +470,8 @@ export function ulid(now: number = Date.now()): string {
     t = Math.floor(t / 32);
   }
   let rand = "";
-  const bytes = new Uint8Array(10);
+  const bytes = new Uint8Array(16);
   globalThis.crypto.getRandomValues(bytes);
-  for (let i = 0; i < 10; i++) rand += ULID_ALPHABET[bytes[i]! % 32];
+  for (let i = 0; i < 16; i++) rand += ULID_ALPHABET[bytes[i]! % 32];
   return time + rand;
 }
-
-/** Re-export the shared message types used by the projector for convenience. */
-export type { ContentBlock, Message };

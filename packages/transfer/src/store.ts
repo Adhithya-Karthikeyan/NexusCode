@@ -156,16 +156,24 @@ export function createItemStore(db: DbLike): ItemStore {
 
     searchFTS(query: string, limit: number): KnowledgeItem[] {
       // FTS5 MATCH against the external-content index, join back to base table.
-      const rows = db
-        .prepare(
-          `SELECT i.* FROM zlcts_items_fts f
-           JOIN zlcts_items i ON i.rowid = f.rowid
-           WHERE zlcts_items_fts MATCH ? AND i.status = 'active'
-           ORDER BY rank
-           LIMIT ?`,
-        )
-        .all(query, limit) as ItemRow[];
-      return rows.map(deserializeItem);
+      // The query is bound as a parameter (no SQL injection), but FTS5 has its
+      // own query syntax (`*`, `NEAR`, `OR`, `"phrase"`) — a malformed query
+      // throws a SQLite FTS5 syntax exception. Guard it so one bad query can't
+      // crash the search surface; degrade to no results instead.
+      try {
+        const rows = db
+          .prepare(
+            `SELECT i.* FROM zlcts_items_fts f
+             JOIN zlcts_items i ON i.rowid = f.rowid
+             WHERE zlcts_items_fts MATCH ? AND i.status = 'active'
+             ORDER BY rank
+             LIMIT ?`,
+          )
+          .all(query, limit) as ItemRow[];
+        return rows.map(deserializeItem);
+      } catch {
+        return [];
+      }
     },
 
     supersede(id: string, byId: string): void {
