@@ -160,4 +160,100 @@ describe("DeltaSyncBus", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("WAL payload stores the FULL delta (round-trips back to the delta)", async () => {
+    const dir = tmp();
+    try {
+      const db = await openDb(join(dir, "sync.db"));
+      migrateMindDb(db);
+      const blobs = createBlobStore(dir);
+      const sync = createDeltaSyncBus(db, blobs, createMutex());
+      const it = item({ id: "p1", title: "payload", body: "full" });
+      await sync.apply({ op: "upsert-item", item: it });
+      const walRow = db
+        .prepare("SELECT payload_ref FROM zlcts_wal WHERE entity_id = 'p1'")
+        .get() as { payload_ref: string };
+      const bytes = blobs.get(walRow.payload_ref);
+      expect(bytes).not.toBeNull();
+      const parsed = JSON.parse(Buffer.from(bytes!).toString("utf8")) as { op: string };
+      expect(parsed.op).toBe("upsert-item");
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fold that throws does NOT leave an orphan: either both item+folded present or both absent", async () => {
+    const dir = tmp();
+    try {
+      const db = await openDb(join(dir, "sync.db"));
+      migrateMindDb(db);
+      const blobs = createBlobStore(dir);
+      const sync = createDeltaSyncBus(db, blobs, createMutex());
+      // A deliberately bad item: empty kind is not a valid ItemKind but the
+      // store.put does not validate kind. Instead, force a failure by making
+      // store.put throw via a NOT NULL violation: null title. We build a
+      // KnowledgeItem with title cast to "" then overwrite the row's title
+      // column by hand is not possible through apply. Instead, use a supersede
+      // on a non-existent id — fold calls store.supersede which is a no-op when
+      // the row is missing, so it will NOT throw. To force a throw, put an item
+      // whose id is so long it... no. Simplest reliable throw: feed a delta with
+      // an op the fold handles, but make the DB reject the INSERT by disabling
+      // the items table via a trigger that raises. We drop the table's columns
+      // is not possible. Use a PRAGMA to make the db read-only is not supported
+      // easily. Instead, simulate by pre-inserting a row with a conflicting
+      // PRIMARY KEY and making the INSERT fail — but INSERT (not OR REPLACE) on
+      // a conflicting PK throws. store.put checks getItem first; if it exists,
+      // it UPDATEs. So to make it throw, we need UPDATE to fail. Set a CHECK
+      // constraint is not possible post-hoc. The most reliable approach: add an
+      // AFTER UPDATE trigger that raises on a sentinel id.
+      db.exec(
+        `CREATE TRIGGER zlcts_items_boom AFTER UPDATE ON zlcts_items
+         WHEN new.id = 'boom' BEGIN
+           SELECT RAISE(ABORT, 'deliberate boom');
+         END`,
+      );
+      // First put the boom item via a direct INSERT (bypassing the store's UPDATE
+      // path) so the trigger's UPDATE branch fires on apply.
+      db.prepare(
+        `INSERT INTO zlcts_items
+           (id, kind, scope, title, body, why_gloss, rationale_json, fields_json,
+            importance, confidence, staleness, status, revision, superseded_by,
+            created_at, updated_at, last_verified_at, ttl_ms, tags, links_json,
+            embedding_key, source_json, verification_json, embedding_vector)
+         VALUES ('boom', 'decision', 'session', 't', 'b', NULL, NULL, NULL,
+                 0.5, 0.5, 0, 'active', 1, NULL, 100, 100, 100, NULL, '[]', '[]',
+                 'k', '{}', NULL, NULL)`,
+      ).run();
+      const it = item({ id: "boom", title: "updated", body: "b", revision: 2 });
+      // apply should reject (fold throws) — the transaction must ROLLBACK, so
+      // no WAL row is left behind and no partial update.
+      await expect(sync.apply({ op: "upsert-item", item: it })).rejects.toThrow();
+      // Invariant: no orphan. Either both the WAL row AND the folded update are
+      // present, or both absent. Here the rollback means: no NEW WAL row for
+      // this apply, and the item's title is unchanged (update was rolled back).
+      const walForBoom = db
+        .prepare("SELECT COUNT(*) AS n FROM zlcts_wal WHERE entity_id = 'boom'")
+        .get() as { n: number };
+      // The INSERT path on the very first apply would have created a row, but
+      // we pre-inserted; this apply attempted UPDATE which threw + rolled back,
+      // so no WAL row should have been committed for it.
+      expect(walForBoom.n).toBe(0);
+      const titleRow = db
+        .prepare("SELECT title FROM zlcts_items WHERE id = 'boom'")
+        .get() as { title: string };
+      expect(titleRow.title).toBe("t"); // unchanged — update rolled back
+
+      // Regression: the mutex tail must survive the rejected run and service a
+      // subsequent apply. Drop the trigger so the next apply succeeds, then
+      // prove the item materializes — the chain did not die with the throw.
+      db.exec("DROP TRIGGER zlcts_items_boom");
+      await sync.apply({ op: "upsert-item", item: item({ id: "after-throw" }) });
+      const afterRow = db.prepare("SELECT id FROM zlcts_items WHERE id = 'after-throw'").get();
+      expect(afterRow).toBeDefined();
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

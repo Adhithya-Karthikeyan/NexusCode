@@ -59,6 +59,36 @@ describe("stableFieldsOf", () => {
     const b = stableFieldsOf(buildItem({ body: "Y" }));
     expect(a).not.toBe(b);
   });
+
+  it("excludes maintained rationale sub-fields (confidence/coverage): re-tagging does not change the identity hash", () => {
+    // tagReasoning mutates rationale.confidence/coverage; a legitimate re-tag
+    // must NOT change stableFieldsOf, or integrity.check would raise a false
+    // DataLoss + snapshot rollback on every re-tag.
+    const rationaleA = {
+      why: "w",
+      alternatives: [],
+      assumptionsHeld: [],
+      evidence: [],
+      origin: "inferred" as const,
+      confidence: 0.1,
+      coverage: 0.2,
+    };
+    const rationaleB = {
+      why: "w",
+      alternatives: [],
+      assumptionsHeld: [],
+      evidence: [],
+      origin: "inferred" as const,
+      confidence: 0.9,
+      coverage: 0.99,
+    };
+    const a = stableFieldsOf({ ...buildItem(), rationale: rationaleA });
+    const b = stableFieldsOf({ ...buildItem(), rationale: rationaleB });
+    expect(a).toBe(b);
+    // And the stable projection must not carry the maintained sub-fields.
+    expect(a).not.toContain("confidence");
+    expect(a).not.toContain("coverage");
+  });
 });
 
 describe("tagReasoning", () => {

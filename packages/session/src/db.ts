@@ -10,7 +10,7 @@
  * surface a clear error rather than crash the importing process at module load.
  */
 
-import { migrateMindDb } from "@nexuscode/transfer";
+import { migrateMindDb, recoverMindDbOnOpen } from "@nexuscode/transfer";
 
 export interface SqliteStmt {
   run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
@@ -105,6 +105,15 @@ export async function openSessionDb(dbPath: string): Promise<SqliteDb> {
     migrateMindDb(db);
   } catch {
     /* best-effort: keep the read side working even if zlcts tables cannot be created */
+  }
+  // ZLCTS crash-recovery: replay any WAL rows a prior crash left appended-but-
+  // unfolded. Safe + idempotent; skips in-memory dbs; non-fatal. Runs after the
+  // mind tables exist. Integrity check/repair is deliberately NOT run here (it
+  // is on-demand) — see recoverMindDbOnOpen for the rationale.
+  try {
+    recoverMindDbOnOpen(db, dbPath);
+  } catch {
+    /* best-effort: never block session reads on recovery failure */
   }
   return db;
 }

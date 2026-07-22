@@ -348,13 +348,18 @@ export function makeEmbeddingKey(item: {
  * Canonical JSON of the stable fields of an item — the input to `stableHash`.
  * Excludes maintained fields (importance/staleness/confidence/lastVerifiedAt/
  * embeddingVector) so re-rating an item does not change its identity hash.
+ *
+ * `rationale` is projected to drop the maintained sub-fields `confidence` and
+ * `coverage` (set by `tagReasoning`); a legitimate re-tag must not change the
+ * identity hash. Only the stable sub-fields (why/whyRaw/alternatives/
+ * assumptionsHeld/evidence/predecessorId/inferredBy/origin) are emitted.
  */
 export function stableFieldsOf(item: KnowledgeItem): string {
   const stable = {
     id: item.id,
     kind: item.kind,
     body: item.body,
-    rationale: item.rationale ?? null,
+    rationale: stableRationaleOf(item.rationale),
     links: item.links,
     status: item.status,
     revision: item.revision,
@@ -362,6 +367,27 @@ export function stableFieldsOf(item: KnowledgeItem): string {
     source: item.source,
   };
   return canonicalJson(stable);
+}
+
+/**
+ * Project a `Reasoning` to its stable sub-fields, dropping the maintained
+ * `confidence` and `coverage`. Returns `null` when the source is absent.
+ * Optional sub-fields (`whyRaw`/`predecessorId`/`inferredBy`) are included
+ * only when present on the source so `exactOptionalPropertyTypes` is satisfied.
+ */
+function stableRationaleOf(r: Reasoning | undefined): Omit<Reasoning, "confidence" | "coverage"> | null {
+  if (!r) return null;
+  const proj: Omit<Reasoning, "confidence" | "coverage"> = {
+    why: r.why,
+    alternatives: r.alternatives,
+    assumptionsHeld: r.assumptionsHeld,
+    evidence: r.evidence,
+    origin: r.origin,
+  };
+  if (r.whyRaw !== undefined) proj.whyRaw = r.whyRaw;
+  if (r.predecessorId !== undefined) proj.predecessorId = r.predecessorId;
+  if (r.inferredBy !== undefined) proj.inferredBy = r.inferredBy;
+  return proj;
 }
 
 /** Deterministic JSON (sorted keys, no whitespace). */

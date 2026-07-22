@@ -72,7 +72,19 @@ export { createItemStore } from "./store.js";
 
 // Phase 1 — sync
 export type { DeltaSyncBus } from "./sync.js";
-export { createDeltaSyncBus } from "./sync.js";
+export { createDeltaSyncBus, refold, recoverUnfolded } from "./sync.js";
+
+// Phase 2 — snapshots (the ONLY rollback target)
+export type { SnapshotRef, SnapshotRow, PnkcSnapshotStore } from "./snapshot.js";
+export { createPnkcSnapshotStore } from "./snapshot.js";
+
+// Phase 2 — integrity verification + repair
+export type { IntegrityReport, RepairAction, LossEvent, IntegrityRepair } from "./integrity.js";
+export { createIntegrityRepair } from "./integrity.js";
+
+// Phase 2 — crash-recovery replay on openSessionDb (safe, idempotent WAL replay
+// only; integrity check/repair is on-demand, not open-time)
+export { defaultBlobDir, createSessionBlobStore, recoverMindDbOnOpen } from "./recover.js";
 
 // Phase 1 — projector
 export type { EventProjector, ProjectionContext } from "./projector.js";
