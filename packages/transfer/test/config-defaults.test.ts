@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { NexusConfigSchema } from "@nexuscode/config";
+import { NexusConfig as NexusConfigSchema } from "@nexuscode/config";
 
 describe("ContextTransferConfig defaults", () => {
   const cfg = NexusConfigSchema.parse({}).transfer;

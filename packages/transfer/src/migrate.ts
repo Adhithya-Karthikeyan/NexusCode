@@ -105,12 +105,12 @@ CREATE TRIGGER IF NOT EXISTS zlcts_items_ai AFTER INSERT ON zlcts_items BEGIN
   VALUES (new.rowid, new.title, new.body, new.embedding_key);
 END;
 CREATE TRIGGER IF NOT EXISTS zlcts_items_ad AFTER DELETE ON zlcts_items BEGIN
-  INSERT INTO zlcts_items_fts(zlcts_items_fts, title, body, embedding_key)
-  VALUES ('delete', old.title, old.body, old.embedding_key);
+  INSERT INTO zlcts_items_fts(zlcts_items_fts, rowid, title, body, embedding_key)
+  VALUES ('delete', old.rowid, old.title, old.body, old.embedding_key);
 END;
 CREATE TRIGGER IF NOT EXISTS zlcts_items_au AFTER UPDATE ON zlcts_items BEGIN
-  INSERT INTO zlcts_items_fts(zlcts_items_fts, title, body, embedding_key)
-  VALUES ('delete', old.title, old.body, old.embedding_key);
+  INSERT INTO zlcts_items_fts(zlcts_items_fts, rowid, title, body, embedding_key)
+  VALUES ('delete', old.rowid, old.title, old.body, old.embedding_key);
   INSERT INTO zlcts_items_fts(rowid, title, body, embedding_key)
   VALUES (new.rowid, new.title, new.body, new.embedding_key);
 END;
