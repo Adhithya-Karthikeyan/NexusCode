@@ -158,6 +158,11 @@ const FLAG_SPEC: FlagSpec = {
     open: [],
     // `chat --continue` (-c): resume the most recent stored conversation.
     continue: ["c"],
+    // `chat --persistent`: read stdin incrementally (one line = one turn) and
+    // hold the process open across turns, instead of the default batch mode's
+    // read-to-EOF-then-exit — what lets a native client drive one long-lived
+    // process over stdio.
+    persistent: [],
     /** Explicitly allow safe text-only continuation after a routed partial failure. */
     "recover-partial": [],
   },
@@ -178,6 +183,8 @@ Commands:
   code <task>           drive a subprocess coding CLI (--agent claude-code | codex)
   chat [--resume <id>]  headless line REPL (pipe lines in; works on TERM=dumb)
                         --continue/-c resumes the last stored conversation
+                        --persistent keeps the process alive, reading stdin
+                        line-by-line, for a client driving it over stdio
   compare <prompt>      fan out across -b providers, aligned
   race <prompt>         race -b providers; --mode first (fastest ok) | best (judged)
   consensus <prompt>    fan across -b providers, then reconcile via a judge
@@ -381,12 +388,23 @@ class ChatCommand extends HandlerCommand {
       "`--resume <session-id>` / `--continue` (-c) carry a conversation across processes; " +
       "the session id is printed on stderr as `[session] <id>`. Resume requires " +
       "`history.storePrompts` (off by default — it is what writes your prompts to disk) " +
-      "and restores text turns only; tool calls are not replayed.",
+      "and restores text turns only; tool calls are not replayed. " +
+      "`--persistent` reads stdin incrementally instead of to EOF and keeps the process " +
+      "alive between turns — for a client (e.g. a native app) driving one long-lived " +
+      "process over stdio instead of spawning a fresh one per message; it ends on stdin " +
+      "EOF or SIGINT/SIGTERM. Pair it with `-o ndjson` to get every projected `UiEvent` " +
+      "per turn, terminated by a `{\"t\":\"turn_end\",...}` line — the `session` event's new " +
+      "`sessionId` field is the engine session id to pass back into `--resume` (its `id` " +
+      "field is a per-run id, not a session id).",
     examples: [
       ["Pipe a conversation", "printf 'hi\\nwhat did I say?\\n' | nexus chat -p mock"],
       ["Continue the last conversation", "nexus chat --continue"],
       ["Resume a specific session", "nexus chat --resume s_1234"],
       ["Enable resumable chats", "nexus config set history.storePrompts true"],
+      [
+        "Persistent stdio session for a client",
+        "printf 'hi\\nwhat did I say?\\n' | nexus chat --persistent -p mock -o ndjson",
+      ],
     ],
   });
   protected handler(): Handler {

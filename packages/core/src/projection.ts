@@ -12,7 +12,26 @@ import type { Labeled } from "./bus.js";
 
 /** One normalized UI event, produced from the engine's `StreamChunk` stream. */
 export type UiEvent =
-  | { t: "session"; id: string; provider: string; model: string; ts: number }
+  | {
+      t: "session";
+      /** The RUN id (`chunk.runId`) — kept as-is for backward compatibility. */
+      id: string;
+      /**
+       * The engine SESSION id, when the caller has one to give. `StreamChunk`
+       * is a frozen, provider-agnostic contract (see `@nexuscode/shared`'s
+       * events.ts) that only ever carries a run id — a session spans many
+       * runs (one per turn), so the projection can't recover it from the
+       * chunk alone. Callers that hold a `Session` (from `engine.openSession`)
+       * pass its id into `chunkToUiEvents`/`projectLabeled`; callers that
+       * don't (e.g. a bare replay of a chunk log) simply omit it. This is what
+       * a client must pass to `--resume`/`OpenSessionOptions.resume` — `id`
+       * above is a run id and resuming with it silently starts a new session.
+       */
+      sessionId?: string;
+      provider: string;
+      model: string;
+      ts: number;
+    }
   | {
       t: "route";
       chosen: string;
@@ -74,8 +93,12 @@ function failoverTrailOf(raw: unknown): FailoverStep[] {
 /**
  * Project one `StreamChunk` into zero or more `UiEvent`s. `lane` is the
  * per-provider pane key (`"main"` for single runs, else the adapter id).
+ *
+ * `sessionId` is optional and purely additive: pass the engine `Session.id`
+ * when the caller has one open (see the `session` `UiEvent`'s doc comment for
+ * why the chunk stream itself can never carry it).
  */
-export function chunkToUiEvents(chunk: StreamChunk, lane: string): UiEvent[] {
+export function chunkToUiEvents(chunk: StreamChunk, lane: string, sessionId?: string): UiEvent[] {
   switch (chunk.type) {
     case "run-start": {
       // A live-failover winner carries a `raw.failover` trail (see router.ts).
@@ -86,7 +109,15 @@ export function chunkToUiEvents(chunk: StreamChunk, lane: string): UiEvent[] {
       for (const step of trail) {
         out.push({ t: "failover", lane, from: step.from, to: step.to, code: step.code, message: step.message });
       }
-      out.push({ t: "session", id: chunk.runId, provider: chunk.adapterId, model: chunk.model, ts: chunk.ts });
+      const sessionEvent: UiEvent = {
+        t: "session",
+        id: chunk.runId,
+        provider: chunk.adapterId,
+        model: chunk.model,
+        ts: chunk.ts,
+      };
+      if (sessionId !== undefined) sessionEvent.sessionId = sessionId;
+      out.push(sessionEvent);
       return out;
     }
     case "session-init":
@@ -157,6 +188,7 @@ export function projectLabeled(
   labeled: Labeled<StreamChunk>,
   adapterIds: readonly string[],
   single: boolean,
+  sessionId?: string,
 ): UiEvent[] {
-  return chunkToUiEvents(labeled.chunk, laneKey(labeled.laneIndex, adapterIds, single));
+  return chunkToUiEvents(labeled.chunk, laneKey(labeled.laneIndex, adapterIds, single), sessionId);
 }

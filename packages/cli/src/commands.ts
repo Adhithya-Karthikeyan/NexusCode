@@ -21,6 +21,7 @@ import {
   DEFAULT_RETRY_POLICY,
   type AgentOptions,
   type AssembledContext,
+  type CancelScope,
   type Capabilities,
   type ChainStage,
   type ContextAssembler,
@@ -405,7 +406,7 @@ async function runOrchestration(opts: RunOrchestrationOptions): Promise<Orchestr
     // labeled block from the settled outcome below.
     if (output === "ndjson" || (output === "text" && single)) {
       for await (const labeled of handle.events()) {
-        for (const ev of projectLabeled(labeled, adapterIds, single)) {
+        for (const ev of projectLabeled(labeled, adapterIds, single, session.id)) {
           renderStreaming(ev, output, io);
         }
       }
@@ -1177,7 +1178,7 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
 
     if (output !== "json") {
       for await (const labeled of handle.events()) {
-        for (const ev of projectLabeled(labeled, [providerId], true)) {
+        for (const ev of projectLabeled(labeled, [providerId], true, session.id)) {
           renderStreaming(ev, output, io);
         }
       }
@@ -1382,7 +1383,7 @@ async function runAgentOoda(
           if (line.length > 0) io.err(`${line}\n`);
           continue;
         }
-        for (const ev of projectLabeled(labeled, [providerId], true)) {
+        for (const ev of projectLabeled(labeled, [providerId], true, session.id)) {
           renderStreaming(ev, output, io);
         }
       }
@@ -2351,7 +2352,7 @@ async function runMultiLane(opts: MultiLaneOptions): Promise<OrchestrationOutcom
     const handle = dispatch(spec, turn.context());
     if (output === "ndjson") {
       for await (const labeled of handle.events()) {
-        for (const ev of projectLabeled(labeled, laneLabels, false)) {
+        for (const ev of projectLabeled(labeled, laneLabels, false, session.id)) {
           io.out(`${JSON.stringify(ev)}\n`);
         }
       }
@@ -2760,7 +2761,7 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
 
       if (output !== "json") {
         for await (const labeled of handle.events()) {
-          for (const ev of projectLabeled(labeled, ["main"], true)) renderStreaming(ev, output, io);
+          for (const ev of projectLabeled(labeled, ["main"], true, session.id)) renderStreaming(ev, output, io);
         }
       }
       const outcome = await handle.outcome();
@@ -2863,10 +2864,25 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
     providerId = resolved;
   }
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
+  const output = parseOutput(args);
+  // `--persistent`: hold the process open and read stdin INCREMENTALLY — one
+  // line dispatched as a turn as soon as it arrives — instead of the default
+  // batch mode, which reads stdin to EOF up front and then replays the lines.
+  // This is what lets a native client drive ONE long-lived `nexus chat` process
+  // over stdio across many turns instead of spawning a fresh process per
+  // message. Both modes need piped, non-TTY stdin; neither is an interactive
+  // line-editing REPL.
+  const persistent = args.bools.has("persistent");
 
-  const input = (await readStdin()).trim();
-  const lines = input.length > 0 ? input.split(/\r?\n/).filter((l) => l.trim().length > 0) : [];
-  if (lines.length === 0) {
+  let lines: string[] = [];
+  if (!persistent) {
+    const input = (await readStdin()).trim();
+    lines = input.length > 0 ? input.split(/\r?\n/).filter((l) => l.trim().length > 0) : [];
+    if (lines.length === 0) {
+      io.err("nexus chat: interactive REPL requires a TTY; pipe lines for headless use\n");
+      return 0;
+    }
+  } else if (process.stdin.isTTY) {
     io.err("nexus chat: interactive REPL requires a TTY; pipe lines for headless use\n");
     return 0;
   }
@@ -2911,12 +2927,35 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   }
   // Print the id unconditionally: without it there is nothing to pass to --resume.
   io.err(`[session] ${session.id}\n`);
-  let failed = false;
-  try {
-    for (const line of lines) {
-      // One session across every line: `turn.input` already carries the prior
-      // turns (engine-owned transcript), so line N+1 remembers line N.
-      const turn = session.newTurn({ prompt: line });
+
+  // A SIGINT/SIGTERM (persistent mode only — see below) needs to cancel
+  // whichever turn is currently in flight, the same way every other
+  // single-shot command's Ctrl+C does; tracking it here is what lets one
+  // shared `runTurn` serve both a fixed line list and an open-ended stream.
+  let activeScope: CancelScope | undefined;
+
+  /**
+   * Dispatch one line as a turn on the shared session and project its events
+   * to `io`. Returns `true` when the turn did NOT end in a successful reply,
+   * so both stdin modes below can compute the same process exit code.
+   *
+   * In `ndjson` output every projected event is forwarded — including "done" —
+   * plus a trailing `turn_end` delimiter. "done" alone is a per-run/per-lane
+   * engine concept (see `UiEvent`); a client holding one ndjson stream open
+   * across many turns needs an explicit, turn-scoped "this line's reply is
+   * fully settled" marker instead of inferring it from "done" happening to
+   * coincide with the end of chat's single-lane dispatch. `turn_end` (and the
+   * plain-text trailing newline) is emitted unconditionally — success,
+   * provider failure, or the defensive catch below — so a caller waiting on
+   * one turn to settle is never left hanging.
+   */
+  async function runTurn(line: string): Promise<boolean> {
+    // One session across every line: `turn.input` already carries the prior
+    // turns (engine-owned transcript), so line N+1 remembers line N.
+    const turn = session.newTurn({ prompt: line });
+    activeScope = turn.scope;
+    let ok = false;
+    try {
       const run: RunSpec = {
         adapterId: providerId,
         model,
@@ -2924,22 +2963,72 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
         idempotencyKey: randomUUID(),
         params: { system },
       };
-      const handle = dispatch(
-        { kind: "single", run },
-        turn.context(),
-      );
+      const handle = dispatch({ kind: "single", run }, turn.context());
       for await (const labeled of handle.events()) {
-        for (const ev of projectLabeled(labeled, [providerId], true)) {
-          // Keep stdout as the assistant transcript, but never discard provider
-          // failures/tool diagnostics. `chat` used to select only text events,
-          // which made quota/auth/empty-output failures look like blank replies.
-          if (ev.t !== "done") renderStreaming(ev, "text", io);
+        for (const ev of projectLabeled(labeled, [providerId], true, session.id)) {
+          if (output === "ndjson") {
+            renderStreaming(ev, "ndjson", io);
+          } else if (ev.t !== "done") {
+            // Keep stdout as the assistant transcript, but never discard provider
+            // failures/tool diagnostics. `chat` used to select only text events,
+            // which made quota/auth/empty-output failures look like blank replies.
+            renderStreaming(ev, "text", io);
+          }
         }
       }
       const outcome = await handle.outcome();
       turn.record(outcome);
-      if (!outcome.winner || outcome.winner.status !== "ok") failed = true;
+      ok = outcome.winner?.status === "ok";
+    } catch (err) {
+      // A normal provider failure already surfaces as an "error" UiEvent plus a
+      // failed outcome, without throwing (handled above). This is the
+      // defensive fallback for a genuine bug — it must not take a persistent
+      // process down mid-conversation, so report it the same way the engine
+      // would have and move on to the next line.
+      const message = err instanceof Error ? err.message : String(err);
+      const errorEv: UiEvent = { t: "error", lane: "main", code: "internal_error", message, retryable: false };
+      renderStreaming(errorEv, output === "ndjson" ? "ndjson" : "text", io);
+    } finally {
+      activeScope = undefined;
+    }
+    if (output === "ndjson") {
+      io.out(`${JSON.stringify({ t: "turn_end", turnId: turn.id, ok })}\n`);
+    } else {
       io.out("\n");
+    }
+    return !ok;
+  }
+
+  let failed = false;
+  try {
+    if (!persistent) {
+      for (const line of lines) {
+        if (await runTurn(line)) failed = true;
+      }
+    } else {
+      const rl = createInterface({ input: process.stdin });
+      // Cancel whatever turn is in flight and stop taking new input; the
+      // `finally` below then disposes exactly as it would on a clean EOF.
+      const onSignal = (): void => {
+        activeScope?.cancel("user");
+        rl.close();
+      };
+      process.once("SIGINT", onSignal);
+      process.once("SIGTERM", onSignal);
+      try {
+        // `readline`'s async iterator queues "line" events internally, so a
+        // second prompt arriving mid-turn waits here rather than racing the
+        // in-flight one — turns are processed strictly one at a time, never
+        // interleaved, no matter how fast the client writes lines.
+        for await (const raw of rl) {
+          const line = raw.trim();
+          if (line.length === 0) continue;
+          if (await runTurn(line)) failed = true;
+        }
+      } finally {
+        process.removeListener("SIGINT", onSignal);
+        process.removeListener("SIGTERM", onSignal);
+      }
     }
     return failed ? 1 : 0;
   } finally {
