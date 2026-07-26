@@ -77,4 +77,24 @@ public enum JSONValue: Sendable, Hashable, Codable {
         guard case .string(let value) = self else { return nil }
         return value
     }
+
+    public var doubleValue: Double? {
+        guard case .number(let value) = self else { return nil }
+        return value
+    }
+
+    /// Truncating, not rounding — every numeric field this is used for
+    /// (counts, epoch millis) is an integer on the wire; `Int.init(Double)`
+    /// truncation only matters if the CLI ever sends a fractional value here.
+    public var intValue: Int? { doubleValue.map(Int.init) }
+
+    public var boolValue: Bool? {
+        guard case .bool(let value) = self else { return nil }
+        return value
+    }
+
+    public var arrayValue: [JSONValue]? {
+        guard case .array(let value) = self else { return nil }
+        return value
+    }
 }

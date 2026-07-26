@@ -1,10 +1,10 @@
 import SwiftUI
 import NexusKit
 
-/// What is working right now.
+/// What is working right now — the app's most distinctive screen.
 ///
-/// Two genuinely different kinds of concurrency share this screen, and the split
-/// is kept explicit rather than blurred:
+/// Two genuinely different kinds of concurrency share this screen, and the
+/// split is kept explicit rather than blurred:
 ///
 ///  - **Provider lanes** — several models answering the SAME prompt in a
 ///    compare/race run, read from the live `nexus` event stream.
@@ -12,7 +12,8 @@ import NexusKit
 ///    oh-my-claudecode's on-disk session state.
 ///
 /// Merging them into one undifferentiated "agents" list would misrepresent what
-/// is happening, so origin is always visible.
+/// is happening, so origin stays visible everywhere: separate sections, a
+/// per-card badge, and separate counts in the header strip.
 struct AgentsView: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
@@ -22,101 +23,235 @@ struct AgentsView: View {
 
     private var lanes: [AgentRow] {
         guard let view = workspace.conversation?.view else { return [] }
-        return AgentRowBuilder.lanes(from: view)
+        return AgentRowBuilder.lanes(from: view).runningFirst()
     }
 
     private var omcAgents: [AgentRow] {
         guard let snapshot = workspace.omc?.snapshot else { return [] }
-        return AgentRowBuilder.omcAgents(from: snapshot)
+        return AgentRowBuilder.omcAgents(from: snapshot).runningFirst()
     }
+
+    private var hud: OMCSessionHUD? { workspace.omc?.snapshot.hud }
+    private var mission: OMCMission? { workspace.omc?.snapshot.missions?.activeMissions.first }
+    private var unreadable: [String] { workspace.omc?.snapshot.unreadable ?? [] }
+
+    /// The header strip needs something to report even before any agent has
+    /// run this session — HUD facts (model, cost) exist from the moment OMC
+    /// is attached — so it is gated on more than just the two row lists.
+    private var hasReadout: Bool { !lanes.isEmpty || !omcAgents.isEmpty || hud != nil }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: Space.lg) {
+                if hasReadout {
+                    HeaderStrip(lanes: lanes, omcAgents: omcAgents, hud: hud)
+                }
+
                 if lanes.isEmpty && omcAgents.isEmpty {
-                    EmptyState(
+                    HeroEmptyState(
                         icon: "person.3.sequence",
                         title: "Nothing running",
                         message: "Provider lanes appear here during a Compare or Race run. OMC subagents appear whenever oh-my-claudecode spawns them in this project."
                     )
-                    .frame(minHeight: 260)
-                }
-
-                if !lanes.isEmpty {
-                    Section(
-                        title: "Provider lanes",
-                        subtitle: "Models answering the same prompt — from the live nexus event stream",
-                        count: lanes.filter(\.isRunning).count
-                    ) {
-                        ForEach(lanes) { row in
-                            AgentCard(row: row, now: now)
-                        }
+                    .frame(minHeight: 380)
+                } else {
+                    if !lanes.isEmpty {
+                        AgentSection(
+                            title: "Provider Lanes",
+                            subtitle: "Models answering the same prompt — live nexus event stream",
+                            rows: lanes,
+                            now: now
+                        )
+                    }
+                    if !omcAgents.isEmpty {
+                        AgentSection(
+                            title: "OMC Subagents",
+                            subtitle: "From .omc/state — specialised agents doing separate work",
+                            rows: omcAgents,
+                            now: now
+                        )
                     }
                 }
 
-                if !omcAgents.isEmpty {
-                    Section(
-                        title: "OMC subagents",
-                        subtitle: "From .omc/state — specialised agents doing separate work",
-                        count: omcAgents.filter(\.isRunning).count
-                    ) {
-                        ForEach(omcAgents) { row in
-                            AgentCard(row: row, now: now)
-                        }
-                    }
-                }
-
-                if let mission = workspace.omc?.snapshot.missions?.activeMissions.first {
+                if let mission {
                     MissionPanel(mission: mission)
                 }
 
-                if let unreadable = workspace.omc?.snapshot.unreadable, !unreadable.isEmpty {
-                    // Say so rather than showing stale numbers as if they were live.
-                    Text("Could not read: \(unreadable.joined(separator: ", ")) — showing last known state.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(theme.color(\.warningFg))
+                if !unreadable.isEmpty {
+                    UnreadableNotice(paths: unreadable)
                 }
             }
-            .padding(18)
+            .padding(Space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(theme.color(\.surfaceBase))
         .onReceive(tick) { now = $0 }
     }
 }
 
-private struct Section<Content: View>: View {
+/// Promotes running rows to the top without disturbing anything else about
+/// ordering. A manual stable sort (index as tiebreak) rather than relying on
+/// `sorted`'s stability guarantee, so the intent — "running first, otherwise
+/// leave the builder's own order alone" — is legible at the call site.
+private extension Array where Element == AgentRow {
+    func runningFirst() -> [AgentRow] {
+        enumerated()
+            .sorted { a, b in
+                if a.element.isRunning != b.element.isRunning { return a.element.isRunning }
+                return a.offset < b.offset
+            }
+            .map(\.element)
+    }
+}
+
+/// The control-room readout: total activity, split by origin, plus live
+/// session facts once OMC's HUD file is available. This is the one place the
+/// two kinds of concurrency are counted side by side — never merged, just
+/// tallied next to each other.
+private struct HeaderStrip: View {
     @Environment(\.nexusTheme) private var theme
-    let title: String
-    let subtitle: String
-    let count: Int
-    @ViewBuilder var content: Content
+    let lanes: [AgentRow]
+    let omcAgents: [AgentRow]
+    let hud: OMCSessionHUD?
+
+    private var laneRunning: Int { lanes.filter(\.isRunning).count }
+    private var omcRunning: Int { omcAgents.filter(\.isRunning).count }
+    private var totalRunning: Int { laneRunning + omcRunning }
+
+    /// Amber past 80%, red past 95% — the same thresholds for every percentage
+    /// readout in the strip, so "does this number mean trouble" reads at a
+    /// glance instead of needing a different scale per metric.
+    private func tone(forPercent value: Int?) -> CountPill.Tone {
+        guard let value else { return .neutral }
+        if value >= 95 { return .danger }
+        if value >= 80 { return .warning }
+        return .neutral
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.color(\.textPrimary))
-                if count > 0 {
-                    Text("\(count) running")
-                        .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(theme.color(\.accentMuted))
-                        .foregroundStyle(theme.color(\.accentFg))
-                        .clipShape(Capsule())
+        Card(padding: Space.md, radius: Radius.panel) {
+            VStack(alignment: .leading, spacing: Space.sm) {
+                HStack(spacing: Space.sm) {
+                    StatusDot(isRunning: totalRunning > 0, isFailed: false, size: 9)
+                    Text(totalRunning > 0 ? "\(totalRunning) running" : "Idle")
+                        .font(Kind.title)
+                        .foregroundStyle(theme.color(\.textPrimary))
+                        .monospacedDigit()
+
+                    Spacer(minLength: Space.md)
+
+                    CountPill(
+                        text: "\(laneRunning) lane\(laneRunning == 1 ? "" : "s")",
+                        tone: laneRunning > 0 ? .accent : .neutral
+                    )
+                    CountPill(
+                        text: "\(omcRunning) omc",
+                        tone: omcRunning > 0 ? .accent : .neutral
+                    )
+                }
+
+                if let hud {
+                    Divider().overlay(theme.color(\.chromeDivider))
+                    HStack(spacing: Space.lg) {
+                        if let cost = hud.totalCostUsd {
+                            ReadoutMetric(label: "session", value: String(format: "$%.2f", cost))
+                        }
+                        if let context = hud.contextUsedPercentage {
+                            ReadoutMetric(label: "context", value: "\(context)%", tone: tone(forPercent: context))
+                        }
+                        if let fiveHour = hud.fiveHourLimitPercentage {
+                            ReadoutMetric(label: "5h limit", value: "\(fiveHour)%", tone: tone(forPercent: fiveHour))
+                        }
+                        if let sevenDay = hud.sevenDayLimitPercentage {
+                            ReadoutMetric(label: "7d limit", value: "\(sevenDay)%", tone: tone(forPercent: sevenDay))
+                        }
+                        Spacer(minLength: 0)
+                        if let model = hud.modelDisplayName {
+                            Text(model)
+                                .font(Kind.caption)
+                                .foregroundStyle(theme.color(\.textMuted))
+                                .lineLimit(1)
+                        }
+                    }
                 }
             }
-            Text(subtitle)
-                .font(.system(size: 10.5))
-                .foregroundStyle(theme.color(\.textMuted))
-            VStack(spacing: 8) { content }
         }
     }
 }
 
-/// One agent or lane.
-struct AgentCard: View {
+/// Like the shared `Metric`, but the value can flip to a warning/danger tone.
+/// `Metric` only offers a binary accent/plain emphasis, which cannot express
+/// "this percentage has crossed a threshold" — the whole point of a HUD
+/// readout — so this stays a small local sibling rather than stretching that
+/// primitive to cover a case it wasn't designed for.
+private struct ReadoutMetric: View {
+    @Environment(\.nexusTheme) private var theme
+    let label: String
+    let value: String
+    var tone: CountPill.Tone = .neutral
+
+    private var valueColor: Color {
+        switch tone {
+        case .accent: return theme.color(\.accentDefault)
+        case .neutral: return theme.color(\.textSecondary)
+        case .warning: return theme.color(\.warningFg)
+        case .danger: return theme.color(\.errorFg)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(label.uppercased())
+                .font(Kind.micro)
+                .tracking(0.5)
+                .foregroundStyle(theme.color(\.textMuted).opacity(0.8))
+            Text(value)
+                .font(Kind.monoSmall)
+                .foregroundStyle(valueColor)
+                .monospacedDigit()
+        }
+        .fixedSize()
+    }
+}
+
+/// One origin's rows: a header naming what this group of concurrency actually
+/// is, then an adaptive grid so cards get comfortable width on a wide window
+/// and collapse to one column on a narrow one — no `GeometryReader` needed,
+/// `.adaptive` does the same job declaratively.
+private struct AgentSection: View {
+    @Environment(\.nexusTheme) private var theme
+    let title: String
+    let subtitle: String
+    let rows: [AgentRow]
+    let now: Date
+
+    private let columns = [GridItem(.adaptive(minimum: 300, maximum: 460), spacing: Space.md)]
+
+    private var runningCount: Int { rows.filter(\.isRunning).count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            SectionHeader(
+                title,
+                subtitle: subtitle,
+                accessory: runningCount > 0
+                    ? AnyView(CountPill(text: "\(runningCount) running", tone: .accent))
+                    : nil
+            )
+            LazyVGrid(columns: columns, alignment: .leading, spacing: Space.md) {
+                ForEach(rows) { row in
+                    AgentCard(row: row, now: now)
+                }
+            }
+        }
+    }
+}
+
+/// One lane or subagent. Running cards get an accent border and a soft glow —
+/// "alive" needs to be visible without reading any text — and failed cards get
+/// their own distinct (non-accent) border so a stalled run cannot be mistaken
+/// for a healthy one at a glance.
+private struct AgentCard: View {
     @Environment(\.nexusTheme) private var theme
     let row: AgentRow
     let now: Date
@@ -129,68 +264,89 @@ struct AgentCard: View {
         return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
     }
 
-    var body: some View {
-        Panel(padding: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                StatusDot(isRunning: row.isRunning, isFailed: row.isFailed)
-                    .padding(.top, 4)
+    private var stateBorderColor: Color {
+        if row.isFailed { return theme.color(\.errorBorder) }
+        if row.isRunning { return theme.color(\.accentDefault).opacity(0.55) }
+        return .clear
+    }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(row.title)
-                            .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(theme.color(\.textPrimary))
-                        OriginBadge(origin: row.origin)
+    var body: some View {
+        Card(padding: Space.md) {
+            VStack(alignment: .leading, spacing: Space.sm) {
+                HStack(alignment: .top, spacing: Space.sm) {
+                    StatusDot(isRunning: row.isRunning, isFailed: row.isFailed)
+                        .padding(.top, 3)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: Space.xs) {
+                            Text(row.title)
+                                .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(theme.color(\.textPrimary))
+                                .lineLimit(1)
+                            OriginBadge(origin: row.origin)
+                        }
+                        Text(row.subtitle)
+                            .font(Kind.caption)
+                            .foregroundStyle(row.isFailed ? theme.color(\.errorFg) : theme.color(\.textMuted))
+                            .lineLimit(1)
                     }
-                    Text(row.subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(
-                            row.isFailed ? theme.color(\.errorFg) : theme.color(\.textMuted)
-                        )
-                    if let detail = row.detail {
-                        Text(detail)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(theme.color(\.textSecondary))
-                            .lineLimit(2)
+
+                    Spacer(minLength: Space.sm)
+
+                    if let elapsed {
+                        Text(elapsed)
+                            .font(Kind.mono)
+                            .foregroundStyle(row.isRunning ? theme.color(\.accentDefault) : theme.color(\.textMuted))
+                            .monospacedDigit()
                     }
                 }
 
-                Spacer(minLength: 8)
-
-                if let elapsed {
-                    Text(elapsed)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(
-                            row.isRunning ? theme.color(\.accentDefault) : theme.color(\.textMuted)
-                        )
-                        .monospacedDigit()
+                if let detail = row.detail {
+                    Text(detail)
+                        .font(Kind.caption)
+                        .foregroundStyle(theme.color(\.textSecondary))
+                        .lineLimit(2)
+                        // Align under the title, past the status dot's column.
+                        .padding(.leading, 8 + Space.sm)
                 }
             }
         }
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(stateBorderColor, lineWidth: row.isRunning || row.isFailed ? 1.4 : 0)
+        }
+        .shadow(
+            color: row.isRunning ? theme.color(\.accentDefault).opacity(0.24) : .clear,
+            radius: row.isRunning ? 12 : 0
+        )
     }
 }
 
-struct OriginBadge: View {
+/// The one badge that answers "which kind of concurrency is this" on every
+/// single card — deliberately a different chip colour per origin (info blue
+/// for a lane, neutral chrome for OMC) rather than a shared style, since the
+/// whole point is that the two must never blur together.
+private struct OriginBadge: View {
     @Environment(\.nexusTheme) private var theme
     let origin: AgentRow.Origin
 
     var body: some View {
-        Text(origin == .lane ? "lane" : "omc")
-            .font(.system(size: 8, weight: .bold))
+        Text(origin == .lane ? "LANE" : "OMC")
+            .font(Kind.micro)
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)
             .background(
-                origin == .lane ? theme.color(\.infoBg) : theme.color(\.surfaceOverlay)
+                origin == .lane ? theme.color(\.infoBg) : theme.color(\.surfaceOverlay),
+                in: Capsule()
             )
             .foregroundStyle(
                 origin == .lane ? theme.color(\.infoFg) : theme.color(\.textMuted)
             )
-            .clipShape(Capsule())
     }
 }
 
 /// Mission progress + timeline, when OMC is coordinating a multi-agent mission.
-struct MissionPanel: View {
+private struct MissionPanel: View {
     @Environment(\.nexusTheme) private var theme
     let mission: OMCMission
 
@@ -201,59 +357,119 @@ struct MissionPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Mission")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(theme.color(\.textPrimary))
+        VStack(alignment: .leading, spacing: Space.sm) {
+            SectionHeader(
+                "Mission",
+                subtitle: mission.workerCount > 0 ? "\(mission.workerCount) workers coordinating" : nil
+            )
 
-            Panel {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text(mission.objective.isEmpty ? mission.name : mission.objective)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(theme.color(\.textPrimary))
-                        Spacer(minLength: 8)
-                        Text("\(mission.taskCounts.completed)/\(mission.taskCounts.total)")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(theme.color(\.textMuted))
+            Card(padding: Space.md, radius: Radius.panel) {
+                VStack(alignment: .leading, spacing: Space.md) {
+                    VStack(alignment: .leading, spacing: Space.xs) {
+                        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                            Text(mission.objective.isEmpty ? mission.name : mission.objective)
+                                .font(Kind.bodyEmphasis)
+                                .foregroundStyle(theme.color(\.textPrimary))
+                                .lineLimit(2)
+                            Spacer(minLength: Space.sm)
+                            Text("\(mission.taskCounts.completed)/\(mission.taskCounts.total)")
+                                .font(Kind.mono)
+                                .foregroundStyle(theme.color(\.textMuted))
+                                .monospacedDigit()
+                        }
+                        ProgressView(value: progress)
+                            .tint(theme.color(\.accentDefault))
                     }
 
-                    ProgressView(value: progress)
-                        .tint(theme.color(\.accentDefault))
-
-                    HStack(spacing: 12) {
-                        Metric(label: "workers", value: "\(mission.workerCount)")
+                    HStack(spacing: Space.md) {
                         Metric(label: "active", value: "\(mission.taskCounts.inProgress)")
+                        Metric(label: "pending", value: "\(mission.taskCounts.pending)")
                         if mission.taskCounts.blocked > 0 {
-                            Metric(label: "blocked", value: "\(mission.taskCounts.blocked)", emphasis: true)
+                            CountPill(text: "\(mission.taskCounts.blocked) blocked", tone: .warning)
                         }
                         if mission.taskCounts.failed > 0 {
-                            Metric(label: "failed", value: "\(mission.taskCounts.failed)", emphasis: true)
+                            CountPill(text: "\(mission.taskCounts.failed) failed", tone: .danger)
                         }
+                        Spacer(minLength: 0)
                     }
 
                     if !mission.timeline.isEmpty {
                         Divider().overlay(theme.color(\.chromeDivider))
-                        // Newest first — an agent can complete and start again, so
-                        // the latest event is the truth, not the last one written.
-                        ForEach(mission.reverseChronologicalTimeline.prefix(6)) { event in
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(theme.color(\.accentMuted))
-                                    .frame(width: 4, height: 4)
-                                Text(event.agent)
-                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(theme.color(\.textSecondary))
-                                Text(event.detail)
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(theme.color(\.textMuted))
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                        }
+                        // Newest first — an agent can complete and start again,
+                        // so the latest event is the truth, not the last one
+                        // physically appended to the file.
+                        TimelineRail(events: Array(mission.reverseChronologicalTimeline.prefix(8)))
                     }
                 }
             }
         }
+    }
+}
+
+/// A vertical rail: a dot per event joined by a connector line, newest event
+/// on top and picked out in accent so "what just happened" never requires
+/// reading timestamps first.
+private struct TimelineRail: View {
+    @Environment(\.nexusTheme) private var theme
+    let events: [OMCTimelineEvent]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
+                HStack(alignment: .top, spacing: Space.sm) {
+                    VStack(spacing: 0) {
+                        Circle()
+                            .fill(index == 0 ? theme.color(\.accentDefault) : theme.color(\.textMuted).opacity(0.5))
+                            .frame(width: 6, height: 6)
+                            .padding(.top, 4)
+                        if index < events.count - 1 {
+                            // Fills the rest of this row's height, so consecutive
+                            // rows read as one continuous rail rather than a
+                            // stack of disconnected dashes.
+                            Rectangle()
+                                .fill(theme.color(\.chromeDivider))
+                                .frame(width: 1)
+                                .frame(maxHeight: .infinity)
+                        }
+                    }
+                    .frame(width: 6)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: Space.xs) {
+                            Text(event.agent)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(theme.color(\.textSecondary))
+                            if let at = event.at {
+                                Text(at, style: .time)
+                                    .font(Kind.micro)
+                                    .foregroundStyle(theme.color(\.textMuted).opacity(0.7))
+                            }
+                        }
+                        Text(event.detail)
+                            .font(Kind.caption)
+                            .foregroundStyle(theme.color(\.textMuted))
+                            .lineLimit(2)
+                    }
+                    .padding(.bottom, Space.sm)
+                }
+            }
+        }
+    }
+}
+
+/// Understated by design: this is a caveat about data freshness, not an
+/// incident, so it must never compete visually with a real failure state.
+private struct UnreadableNotice: View {
+    @Environment(\.nexusTheme) private var theme
+    let paths: [String]
+
+    var body: some View {
+        HStack(spacing: Space.xs) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 9))
+            Text("Could not read \(paths.joined(separator: ", ")) — some values may be stale.")
+                .font(Kind.micro)
+        }
+        .foregroundStyle(theme.color(\.warningFg).opacity(0.85))
     }
 }

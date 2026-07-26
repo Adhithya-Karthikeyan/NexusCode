@@ -1,7 +1,8 @@
 import SwiftUI
+import AppKit
 import NexusKit
 
-/// The window shell: a sidebar of tabs, the active surface, and a status bar
+/// The window shell: a custom sidebar, the active surface, and a status bar
 /// that stays visible everywhere so provider, cost and agent activity are never
 /// more than a glance away.
 struct RootView: View {
@@ -9,24 +10,9 @@ struct RootView: View {
     @Environment(\.nexusTheme) private var theme
 
     var body: some View {
-        @Bindable var workspace = workspace
-
         NavigationSplitView {
-            List(selection: $workspace.tab) {
-                Section {
-                    ForEach(WorkspaceTab.allCases) { tab in
-                        Label(tab.title, systemImage: tab.systemImage)
-                            .tag(tab)
-                            .badge(badge(for: tab))
-                    }
-                } header: {
-                    Text("Workspace")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(theme.color(\.textMuted))
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 240)
-            .listStyle(.sidebar)
+            Sidebar()
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
         } detail: {
             VStack(spacing: 0) {
                 if let problem = workspace.setupProblem {
@@ -48,7 +34,7 @@ struct RootView: View {
             if let conversation = workspace.conversation {
                 ConversationView(controller: conversation)
             } else {
-                EmptyState(
+                HeroEmptyState(
                     icon: "terminal",
                     title: "No nexus executable",
                     message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
@@ -57,30 +43,254 @@ struct RootView: View {
         case .agents:
             AgentsView()
         case .sessions:
-            PlaceholderTab(
+            HeroEmptyState(
                 icon: "clock.arrow.circlepath",
-                title: "Sessions",
-                message: "Backed by `nexus session list -o json` and replayed with `nexus replay <id> -o ndjson`."
+                title: "Sessions — not built yet",
+                message: "Will list past runs via `nexus session list -o json`."
             )
         case .tasks:
-            PlaceholderTab(
+            HeroEmptyState(
                 icon: "checklist",
-                title: "Tasks",
-                message: "Backed by `nexus task list -o json` — the same durable store the CLI writes."
+                title: "Tasks — not built yet",
+                message: "Will list the durable task queue via `nexus task list -o json`."
             )
         case .settings:
             SettingsView()
         }
     }
+}
+
+/// Everything currently doing work, across both kinds of concurrency this app
+/// has: provider lanes (compare/race) and OMC subagents. Computed in one place
+/// so the sidebar badge, sidebar footer and status bar never disagree.
+@MainActor
+private func runningCount(_ workspace: WorkspaceModel) -> Int {
+    (workspace.conversation?.view.activeLanes.count ?? 0)
+        + (workspace.omc?.snapshot.runningAgents.count ?? 0)
+}
+
+/// Opens a native folder picker and hands back the chosen directory. Shared by
+/// the sidebar's project switcher and the Settings project card so there is
+/// exactly one "change project" code path.
+@MainActor
+private func presentDirectoryPicker(current: URL, onPick: (URL) -> Void) {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.canCreateDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.directoryURL = current
+    panel.prompt = "Open"
+    panel.message = "Choose the project NexusCode should drive `nexus` from."
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    onPick(url)
+}
+
+// MARK: - Sidebar
+
+/// The whole left column: brand mark, project switcher, navigation, and a
+/// live-status footer. Built from scratch rather than a stock `List` — a
+/// generic list is exactly what made the shell read like a debug window.
+private struct Sidebar: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(\.nexusTheme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            BrandHeader()
+                .padding(.horizontal, Space.md)
+                .padding(.top, Space.lg)
+                .padding(.bottom, Space.md)
+
+            ProjectSwitcherRow()
+                .padding(.horizontal, Space.sm)
+                .padding(.bottom, Space.lg)
+
+            SectionHeader("Workspace")
+                .padding(.horizontal, Space.md)
+                .padding(.bottom, Space.xs)
+
+            VStack(spacing: 2) {
+                ForEach(WorkspaceTab.allCases) { tab in
+                    SidebarNavRow(
+                        tab: tab,
+                        isSelected: workspace.tab == tab,
+                        badge: badge(for: tab),
+                        action: { workspace.tab = tab }
+                    )
+                }
+            }
+            .padding(.horizontal, Space.sm)
+
+            Spacer(minLength: Space.lg)
+
+            SidebarFooter()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(theme.color(\.surfaceSunken))
+    }
 
     /// Live agent count on the Agents tab, so activity is visible from any tab.
     private func badge(for tab: WorkspaceTab) -> Int {
         guard tab == .agents else { return 0 }
-        let lanes = workspace.conversation?.view.activeLanes.count ?? 0
-        let agents = workspace.omc?.snapshot.runningAgents.count ?? 0
-        return lanes + agents
+        return runningCount(workspace)
     }
 }
+
+/// The wordmark: a hexagon mark in the accent colour plus the app name. Kept
+/// as its own view so the same mark can be reused at a smaller size in the
+/// status bar without duplicating the layout.
+private struct BrandHeader: View {
+    @Environment(\.nexusTheme) private var theme
+
+    var body: some View {
+        HStack(spacing: Space.sm) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(theme.color(\.accentMuted))
+                    .frame(width: 30, height: 30)
+                Image(systemName: "hexagon.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(theme.color(\.accentDefault))
+            }
+            Text("NexusCode")
+                .font(Kind.title)
+                .foregroundStyle(theme.color(\.textPrimary))
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// The current project, shown as a clickable row that opens a directory
+/// picker — this is the entire mechanism for repointing the app at a
+/// different checkout, so it has to read as a real control, not a label.
+private struct ProjectSwitcherRow: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(\.nexusTheme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            presentDirectoryPicker(current: workspace.projectDirectory) {
+                workspace.projectDirectory = $0
+            }
+        } label: {
+            HStack(spacing: Space.sm) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color(\.textMuted))
+                Text(workspace.projectDirectory.lastPathComponent)
+                    .font(Kind.bodyEmphasis)
+                    .foregroundStyle(theme.color(\.textPrimary))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(theme.color(\.textMuted))
+            }
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, 7)
+            .background(
+                theme.color(\.surfaceOverlay).opacity(hovering ? 1 : 0.55),
+                in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(workspace.projectDirectory.path)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// One navigation destination. Selected state is a filled accent pill rather
+/// than a tint, so it reads clearly against the sunken sidebar background at
+/// a glance, without needing the system's own selection chrome.
+private struct SidebarNavRow: View {
+    @Environment(\.nexusTheme) private var theme
+    let tab: WorkspaceTab
+    let isSelected: Bool
+    let badge: Int
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.sm) {
+                Image(systemName: tab.systemImage)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 16)
+                Text(tab.title)
+                    .font(Kind.bodyEmphasis)
+                Spacer(minLength: 0)
+                if badge > 0 {
+                    CountPill(text: "\(badge)", tone: isSelected ? .neutral : .accent)
+                }
+            }
+            .foregroundStyle(isSelected ? theme.color(\.accentFg) : theme.color(\.textSecondary))
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, 7)
+            .background {
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .fill(
+                        isSelected
+                            ? theme.color(\.accentDefault)
+                            : (hovering ? theme.color(\.surfaceOverlay) : .clear)
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// Compact live status, pinned to the bottom of the sidebar: is OMC watching
+/// this project, and how much is running right now. Answers "is anything
+/// happening" without switching tabs.
+private struct SidebarFooter: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(\.nexusTheme) private var theme
+
+    private var omcLabel: String {
+        guard let omc = workspace.omc, omc.isAvailable else { return "OMC not used here" }
+        return omc.isWatching ? "OMC watching" : "OMC idle"
+    }
+
+    private var running: Int { runningCount(workspace) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Rectangle().fill(theme.color(\.chromeDivider)).frame(height: 1)
+                .padding(.bottom, 4)
+
+            HStack(spacing: 6) {
+                StatusDot(isRunning: workspace.omc?.isWatching == true, isFailed: false, size: 6, animate: false)
+                Text(omcLabel)
+                    .font(Kind.caption)
+                    .foregroundStyle(theme.color(\.textMuted))
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(running > 0 ? theme.color(\.accentDefault) : theme.color(\.textMuted))
+                Text(running > 0 ? "\(running) agent\(running == 1 ? "" : "s") running" : "no agents running")
+                    .font(Kind.caption)
+                    .foregroundStyle(theme.color(\.textMuted))
+            }
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.bottom, Space.md)
+    }
+}
+
+// MARK: - Setup banner
 
 /// Shown when the CLI could not be found — explains the fix instead of failing
 /// silently on every button press.
@@ -89,16 +299,16 @@ struct SetupBanner: View {
     let message: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: Space.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.color(\.warningFg))
             Text(message)
-                .font(.system(size: 11.5))
+                .font(Kind.caption)
                 .foregroundStyle(theme.color(\.textSecondary))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(10)
+        .padding(Space.md)
         .background(theme.color(\.warningBg))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color(\.warningBorder)).frame(height: 1)
@@ -106,34 +316,20 @@ struct SetupBanner: View {
     }
 }
 
-/// A tab whose CLI backing exists but whose screen is not built yet. Named
-/// explicitly rather than shipped as a blank pane, so it is obvious what is
-/// pending and which command will drive it.
-struct PlaceholderTab: View {
-    let icon: String
-    let title: String
-    let message: String
+// MARK: - Status bar
 
-    var body: some View {
-        EmptyState(icon: icon, title: "\(title) — not built yet", message: message)
-    }
-}
-
-/// The always-visible bottom strip: provider/model, live cost, context pressure,
-/// and how many agents are working.
+/// The always-visible bottom strip: provider/model, live cost, context
+/// pressure, and how many agents are working. One row, never wraps.
 struct StatusBar: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
 
-    private var runningCount: Int {
-        (workspace.conversation?.view.activeLanes.count ?? 0)
-            + (workspace.omc?.snapshot.runningAgents.count ?? 0)
-    }
+    private var running: Int { runningCount(workspace) }
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Space.md) {
             HStack(spacing: 6) {
-                Image(systemName: "diamond.fill")
+                Image(systemName: "hexagon.fill")
                     .font(.system(size: 8))
                     .foregroundStyle(theme.color(\.accentDefault))
                 Text("NexusCode")
@@ -142,6 +338,7 @@ struct StatusBar: View {
             }
 
             if let session = workspace.conversation?.view.session {
+                StatusDivider()
                 Metric(label: "model", value: session.model, emphasis: true)
             }
 
@@ -150,20 +347,21 @@ struct StatusBar: View {
             }
 
             if let hud = workspace.omc?.snapshot.hud {
+                StatusDivider()
                 if let percent = hud.contextUsedPercentage {
-                    Metric(label: "ctx", value: "\(percent)%", emphasis: percent > 80)
+                    StatusMetric(label: "ctx", value: "\(percent)%", tone: percent > 80 ? .warning : .neutral)
                 }
                 if let cost = hud.totalCostUsd {
                     Metric(label: "session", value: String(format: "$%.2f", cost))
                 }
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: Space.sm)
 
-            if runningCount > 0 {
+            if running > 0 {
                 HStack(spacing: 6) {
                     StatusDot(isRunning: true, isFailed: false)
-                    Text("\(runningCount) working")
+                    Text("\(running) working")
                         .font(.system(size: 11))
                         .foregroundStyle(theme.color(\.accentDefault))
                 }
@@ -176,14 +374,56 @@ struct StatusBar: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .lineLimit(1)
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.sm)
         .background(theme.color(\.surfaceSunken))
         .overlay(alignment: .top) {
             Rectangle().fill(theme.color(\.chromeDivider)).frame(height: 1)
         }
     }
 }
+
+/// A hairline separator between status-bar groups — purely structural, so it
+/// carries no semantic colour of its own.
+private struct StatusDivider: View {
+    @Environment(\.nexusTheme) private var theme
+    var body: some View {
+        Rectangle().fill(theme.color(\.chromeDivider)).frame(width: 1, height: 12)
+    }
+}
+
+/// Like the shared `Metric`, but with a third, more urgent tone — context
+/// pressure needs to visibly escalate past 80% and `Metric` only distinguishes
+/// muted vs accent.
+private struct StatusMetric: View {
+    @Environment(\.nexusTheme) private var theme
+    let label: String
+    let value: String
+    var tone: Tone = .neutral
+
+    enum Tone { case neutral, warning }
+
+    private var valueColor: Color {
+        tone == .warning ? theme.color(\.warningFg) : theme.color(\.textSecondary)
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(label.uppercased())
+                .font(Kind.micro)
+                .tracking(0.5)
+                .foregroundStyle(theme.color(\.textMuted).opacity(0.8))
+            Text(value)
+                .font(Kind.monoSmall)
+                .foregroundStyle(valueColor)
+                .monospacedDigit()
+        }
+        .fixedSize()
+    }
+}
+
+// MARK: - Settings
 
 /// Theme picker + where the app is pointed. Deliberately small: configuration
 /// belongs to `nexus config`, and duplicating it here would create a second
@@ -192,21 +432,21 @@ struct SettingsView: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
 
-    private let columns = [GridItem(.adaptive(minimum: 160), spacing: 10)]
+    private let columns = [GridItem(.adaptive(minimum: 168, maximum: 220), spacing: Space.md)]
 
     var body: some View {
-        @Bindable var workspace = workspace
-
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Theme")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.color(\.textPrimary))
-                Text("The same \(NexusTheme.all.count) palettes the terminal ships — generated from the theme package, so both render identical colours.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.color(\.textMuted))
+            VStack(alignment: .leading, spacing: Space.lg) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Theme")
+                        .font(Kind.title)
+                        .foregroundStyle(theme.color(\.textPrimary))
+                    Text("The same \(NexusTheme.all.count) palettes the terminal ships — generated from the theme package, so both render identical colours.")
+                        .font(Kind.caption)
+                        .foregroundStyle(theme.color(\.textMuted))
+                }
 
-                LazyVGrid(columns: columns, spacing: 10) {
+                LazyVGrid(columns: columns, spacing: Space.md) {
                     ForEach(NexusTheme.all) { candidate in
                         ThemeSwatch(
                             theme: candidate,
@@ -216,13 +456,20 @@ struct SettingsView: View {
                     }
                 }
 
-                Divider().overlay(theme.color(\.chromeDivider))
+                SectionHeader(
+                    "Project",
+                    accessory: AnyView(
+                        Button("Change Directory…") {
+                            presentDirectoryPicker(current: workspace.projectDirectory) {
+                                workspace.projectDirectory = $0
+                            }
+                        }
+                        .buttonStyle(SoftButton(size: .compact))
+                    )
+                )
 
-                Text("Project")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.color(\.textPrimary))
-                Panel {
-                    VStack(alignment: .leading, spacing: 6) {
+                Card {
+                    VStack(alignment: .leading, spacing: Space.sm) {
                         LabeledLine(label: "Directory", value: workspace.projectDirectory.path)
                         LabeledLine(label: "nexus", value: workspace.binaryPath ?? "not found")
                         LabeledLine(
@@ -234,7 +481,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .padding(20)
+            .padding(Space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -246,13 +493,13 @@ struct LabeledLine: View {
     let value: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: Space.sm) {
             Text(label)
-                .font(.system(size: 11, weight: .medium))
+                .font(Kind.caption)
                 .foregroundStyle(theme.color(\.textMuted))
                 .frame(width: 70, alignment: .leading)
             Text(value)
-                .font(.system(size: 11, design: .monospaced))
+                .font(Kind.mono)
                 .foregroundStyle(theme.color(\.textSecondary))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -260,51 +507,54 @@ struct LabeledLine: View {
     }
 }
 
-/// A live preview of a theme, drawn with that theme's own tokens.
+/// A live preview of a theme, drawn entirely with that theme's own tokens —
+/// the outer wrapper previews its `surfaceSunken` chrome, the inner tile its
+/// `surfaceRaised` card, exactly the two layers the real window uses.
 struct ThemeSwatch: View {
-    @Environment(\.nexusTheme) private var current
     let theme: NexusTheme
     let isSelected: Bool
 
+    private let chips: [KeyPath<ThemeTokens, String>] = [
+        \.accentDefault, \.successFg, \.warningFg, \.errorFg,
+    ]
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
-                ForEach(
-                    [\ThemeTokens.accentDefault, \ThemeTokens.textPrimary,
-                     \ThemeTokens.successFg, \ThemeTokens.warningFg, \ThemeTokens.errorFg],
-                    id: \.self
-                ) { token in
-                    RoundedRectangle(cornerRadius: 3)
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack(spacing: 5) {
+                ForEach(chips, id: \.self) { token in
+                    Circle()
                         .fill(theme.color(token))
-                        .frame(height: 18)
+                        .frame(width: 15, height: 15)
                 }
-            }
-            HStack(spacing: 4) {
-                Text(theme.name)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(theme.color(\.textPrimary))
-                    .lineLimit(1)
                 Spacer(minLength: 0)
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10))
+                        .font(.system(size: 13))
                         .foregroundStyle(theme.color(\.accentDefault))
                 }
             }
-            Text(theme.isDark ? "dark" : "light")
-                .font(.system(size: 9))
-                .foregroundStyle(theme.color(\.textMuted))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(theme.name)
+                    .font(Kind.bodyEmphasis)
+                    .foregroundStyle(theme.color(\.textPrimary))
+                    .lineLimit(1)
+                Text(theme.isDark ? "Dark" : "Light")
+                    .font(Kind.micro)
+                    .foregroundStyle(theme.color(\.textMuted))
+            }
         }
-        .padding(10)
+        .padding(Space.md)
         .background(theme.color(\.surfaceRaised))
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(
-                    isSelected ? current.color(\.accentDefault) : theme.color(\.chromeBorderSubtle),
+                    isSelected ? theme.color(\.accentDefault) : theme.color(\.chromeBorderSubtle),
                     lineWidth: isSelected ? 2 : 1
                 )
         }
+        .padding(4)
+        .background(theme.color(\.surfaceSunken), in: RoundedRectangle(cornerRadius: Radius.card + 4, style: .continuous))
         .contentShape(Rectangle())
     }
 }

@@ -1,5 +1,11 @@
 import Foundation
 
+/// Lets `NexusClient.runJSON`'s `Result<JSONValue, String>` use a plain string
+/// as its failure — every failure it produces is already a short, user-facing
+/// message (a launch failure, a non-zero exit, invalid JSON), so a dedicated
+/// `Error` type would just be ceremony the callers immediately unwrap anyway.
+extension String: @retroactive Error {}
+
 /// One `nexus` invocation.
 ///
 /// The app never constructs provider calls — it constructs COMMANDS. Every
@@ -37,6 +43,51 @@ public struct NexusCommand: Sendable, Hashable {
 
     public static func providers(cwd: URL? = nil) -> NexusCommand {
         .json(["providers", "list"], cwd: cwd)
+    }
+
+    // MARK: - Sessions
+
+    public static func sessionList(cwd: URL? = nil) -> NexusCommand {
+        .json(["session", "list"], cwd: cwd)
+    }
+
+    public static func sessionShow(id: String, cwd: URL? = nil) -> NexusCommand {
+        .json(["session", "show", id], cwd: cwd)
+    }
+
+    /// Streams a recorded session's whole `UiEvent` log — fed through
+    /// `ConversationController.ingest` to reopen it (see that method's doc).
+    public static func replay(sessionId: String, cwd: URL? = nil) -> NexusCommand {
+        NexusCommand(["replay", sessionId, "-o", "ndjson"], workingDirectory: cwd)
+    }
+
+    // MARK: - Tasks
+
+    public static func taskList(cwd: URL? = nil) -> NexusCommand {
+        .json(["task", "list"], cwd: cwd)
+    }
+
+    public static func taskAdd(title: String, cwd: URL? = nil) -> NexusCommand {
+        .json(["task", "add", title], cwd: cwd)
+    }
+
+    public static func taskRemove(id: String, cwd: URL? = nil) -> NexusCommand {
+        .json(["task", "rm", id], cwd: cwd)
+    }
+
+    /// `nil` when `status` has no direct `nexus task` subcommand — only
+    /// `in_progress`/`blocked`/`done`/`cancelled` do (`start`/`block`/`done`/
+    /// `cancel`); there is no subcommand that reverts a task to `todo`.
+    public static func taskSetStatus(_ status: TaskStatus, id: String, cwd: URL? = nil) -> NexusCommand? {
+        let sub: String
+        switch status {
+        case .inProgress: sub = "start"
+        case .done: sub = "done"
+        case .blocked: sub = "block"
+        case .cancelled: sub = "cancel"
+        case .todo, .unknown: return nil
+        }
+        return .json(["task", sub, id], cwd: cwd)
     }
 }
 
@@ -122,69 +173,29 @@ public actor NexusClient {
     public nonisolated func stream(_ command: NexusCommand) -> AsyncStream<NexusStreamItem> {
         AsyncStream { continuation in
             let process = Process()
-            let (executable, leading) = binary.launch
-            process.executableURL = executable
-            process.arguments = leading + command.arguments
-            if let cwd = command.workingDirectory {
-                process.currentDirectoryURL = cwd
-            }
-            // A GUI process has a minimal environment; pass a usable PATH so any
-            // tool the CLI shells out to can still be found.
-            var environment = ProcessInfo.processInfo.environment
-            environment["PATH"] = (environment["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-            environment["NO_COLOR"] = "1"
-            process.environment = environment
-
-            let out = Pipe()
-            let err = Pipe()
-            process.standardOutput = out
-            process.standardError = err
-
-            // stdout arrives in arbitrary chunks, so hold a buffer and only emit
-            // on a complete newline — a split JSON object must never be decoded.
-            let buffer = LineBuffer()
-            out.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty else { return }
-                for line in buffer.append(data) {
-                    if let event = UiEventDecoder.decodeLine(line) {
-                        continuation.yield(.event(event))
-                    }
-                }
-            }
-            err.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                for line in text.split(separator: "\n") where !line.isEmpty {
-                    continuation.yield(.diagnostic(String(line)))
-                }
-            }
-
-            process.terminationHandler = { finished in
-                out.fileHandleForReading.readabilityHandler = nil
-                err.fileHandleForReading.readabilityHandler = nil
-                // Drain whatever was buffered after the last newline.
-                for line in buffer.flush() {
-                    if let event = UiEventDecoder.decodeLine(line) {
-                        continuation.yield(.event(event))
-                    }
-                }
-                continuation.yield(.terminated(.finished(exitCode: finished.terminationStatus)))
-                continuation.finish()
-            }
-
+            // Set before `launch` runs the process, so a synchronous launch
+            // failure (see `launch`'s catch below) can never fire before this
+            // is armed.
             continuation.onTermination = { reason in
                 if case .cancelled = reason, process.isRunning {
                     process.terminate()
                 }
             }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.yield(.terminated(.failedToLaunch(error.localizedDescription)))
-                continuation.finish()
-            }
+            launch(
+                process, command,
+                onLine: { line in
+                    if let event = UiEventDecoder.decodeLine(line) {
+                        continuation.yield(.event(event))
+                    }
+                },
+                onDiagnostic: { line in
+                    continuation.yield(.diagnostic(line))
+                },
+                onTerminated: { reason in
+                    continuation.yield(.terminated(reason))
+                    continuation.finish()
+                }
+            )
         }
     }
 
@@ -206,6 +217,137 @@ public actor NexusClient {
             }
         }
         return (state, diagnostics)
+    }
+
+    /// Run a one-shot `-o json` command and decode its single stdout document.
+    ///
+    /// Sessions and tasks have no event log to fold — `session list`/`task
+    /// list` and friends print exactly one JSON document (the CLI never
+    /// interleaves anything else onto stdout in `-o json` mode) — so every
+    /// collected line is rejoined in order and parsed once, rather than
+    /// decoded line-by-line as a `UiEvent` the way `stream` does.
+    public nonisolated func runJSON(_ command: NexusCommand) async -> Result<JSONValue, String> {
+        let process = Process()
+        let collector = OutputCollector()
+        let termination = await withCheckedContinuation { (continuation: CheckedContinuation<NexusTermination, Never>) in
+            launch(
+                process, command,
+                onLine: { collector.addLine($0) },
+                onDiagnostic: { collector.addDiagnostic($0) },
+                onTerminated: { reason in continuation.resume(returning: reason) }
+            )
+        }
+
+        switch termination {
+        case .failedToLaunch(let message):
+            return .failure("failed to launch nexus: \(message)")
+        case .cancelled:
+            return .failure("cancelled")
+        case .finished(let exitCode):
+            guard exitCode == 0 else {
+                let detail = collector.diagnostics.joined(separator: "\n")
+                return .failure(detail.isEmpty ? "nexus exited with code \(exitCode)" : detail)
+            }
+            let text = collector.lines.joined(separator: "\n")
+            guard let data = text.data(using: .utf8),
+                  let value = try? JSONDecoder().decode(JSONValue.self, from: data)
+            else {
+                return .failure("nexus did not print valid JSON: \(text)")
+            }
+            return .success(value)
+        }
+    }
+
+    /// Configures, starts, and wires up `process` for `command`, forwarding
+    /// stdout lines / stderr lines / the exit reason through the given
+    /// callbacks (invoked off the main actor, on the pipes' readability
+    /// queue). The only place `Process`/`Pipe`/`LineBuffer` are touched —
+    /// `stream` decodes each stdout line as a `UiEvent` as it arrives, while
+    /// `runJSON` collects every line and parses them as one document at the
+    /// end. `process` is a parameter rather than created here so a caller can
+    /// capture it (for cancellation) before it is ever run.
+    private nonisolated func launch(
+        _ process: Process,
+        _ command: NexusCommand,
+        onLine: @escaping @Sendable (String) -> Void,
+        onDiagnostic: @escaping @Sendable (String) -> Void,
+        onTerminated: @escaping @Sendable (NexusTermination) -> Void
+    ) {
+        let (executable, leading) = binary.launch
+        process.executableURL = executable
+        process.arguments = leading + command.arguments
+        if let cwd = command.workingDirectory {
+            process.currentDirectoryURL = cwd
+        }
+        // A GUI process has a minimal environment; pass a usable PATH so any
+        // tool the CLI shells out to can still be found.
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = (environment["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        environment["NO_COLOR"] = "1"
+        process.environment = environment
+
+        let out = Pipe()
+        let err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+
+        // stdout arrives in arbitrary chunks, so hold a buffer and only emit
+        // on a complete newline — a split JSON object must never be decoded.
+        let buffer = LineBuffer()
+        out.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            for line in buffer.append(data) { onLine(line) }
+        }
+        err.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            for line in text.split(separator: "\n") where !line.isEmpty {
+                onDiagnostic(String(line))
+            }
+        }
+
+        process.terminationHandler = { finished in
+            out.fileHandleForReading.readabilityHandler = nil
+            err.fileHandleForReading.readabilityHandler = nil
+            // Drain whatever was buffered after the last newline.
+            for line in buffer.flush() { onLine(line) }
+            onTerminated(.finished(exitCode: finished.terminationStatus))
+        }
+
+        do {
+            try process.run()
+        } catch {
+            onTerminated(.failedToLaunch(error.localizedDescription))
+        }
+    }
+}
+
+/// Thread-safe accumulator for `runJSON`'s callbacks, which fire on the pipes'
+/// readability queue rather than any actor — mirrors `LineBuffer` below.
+private final class OutputCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _lines: [String] = []
+    private var _diagnostics: [String] = []
+
+    func addLine(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        _lines.append(line)
+    }
+
+    func addDiagnostic(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        _diagnostics.append(line)
+    }
+
+    var lines: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return _lines
+    }
+
+    var diagnostics: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return _diagnostics
     }
 }
 
