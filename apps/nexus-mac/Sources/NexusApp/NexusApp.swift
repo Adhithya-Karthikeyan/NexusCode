@@ -114,6 +114,7 @@ final class WorkspaceModel {
         binaryPath = binary.url.path
         conversation = ConversationController(
             client: NexusClient(binary: binary),
+            binary: binary,
             workingDirectory: projectDirectory
         )
         let controller = OMCController(discoveringFrom: projectDirectory)

@@ -44,6 +44,13 @@
     "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/OMCWorkspace.swiftdeps",
     "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/OMCWorkspace.dia"
   },
+  "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/PersistentSession.swift": {
+    "dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/PersistentSession.d",
+    "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/PersistentSession.swift.o",
+    "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/PersistentSession~partial.swiftmodule",
+    "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/PersistentSession.swiftdeps",
+    "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/PersistentSession.dia"
+  },
   "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ProjectLocation.swift": {
     "dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/ProjectLocation.d",
     "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/ProjectLocation.swift.o",

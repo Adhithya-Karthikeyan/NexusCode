@@ -90,13 +90,25 @@ public final class ConversationController {
     public var sessionId: String?
 
     private let client: NexusClient
+    private let binary: NexusBinary
     private let workingDirectory: URL?
     private var task: Task<Void, Never>?
     private var ingestClock: Double = 0
     private var promptSequence = 0
 
-    public init(client: NexusClient, workingDirectory: URL? = nil) {
+    /// The long-lived conversation, started lazily on first submit.
+    ///
+    /// Single-lane modes (`ask`/`agent`) run through this so the engine holds
+    /// ONE session across every turn — that is what carries the transcript,
+    /// context budget and cost tally forward, and it means one process per
+    /// conversation rather than one per message. Fan-out modes
+    /// (`compare`/`race`) are inherently one-shot: they dispatch N providers for
+    /// a single prompt and settle, so they keep using the one-shot client.
+    private var session: PersistentSession?
+
+    public init(client: NexusClient, binary: NexusBinary, workingDirectory: URL? = nil) {
         self.client = client
+        self.binary = binary
         self.workingDirectory = workingDirectory
     }
 
@@ -146,29 +158,76 @@ public final class ConversationController {
 
         isRunning = true
         diagnostics = []
-        let command = plannedCommand(for: text)
 
+        if mode.isMultiLane {
+            dispatchOneShot(plannedCommand(for: text))
+        } else {
+            submitToPersistentSession(text)
+        }
+    }
+
+    /// Fan-out: N providers answer one prompt, then the run settles. There is no
+    /// conversation to keep open, so this stays a one-shot process.
+    private func dispatchOneShot(_ command: NexusCommand) {
         task = Task { [weak self] in
             guard let self else { return }
             for await item in await self.client.stream(command) {
                 if Task.isCancelled { break }
-                switch item {
-                case .event(let event):
-                    self.view.reduce(event, ts: self.nextTick())
-                    // The first session event names the session, so follow-up
-                    // turns can `--resume` into it and keep their context.
-                    if case .session(let session) = event, self.sessionId == nil {
-                        self.sessionId = session.id
-                    }
-                case .diagnostic(let line):
-                    self.diagnostics.append(line)
-                case .terminated(let reason):
-                    if case .failedToLaunch(let message) = reason {
-                        self.diagnostics.append("failed to launch nexus: \(message)")
-                    }
-                }
+                self.absorb(item)
             }
             self.isRunning = false
+        }
+    }
+
+    /// Single-lane: write the prompt to the conversation that is already open,
+    /// starting it on first use.
+    private func submitToPersistentSession(_ text: String) {
+        if session == nil {
+            var extras: [String] = []
+            if let provider { extras += ["-p", provider] }
+            if let model { extras += ["-m", model] }
+            let started = PersistentSession(
+                binary: binary,
+                workingDirectory: workingDirectory,
+                resume: sessionId,
+                extraArguments: extras
+            )
+            session = started
+            task = Task { [weak self] in
+                guard let self else { return }
+                for await item in await started.start() {
+                    if Task.isCancelled { break }
+                    self.absorb(item)
+                }
+                // The backend exited; the next submit starts a fresh one rather
+                // than writing into a dead pipe.
+                self.session = nil
+                self.isRunning = false
+            }
+        }
+        Task { [session] in await session?.send(text) }
+    }
+
+    private func absorb(_ item: NexusStreamItem) {
+        switch item {
+        case .event(let event):
+            view.reduce(event, ts: nextTick())
+            // `sessionId` — NOT `id`, which is a per-run identifier. Passing a
+            // run id to `--resume` silently starts a fresh session every time,
+            // which is exactly the bug this replaces.
+            if case .session(let session) = event, let id = session.sessionId, sessionId == nil {
+                sessionId = id
+            }
+            // A settled turn frees the composer; the process stays alive.
+            if case .done = event { isRunning = false }
+            if case .error = event { isRunning = false }
+        case .diagnostic(let line):
+            diagnostics.append(line)
+        case .terminated(let reason):
+            if case .failedToLaunch(let message) = reason {
+                diagnostics.append("failed to launch nexus: \(message)")
+            }
+            isRunning = false
         }
     }
 
@@ -176,6 +235,15 @@ public final class ConversationController {
         task?.cancel()
         task = nil
         isRunning = false
+    }
+
+    /// End the conversation and its backing process. The durable session stays
+    /// in the CLI store, reachable from the Sessions tab.
+    public func endSession() {
+        let ending = session
+        session = nil
+        Task { await ending?.stop() }
+        cancel()
     }
 
     /// Fold one event in directly, without running a command.

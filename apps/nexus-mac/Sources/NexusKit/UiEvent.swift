@@ -34,7 +34,17 @@ public enum UiEvent: Sendable, Hashable {
     case unknown(type: String, raw: JSONValue)
 
     public struct Session: Sendable, Hashable, Codable {
+        /// The RUN id — one per dispatched run, NOT stable across turns.
         public let id: String
+        /// The engine SESSION id — stable for the whole conversation and the
+        /// only value `--resume` accepts.
+        ///
+        /// Optional because older CLI builds omit it: the event was originally
+        /// emitted with only `id`, which is a run id, so a client that passed it
+        /// to `--resume` silently got a brand-new session every turn. Decoding
+        /// it as optional means this app works against both old and new CLIs and
+        /// can tell when resume is genuinely unavailable rather than guessing.
+        public let sessionId: String?
         public let provider: String
         public let model: String
         public let ts: Double

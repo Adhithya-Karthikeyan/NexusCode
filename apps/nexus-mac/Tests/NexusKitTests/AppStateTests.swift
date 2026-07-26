@@ -7,8 +7,10 @@ import XCTest
 @MainActor
 final class AppStateTests: XCTestCase {
     private func controller() -> ConversationController {
-        ConversationController(
-            client: NexusClient(binary: NexusBinary(url: URL(fileURLWithPath: "/bin/echo"))),
+        let binary = NexusBinary(url: URL(fileURLWithPath: "/bin/echo"))
+        return ConversationController(
+            client: NexusClient(binary: binary),
+            binary: binary,
             workingDirectory: URL(fileURLWithPath: "/tmp")
         )
     }
