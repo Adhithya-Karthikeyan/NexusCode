@@ -44,7 +44,26 @@ export type UiEvent =
   | { t: "tool_call"; lane: string; id: string; name: string; args: unknown }
   | { t: "tool_result"; lane: string; id: string; ok: boolean; result: unknown }
   | { t: "diff"; lane: string; path: string; patch: string }
-  | { t: "approval"; lane: string; id: string; action: string; detail: string }
+  | {
+      t: "approval";
+      lane: string;
+      id: string;
+      action: string;
+      detail: string;
+      /**
+       * Present only on a SECOND `approval` event carrying the same `id` as an
+       * earlier request — the settlement of that approval. Absent on the
+       * original request (still pending) and on the wrapped-coding-CLI's
+       * `approval-request` flow (`chunkToUiEvents`'s `"approval-request"` case
+       * below), which never resolves this way. `cause` is a closed set so a
+       * client can tell an explicit "no" (final) apart from the harness
+       * deciding FOR the human (timeout: not a decision, offer to ask again;
+       * cancelled/stdin-closed: the conversation is gone, the approval is
+       * moot) without parsing the human-readable `reason` prose the CLI
+       * ALSO still records (unchanged) in the corresponding `tool_result`.
+       */
+      resolution?: { granted: boolean; cause: "explicit" | "timeout" | "cancelled" | "stdin-closed" };
+    }
   | {
       t: "usage";
       lane: string;

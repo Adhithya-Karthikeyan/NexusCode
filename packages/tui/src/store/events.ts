@@ -25,7 +25,15 @@ export type UiEvent =
   | { t: "tool_call"; lane: string; id: string; name: string; args: unknown }
   | { t: "tool_result"; lane: string; id: string; ok: boolean; result: unknown }
   | { t: "diff"; lane: string; path: string; patch: string }
-  | { t: "approval"; lane: string; id: string; action: string; detail: string }
+  | {
+      t: "approval";
+      lane: string;
+      id: string;
+      action: string;
+      detail: string;
+      /** Present on the settlement of an earlier request with the same `id` — see `@nexuscode/core`'s `projection.ts` for the full contract. */
+      resolution?: { granted: boolean; cause: "explicit" | "timeout" | "cancelled" | "stdin-closed" };
+    }
   | {
       t: "usage";
       lane: string;
