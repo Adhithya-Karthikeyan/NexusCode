@@ -192,6 +192,46 @@ export async function runTurn(
 }
 
 /**
+ * Fold one settled turn into the short-term transcript the NEXT turn is
+ * dispatched with.
+ *
+ * A failed turn used to contribute NOTHING — not even the user's own message —
+ * so the question that failed vanished from history. That is the worst possible
+ * moment to forget it: a provider failing is the single most common reason a
+ * user reaches for `/provider`, and after the switch the replacement provider
+ * had no idea what was asked. The user line is now always kept.
+ *
+ * The reason it was dropped is real, though: leaving a bare unanswered user
+ * message makes the next request read `user, user`, which providers with strict
+ * role alternation reject. So a failed turn records a short synthetic assistant
+ * note in the reply slot instead — alternation stays valid AND the replacement
+ * provider can see that the previous attempt failed and why.
+ */
+export function recordTurnIntoTranscript(
+  transcript: Message[],
+  userMsgs: readonly Message[],
+  outcome: OrchestrationOutcome,
+): void {
+  const result = outcome.winner ?? outcome.runs[0];
+  transcript.push(...userMsgs);
+  if (result?.status === "ok" && result.text.length > 0) {
+    transcript.push({ role: "assistant", content: [{ type: "text", text: result.text }] });
+    return;
+  }
+  const reason = result?.error?.message ?? result?.error?.code ?? "no response";
+  const provider = result?.adapterId ?? "the provider";
+  transcript.push({
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: `(no answer — ${provider} failed: ${reason}. The question above is still unanswered.)`,
+      },
+    ],
+  });
+}
+
+/**
  * Mount the interactive TUI over a real engine, or print a fallback and return
  * `{ mounted: false }`. Never throws for an incapable terminal (hard rule 4).
  */
@@ -244,14 +284,7 @@ export async function runTui(engine: Engine, opts: RunTuiOptions): Promise<RunTu
       ...(opts.dispatchTurn ? { dispatchTurn: opts.dispatchTurn } : {}),
     })
       .then((outcome) => {
-        // Persist this turn into the transcript (user line + assistant reply) so
-        // the next turn remembers it. `text` is the model's final answer for the
-        // turn (after any tool loop). A failed/empty turn contributes no reply.
-        const result = outcome.winner ?? outcome.runs[0];
-        if (result?.status === "ok") transcript.push(...userMsgs);
-        if (result?.status === "ok" && result.text.length > 0) {
-          transcript.push({ role: "assistant", content: [{ type: "text", text: result.text }] });
-        }
+        recordTurnIntoTranscript(transcript, userMsgs, outcome);
       })
       .catch((e: unknown) => {
         store.append({

@@ -212,6 +212,7 @@ export { mountTui, type MountOptions, type MountResult } from "./app/mount.js";
 export {
   runTui,
   runTurn,
+  recordTurnIntoTranscript,
   singleDispatch,
   streamTurnIntoStore,
   type RunTuiOptions,
