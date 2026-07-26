@@ -53,7 +53,13 @@ struct TasksView: View {
                                 } onDelete: { id in
                                     Task { await controller.remove(id: id) }
                                 }
-                            } else {
+                            } else if group.status != .unknown {
+                                // Empty buckets still render, so headers stay put
+                                // as tasks move between them — but NOT `.unknown`.
+                                // That bucket exists only to catch a status this
+                                // build does not recognise; showing "Unknown 0"
+                                // surfaces an internal fallback as if it were a
+                                // real category the user should reason about.
                                 SectionHeader(group.status.label, accessory: AnyView(CountPill(text: "0", tone: .neutral)))
                             }
                         }
