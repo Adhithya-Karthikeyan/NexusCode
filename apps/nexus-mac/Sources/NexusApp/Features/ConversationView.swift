@@ -318,24 +318,6 @@ struct ControlStrip: View {
                     }
                 }
             }
-            // A trailing fade so it is DISCOVERABLE that the cluster scrolls.
-            // At 900pt the model picker sits past the right edge; without a cue
-            // a user sees "provider" and no model control and reasonably
-            // concludes model selection does not exist. The mask only dims the
-            // last few points, so nothing is hidden that was not already
-            // off-screen.
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.94),
-                        .init(color: .black.opacity(0.15), location: 1),
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-
             Spacer(minLength: Space.sm)
 
             approvalControl

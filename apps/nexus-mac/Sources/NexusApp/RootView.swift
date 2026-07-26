@@ -64,9 +64,9 @@ struct RootView: View {
         case .accounts:
             AuthView()
         case .integrations:
-            IntegrationsView()
+            HeroEmptyState(icon: "puzzlepiece.extension", title: "Integrations", message: "isolation test")
         case .git:
-            GitView()
+            HeroEmptyState(icon: "arrow.triangle.branch", title: "Git", message: "isolation test")
         case .settings:
             SettingsView()
         }

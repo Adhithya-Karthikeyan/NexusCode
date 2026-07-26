@@ -6,7 +6,7 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, promises as fsPromises, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { repoMap, detectLanguage } from "@nexuscode/fileintel";
@@ -68,10 +68,13 @@ import {
   isNodePtyAvailable,
   jobTools,
   registerBuiltins,
+  resolveInWorkspace,
   runTool,
+  type ApprovalRequest,
   type ApproveFn,
   type PermissionGateOptions,
   type PermissionMode,
+  type ToolPermission,
 } from "@nexuscode/tools";
 import {
   Agent,
@@ -2843,6 +2846,232 @@ async function resolveResumeTarget(
   return latest;
 }
 
+// ── real tool approvals (chat --persistent -t) ───────────────────────────────
+//
+// `nexus chat` has no tool loop by default (single dispatch, exactly as
+// before `-t` existed). `-t`/`--tools` opts a conversation into the native
+// agentic loop, and — unless `--yolo`/`--approve` ask for the existing
+// unattended auto-approve meanings — a tool call that needs approval is
+// REALLY asked: this is what makes "ask" mode honest rather than a gate that
+// silently says yes to everything (see PermissionGate's new "ask" mode in
+// @nexuscode/tools).
+
+/**
+ * How long a pending approval waits for a decision before it is denied by
+ * default. A blocked tool call must never hang the whole persistent process
+ * forever with no signal — 2 minutes is generous enough for a human to read a
+ * diff and decide, short enough that an abandoned dialog fails the turn
+ * cleanly instead of wedging the conversation.
+ */
+const APPROVAL_TIMEOUT_MS = 120_000;
+
+/** JSON shape of the `approval` UiEvent's `detail` string, built for a human reviewer. */
+interface ApprovalDetailPayload {
+  toolName: string;
+  permission: ToolPermission;
+  mode: PermissionMode;
+  reason: string;
+  input: unknown;
+  /** Present only for a file write/patch — a unified-diff-shaped preview. */
+  diff?: string;
+}
+
+/** Cap on per-side line count for `unifiedLineDiff`'s O(n·m) LCS table. */
+const MAX_DIFF_LINES = 2000;
+
+/**
+ * Minimal LCS-based unified line diff for an approval preview. Not a `git
+ * diff`-accurate hunk splitter (one hunk, no context trimming) — just enough
+ * for a human to see exactly what a write would change before approving it.
+ * Beyond `MAX_DIFF_LINES` per side the LCS table would be too large, so it
+ * falls back to a blunter but still honest "whole file replaced" shape.
+ */
+function unifiedLineDiff(path: string, oldText: string, newText: string): string {
+  const header = `--- a/${path}\n+++ b/${path}\n`;
+  if (oldText === newText) return `${header}(no change)\n`;
+  const oldLines = oldText.length > 0 ? oldText.split("\n") : [];
+  const newLines = newText.length > 0 ? newText.split("\n") : [];
+  if (oldLines.length > MAX_DIFF_LINES || newLines.length > MAX_DIFF_LINES) {
+    return (
+      `${header}@@ -1,${oldLines.length} +1,${newLines.length} @@\n` +
+      `-[${oldLines.length} line(s) omitted — file too large to diff in the approval preview]\n` +
+      `+[${newLines.length} line(s) omitted — file too large to diff in the approval preview]\n`
+    );
+  }
+  const rows = oldLines.length;
+  const cols = newLines.length;
+  const lcs: Uint32Array[] = Array.from({ length: rows + 1 }, () => new Uint32Array(cols + 1));
+  for (let i = rows - 1; i >= 0; i--) {
+    for (let j = cols - 1; j >= 0; j--) {
+      lcs[i]![j] = oldLines[i] === newLines[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+    }
+  }
+  const out: string[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < rows && j < cols) {
+    if (oldLines[i] === newLines[j]) {
+      out.push(` ${oldLines[i]}`);
+      i++;
+      j++;
+    } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) {
+      out.push(`-${oldLines[i]}`);
+      i++;
+    } else {
+      out.push(`+${newLines[j]}`);
+      j++;
+    }
+  }
+  while (i < rows) {
+    out.push(`-${oldLines[i]}`);
+    i++;
+  }
+  while (j < cols) {
+    out.push(`+${newLines[j]}`);
+    j++;
+  }
+  return `${header}@@ -1,${oldLines.length} +1,${newLines.length} @@\n${out.join("\n")}\n`;
+}
+
+/**
+ * Build a diff preview for an approval request, when the tool is a file
+ * write/patch. `fs_patch`'s own input already IS a unified diff (pass it
+ * through); `fs_write` is a whole-file overwrite, so the previous on-disk
+ * content (empty for a new file) is diffed against the proposed content.
+ * Returns `undefined` for anything else (shell/network/non-file tools) —
+ * there is nothing file-shaped to preview.
+ */
+async function buildApprovalDiff(req: ApprovalRequest, cwd: string): Promise<string | undefined> {
+  const input = req.input;
+  if (typeof input !== "object" || input === null) return undefined;
+  const o = input as Record<string, unknown>;
+  if (req.toolName === "fs_patch" && typeof o["diff"] === "string") {
+    return o["diff"];
+  }
+  if (req.toolName === "fs_write" && typeof o["path"] === "string" && typeof o["content"] === "string") {
+    const rel = o["path"];
+    let prev = "";
+    try {
+      const abs = await resolveInWorkspace(cwd, rel);
+      prev = await fsPromises.readFile(abs, "utf8");
+    } catch {
+      prev = ""; // unreadable or doesn't exist yet — diffs as a pure file creation
+    }
+    return unifiedLineDiff(rel, prev, o["content"]);
+  }
+  return undefined;
+}
+
+/**
+ * Brokers REAL approvals for `nexus chat --persistent -t`'s tool loop: builds
+ * a `PermissionGate` `ApproveFn` that emits the `{t:"approval",...}` UiEvent
+ * for each "ask"-tier tool call and blocks until a decision arrives — from a
+ * control-line on the same stdin the prompts use (see `parseApprovalDecision`),
+ * the in-flight turn being cancelled (SIGINT/SIGTERM/EOF), or the timeout.
+ * Never leaves a tool call — and thus the whole persistent process — blocked
+ * forever with no signal.
+ */
+class ApprovalBroker {
+  private readonly pending = new Map<string, (granted: boolean) => void>();
+
+  constructor(
+    private readonly cwd: string,
+    private readonly emit: (ev: UiEvent) => void,
+    private readonly getScope: () => CancelScope | undefined,
+  ) {}
+
+  /** An `ApproveFn` bound to this broker, for `PermissionGateOptions.approve`. */
+  approve(): ApproveFn {
+    return (req) => this.request(req);
+  }
+
+  private async request(req: ApprovalRequest): Promise<boolean> {
+    const id = randomUUID();
+    const detail: ApprovalDetailPayload = {
+      toolName: req.toolName,
+      permission: req.permission,
+      mode: req.mode,
+      reason: req.reason,
+      input: req.input,
+    };
+    const diff = await buildApprovalDiff(req, this.cwd);
+    if (diff !== undefined) detail.diff = diff;
+    // `action` mirrors the wrapped-coding-CLI `approval-request` chunk's `kind`
+    // (file | shell | tool) so a client can render both approval flows through
+    // one switch on this field.
+    const action = req.permission === "write" ? "file" : req.permission === "exec" ? "shell" : "tool";
+    this.emit({ t: "approval", lane: "main", id, action, detail: JSON.stringify(detail) });
+
+    return new Promise<boolean>((resolve) => {
+      const scope = this.getScope();
+      if (scope?.isCancelled) {
+        resolve(false);
+        return;
+      }
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = (granted: boolean): void => {
+        if (!this.pending.delete(id)) return; // already settled
+        clearTimeout(timer);
+        scope?.signal.removeEventListener("abort", onAbort);
+        resolve(granted);
+      };
+      const onAbort = (): void => finish(false);
+      scope?.signal.addEventListener("abort", onAbort);
+      timer = setTimeout(() => finish(false), APPROVAL_TIMEOUT_MS);
+      this.pending.set(id, finish);
+    });
+  }
+
+  /** Resolve a pending approval from a decision line. A no-op for an unknown/expired id. */
+  decide(id: string, decision: "allow" | "deny"): void {
+    this.pending.get(id)?.(decision === "allow");
+  }
+
+  /** Deny every still-pending approval (stdin EOF: no more decisions can ever arrive). */
+  denyAll(): void {
+    for (const resolve of [...this.pending.values()]) resolve(false);
+  }
+}
+
+/**
+ * Parse one stdin line as an approval decision for the persistent control
+ * channel. Recognizes exactly `{"type":"approval","id":"...","decision":
+ * "allow"|"deny"}`; anything else (not JSON, not this exact shape) is
+ * `undefined` so the caller dispatches it as an ordinary chat prompt instead —
+ * the control channel shares stdin with prompts and must never swallow one.
+ */
+function parseApprovalDecision(line: string): { id: string; decision: "allow" | "deny" } | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const o = parsed as Record<string, unknown>;
+  if (o["type"] !== "approval") return undefined;
+  const id = o["id"];
+  const decision = o["decision"];
+  if (typeof id !== "string" || id.length === 0) return undefined;
+  if (decision !== "allow" && decision !== "deny") return undefined;
+  return { id, decision };
+}
+
+/**
+ * Resolve `chat -t`'s permission mode from its flags — independent of
+ * `resolvePermissionMode`/`buildToolGate` above (which stay untouched: `agent`/
+ * `tools run` must keep their exact existing auto-approve behavior). `--yolo`
+ * and `--approve` keep their documented meanings verbatim; the default (and
+ * the new `--ask`, an explicit spelling of the same intent for workspace-write
+ * -level capability) get a REAL approver instead of an auto one.
+ */
+function resolveChatPermissionMode(args: ParsedArgs): PermissionMode {
+  if (args.bools.has("yolo")) return "full-access";
+  if (args.bools.has("approve")) return "workspace-write";
+  if (args.bools.has("ask")) return "ask";
+  return "read-only";
+}
+
 export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const config = await loadEffectiveConfig();
   const runtime = await buildAuthedRuntime(config);
@@ -2934,6 +3163,53 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   // shared `runTurn` serve both a fixed line list and an open-ended stream.
   let activeScope: CancelScope | undefined;
 
+  // `-t`/`--tools`: opt a conversation into the native agentic tool loop.
+  // Completely off by default — every `nexus chat` invocation without this
+  // flag (including every existing script/test) dispatches exactly as before,
+  // with no tool registry, no gate, and no approval machinery at all.
+  const toolsEnabled = args.bools.has("tools");
+  let toolRegistry: ToolRegistry | undefined;
+  let gate: PermissionGate | undefined;
+  let approvalBroker: ApprovalBroker | undefined;
+  let mcpSession: { close: () => Promise<void> } | undefined;
+  const cwd = process.cwd();
+  const maxTurnsRaw = args.flags.get("max-turns");
+  const maxTurns = maxTurnsRaw ? Math.max(1, Number.parseInt(maxTurnsRaw, 10) || 8) : 8;
+  if (toolsEnabled) {
+    toolRegistry = new ToolRegistry();
+    registerBuiltins(toolRegistry);
+    registerLspTools(toolRegistry, config);
+    registerToolGroups(toolRegistry, config, { ai: { provider: runtime.registry.get(providerId), model } });
+    mcpSession = await attachMcpTools(toolRegistry, config, runtime.secrets);
+
+    const permMode = resolveChatPermissionMode(args);
+    const gateOpts: PermissionGateOptions = { mode: permMode };
+    if (config.tools.allow.length > 0) gateOpts.allowlist = [...config.tools.allow];
+    if (config.tools.deny.length > 0) gateOpts.denylist = [...config.tools.deny];
+    if (permMode === "workspace-write" || permMode === "full-access") {
+      // `--approve` / `--yolo`: the existing, documented auto-approve meaning
+      // from every other tool-executing command — unchanged here.
+      gateOpts.approve = () => true;
+    } else if (persistent) {
+      // Default (read-only) or `--ask`, `--persistent`: a REAL approver. Emits
+      // the `approval` UiEvent and blocks the tool call until a decision
+      // arrives on the live stdin control channel (see `ApprovalBroker`).
+      approvalBroker = new ApprovalBroker(
+        cwd,
+        (ev) => renderStreaming(ev, output === "ndjson" ? "ndjson" : "text", io),
+        () => activeScope,
+      );
+      gateOpts.approve = approvalBroker.approve();
+    }
+    // Default (read-only)/`--ask` in BATCH mode: no approver at all. Batch
+    // stdin is already fully consumed into `lines` up front, so there is no
+    // live channel left to deliver a decision on — an "ask" outcome fails
+    // closed immediately (PermissionGate denies with no approver configured)
+    // instead of waiting out `APPROVAL_TIMEOUT_MS` for a reply that can never
+    // arrive.
+    gate = new PermissionGate(gateOpts);
+  }
+
   /**
    * Dispatch one line as a turn on the shared session and project its events
    * to `io`. Returns `true` when the turn did NOT end in a successful reply,
@@ -2963,7 +3239,13 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
         idempotencyKey: randomUUID(),
         params: { system },
       };
-      const handle = dispatch({ kind: "single", run }, turn.context());
+      // `-t`/`--tools`: run the native agentic tool loop instead of a single
+      // dispatch. Absent (the default, unchanged path), this is byte-for-byte
+      // the same single dispatch `chat` has always used.
+      const handle =
+        toolRegistry && gate
+          ? dispatchAgent(run, turn.context(), { tools: toolRegistry, gate, maxTurns, cwd })
+          : dispatch({ kind: "single", run }, turn.context());
       for await (const labeled of handle.events()) {
         for (const ev of projectLabeled(labeled, [providerId], true, session.id)) {
           if (output === "ndjson") {
@@ -3005,7 +3287,9 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
       for (const line of lines) {
         if (await runTurn(line)) failed = true;
       }
-    } else {
+    } else if (!approvalBroker) {
+      // No real approval broker (tools off, or --yolo/--approve): identical to
+      // `chat --persistent` before this feature existed.
       const rl = createInterface({ input: process.stdin });
       // Cancel whatever turn is in flight and stop taking new input; the
       // `finally` below then disposes exactly as it would on a clean EOF.
@@ -3029,11 +3313,72 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
         process.removeListener("SIGINT", onSignal);
         process.removeListener("SIGTERM", onSignal);
       }
+    } else {
+      // A real approval broker is live: a decision line must be resolvable
+      // WHILE a turn is blocked mid-tool-call awaiting it, so line-reading is
+      // decoupled from turn-processing here — unlike the plain loop above,
+      // which can only pull the next stdin line once `runTurn` resolves.
+      // Prompts still dispatch strictly one at a time, in arrival order, via
+      // `promptQueue`; only decision lines are handled immediately, out of
+      // band, whatever turn is or isn't in flight.
+      const rl = createInterface({ input: process.stdin });
+      const onSignal = (): void => {
+        activeScope?.cancel("user");
+        rl.close();
+      };
+      process.once("SIGINT", onSignal);
+      process.once("SIGTERM", onSignal);
+
+      const promptQueue: string[] = [];
+      let wake: (() => void) | undefined;
+      const wakeWorker = (): void => {
+        wake?.();
+        wake = undefined;
+      };
+      let stdinClosed = false;
+
+      const reading = (async () => {
+        for await (const raw of rl) {
+          const line = raw.trim();
+          if (line.length === 0) continue;
+          const decision = parseApprovalDecision(line);
+          if (decision) {
+            approvalBroker.decide(decision.id, decision.decision);
+            continue;
+          }
+          promptQueue.push(line);
+          wakeWorker();
+        }
+        stdinClosed = true;
+        // EOF: no more decisions can ever arrive — deny anything still
+        // pending rather than leave it to time out.
+        approvalBroker.denyAll();
+        wakeWorker();
+      })();
+
+      try {
+        for (;;) {
+          const line = promptQueue.shift();
+          if (line !== undefined) {
+            if (await runTurn(line)) failed = true;
+            continue;
+          }
+          if (stdinClosed) break;
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+          });
+        }
+        await reading;
+      } finally {
+        process.removeListener("SIGINT", onSignal);
+        process.removeListener("SIGTERM", onSignal);
+      }
     }
     return failed ? 1 : 0;
   } finally {
     await session.dispose();
     await engine.dispose();
+    if (mcpSession) await mcpSession.close();
     transfer.close();
     store.close();
   }

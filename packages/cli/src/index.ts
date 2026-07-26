@@ -399,7 +399,21 @@ class ChatCommand extends HandlerCommand {
       "EOF or SIGINT/SIGTERM. Pair it with `-o ndjson` to get every projected `UiEvent` " +
       "per turn, terminated by a `{\"t\":\"turn_end\",...}` line — the `session` event's new " +
       "`sessionId` field is the engine session id to pass back into `--resume` (its `id` " +
-      "field is a per-run id, not a session id).",
+      "field is a per-run id, not a session id).\n" +
+      "`-t`/`--tools` turns a chat into an agentic tool-loop conversation (off by " +
+      "default — every other invocation is unaffected). Combine with `--yolo` (no " +
+      "approval prompts) or `--approve` (auto-approve exec/network) for the existing, " +
+      "unattended meanings, or leave both off (equivalently: pass `--ask`) for REAL " +
+      "approval: a tool call needing one emits `{\"t\":\"approval\",\"id\":...,\"action\":...," +
+      "\"detail\":...}` and the turn BLOCKS until a decision arrives. In `--persistent` " +
+      "mode, send the decision as its own stdin line — never mixed into a prompt — as " +
+      "`{\"type\":\"approval\",\"id\":\"<the approval's id>\",\"decision\":\"allow\"|\"deny\"}`; " +
+      "any line that isn't exactly this shape is dispatched as an ordinary chat prompt, " +
+      "so the control channel can share stdin with prompts safely. An approval left " +
+      "unanswered for 120s is denied by default (fail closed) rather than hanging the " +
+      "process forever; cancelling the turn (SIGINT/SIGTERM) denies any of its pending " +
+      "approvals immediately. In non-persistent (batch) mode there is no live channel " +
+      "to answer an approval, so `ask`'s network tier is denied outright instead.",
     examples: [
       ["Pipe a conversation", "printf 'hi\\nwhat did I say?\\n' | nexus chat -p mock"],
       ["Continue the last conversation", "nexus chat --continue"],
@@ -408,6 +422,10 @@ class ChatCommand extends HandlerCommand {
       [
         "Persistent stdio session for a client",
         "printf 'hi\\nwhat did I say?\\n' | nexus chat --persistent -p mock -o ndjson",
+      ],
+      [
+        "Persistent session with real tool approvals",
+        "nexus chat --persistent -t --ask -p mock -m mock-tools -o ndjson",
       ],
     ],
   });
