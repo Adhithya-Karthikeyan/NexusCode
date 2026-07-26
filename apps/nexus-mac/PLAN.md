@@ -1,5 +1,44 @@
 # NexusCode.app — working backlog
 
+> ## 🔴 OPEN REGRESSION — read this first
+>
+> **The app launches but no window is displayed.** Build is clean and all 177
+> Swift tests pass, so this is the window lifecycle, not the logic.
+>
+> **Established by test, not guesswork:**
+> - `RootView.onAppear` DOES fire and `WorkspaceModel.init` runs — SwiftUI builds
+>   the hierarchy. So `body` is evaluated; the window just never becomes visible.
+> - Verified visually (full-screen capture shows only the desktop), so this is
+>   not System Events' `count windows` lying.
+> - Main thread is idle in the normal event loop (`sample`) — not blocked.
+> - No stderr, process healthy — not a crash.
+>
+> **Ruled out** (each reverted/stubbed and retested independently):
+> Integrations/Git wiring · the control-strip `.mask` scroll cue ·
+> saved application state (no such dir) · stale instance (`open -n`,
+> `ApplePersistenceIgnoreState`).
+>
+> **Leading suspect:** I ran `defaults delete dev.nexuscode.mac` WHILE the app
+> was running, to test a hypothesis. That wipes the domain SwiftUI also uses for
+> window bookkeeping. Careless — destructive to state I had not inspected — and
+> it is the only remaining change that correlates with the failure. Unproven.
+>
+> **Most likely mechanism:** a zero-sized or never-activated window. Note
+> `RootView` is `HStack{…}.frame(maxWidth: .infinity, maxHeight: .infinity)`
+> inside `WindowGroup` with `.frame(minWidth: 900, minHeight: 560)` — a content
+> view with no ideal size can leave a macOS window unable to resolve one.
+>
+> **Next steps, in order:**
+> 1. `git log` the app dir and bisect to the last bundle that showed a window —
+>    the auto-commits give a usable history.
+> 2. Build a minimal `@main` SwiftUI App in isolation: if IT gets no window, the
+>    cause is this machine's LaunchServices state, not our code.
+> 3. Try giving the window an explicit `.defaultSize(width:height:)` and drop
+>    `maxHeight: .infinity` from RootView's outermost frame.
+>
+> Nothing is lost: all source, tests and CLI work are intact and committed.
+
+
 Living document. Updated as work lands. Items marked ✅ are verified (built +
 tested + visually confirmed), 🔄 in progress, ⬜ not started.
 

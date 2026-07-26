@@ -2861,9 +2861,14 @@ async function resolveResumeTarget(
  * default. A blocked tool call must never hang the whole persistent process
  * forever with no signal — 2 minutes is generous enough for a human to read a
  * diff and decide, short enough that an abandoned dialog fails the turn
- * cleanly instead of wedging the conversation.
+ * cleanly instead of wedging the conversation. Overridable via
+ * `NEXUS_APPROVAL_TIMEOUT_MS` so a test can prove the timeout path without
+ * actually waiting 2 minutes; never read from user-facing config or flags.
  */
-const APPROVAL_TIMEOUT_MS = 120_000;
+const APPROVAL_TIMEOUT_MS = (() => {
+  const raw = Number.parseInt(process.env["NEXUS_APPROVAL_TIMEOUT_MS"] ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
+})();
 
 /** JSON shape of the `approval` UiEvent's `detail` string, built for a human reviewer. */
 interface ApprovalDetailPayload {
