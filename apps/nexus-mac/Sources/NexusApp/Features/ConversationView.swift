@@ -282,25 +282,46 @@ struct ConversationView: View {
     }
 }
 
-/// Mode, provider/model or backends, and the reasoning toggle.
+/// Mode, effort, provider/model or backends, the approval indicator, and the
+/// reasoning toggle.
+///
+/// The leading cluster (mode, effort, provider/model or backend chips) sits
+/// in its own horizontal `ScrollView` rather than a bare `HStack`. Backend
+/// chips in particular have no upper bound — a Compare run with several
+/// backends added would otherwise overflow the strip at exactly the width
+/// this file is required to stay clean at (900pt). The trailing cluster
+/// (approval, session, reasoning, clear) stays fixed outside the scroll so
+/// those controls can never be the thing that scrolls out of reach.
 struct ControlStrip: View {
     @Environment(\.nexusTheme) private var theme
     @Bindable var controller: ConversationController
     @Binding var showsReasoning: Bool
-    @State private var backendDraft = ""
+    @Binding var effort: EffortLevel
+    let providers: [PickerOption]
+    let models: [PickerOption]
+    let isLoadingModels: Bool
+    let onLoadModels: (String) -> Void
 
     var body: some View {
         HStack(spacing: Space.md) {
-            ModePicker(mode: $controller.mode)
-                .help(controller.mode.detail)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Space.md) {
+                    ModePicker(mode: $controller.mode)
+                        .help(controller.mode.detail)
 
-            if controller.mode.isMultiLane {
-                backendControls
-            } else {
-                singleLaneControls
+                    EffortPicker(effort: $effort)
+
+                    if controller.mode.isMultiLane {
+                        backendControls
+                    } else {
+                        singleLaneControls
+                    }
+                }
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: Space.sm)
+
+            approvalControl
 
             if let session = controller.sessionId {
                 Metric(label: "session", value: String(session.suffix(8)))
@@ -337,48 +358,273 @@ struct ControlStrip: View {
                     controller.backends.removeAll { $0 == backend }
                 }
             }
-            fieldBox(width: 112) {
-                TextField("add backend…", text: $backendDraft)
-                    .textFieldStyle(.plain)
-                    .font(Kind.monoSmall)
-                    .onSubmit {
-                        let value = backendDraft.trimmingCharacters(in: .whitespaces)
-                        if !value.isEmpty && !controller.backends.contains(value) {
-                            controller.backends.append(value)
-                        }
-                        backendDraft = ""
-                    }
+            DropdownPicker(
+                placeholder: "+ add",
+                options: providers.filter { !controller.backends.contains($0.id) },
+                selection: nil,
+                width: 72,
+                emptyHint: providers.isEmpty ? "No providers loaded yet" : "All providers already added"
+            ) { id in
+                if !controller.backends.contains(id) { controller.backends.append(id) }
             }
         }
     }
 
     private var singleLaneControls: some View {
         HStack(spacing: Space.xs) {
-            fieldBox(width: 96) {
-                TextField("provider", text: Binding(
-                    get: { controller.provider ?? "" },
-                    set: { controller.provider = $0.isEmpty ? nil : $0 }
-                ))
-                .textFieldStyle(.plain)
-                .font(Kind.monoSmall)
+            DropdownPicker(
+                placeholder: "provider",
+                leadingDot: providerDotColor(for: controller.provider, in: providers, theme: theme),
+                options: providers,
+                selection: controller.provider,
+                width: 104,
+                emptyHint: "No providers loaded yet"
+            ) { id in
+                controller.provider = id
+                controller.model = nil
+                onLoadModels(id)
             }
-            fieldBox(width: 140) {
-                TextField("model", text: Binding(
-                    get: { controller.model ?? "" },
-                    set: { controller.model = $0.isEmpty ? nil : $0 }
-                ))
-                .textFieldStyle(.plain)
-                .font(Kind.monoSmall)
-            }
+
+            modelPicker
         }
     }
 
-    /// A real field surface (background + border) rather than a bare
-    /// `TextField`, matching every other control this strip renders.
     @ViewBuilder
-    private func fieldBox<Content: View>(width: CGFloat, @ViewBuilder content: () -> Content) -> some View {
-        content()
-            .foregroundStyle(theme.color(\.textSecondary))
+    private var modelPicker: some View {
+        let picker = DropdownPicker(
+            placeholder: "model",
+            options: models,
+            selection: controller.model,
+            isLoading: isLoadingModels,
+            width: 136,
+            emptyHint: isLoadingModels ? "Loading models…" : "No models for this provider yet"
+        ) { id in
+            controller.model = id
+        }
+        .disabled(controller.provider == nil)
+        .opacity(controller.provider == nil ? 0.5 : 1)
+
+        if controller.provider == nil {
+            picker.help("Pick a provider first")
+        } else {
+            picker
+        }
+    }
+
+    /// A manual-approval readout, not a toggle. The CLI approval gate behind it
+    /// isn't wired up yet, so this stays a static, dimmed display of the true
+    /// current behavior (every action runs unconfirmed) rather than a control
+    /// that would look interactive while silently doing nothing on tap.
+    private var approvalControl: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "hand.raised.fill")
+                .font(.system(size: 9))
+            Text("Ask first")
+                .font(Kind.monoSmall)
+        }
+        .foregroundStyle(theme.color(\.textMuted))
+        .padding(.horizontal, Space.sm)
+        .padding(.vertical, 5)
+        .background(theme.color(\.surfaceInset).opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(theme.color(\.chromeBorderSubtle).opacity(0.6), lineWidth: 1)
+        }
+        .help("Approval gating isn't wired up yet — every action currently runs without confirmation")
+    }
+}
+
+/// `--effort` has no home on `ConversationController` yet (see the seam note
+/// on `ConversationView`), so this lives as view state until the lead lifts
+/// it — `commandPreview` already treats it as authoritative for what actually
+/// gets appended to the `nexus` invocation.
+enum EffortLevel: String, CaseIterable, Identifiable {
+    case off, low, medium, high
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .low: return "Low"
+        case .medium: return "Med"
+        case .high: return "High"
+        }
+    }
+}
+
+/// A themed 4-way segmented control — the same visual language as
+/// `ModePicker` but generic over `EffortLevel`, so the strip doesn't read as
+/// two different segmented-control styles side by side.
+private struct EffortPicker: View {
+    @Environment(\.nexusTheme) private var theme
+    @Binding var effort: EffortLevel
+
+    var body: some View {
+        HStack(spacing: 1) {
+            ForEach(EffortLevel.allCases) { level in
+                let selected = level == effort
+                Button {
+                    effort = level
+                } label: {
+                    Text(level.title)
+                        .font(.system(size: 10, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? theme.color(\.accentFg) : theme.color(\.textSecondary))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4.5)
+                        .background {
+                            if selected {
+                                RoundedRectangle(cornerRadius: Radius.control - 2, style: .continuous)
+                                    .fill(theme.color(\.accentDefault))
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(1.5)
+        .background(theme.color(\.surfaceInset))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+        }
+        .animation(.easeOut(duration: 0.15), value: effort)
+        .help("Reasoning effort — appended as --effort when not Off")
+    }
+}
+
+/// One row in a `DropdownPicker` — a provider, a model, or (for the compare/
+/// race "add backend" control) a provider offered as a backend.
+///
+/// This is the seam described on `ConversationView`: `ProvidersController` in
+/// NexusKit is being built concurrently and may supply these from real
+/// provider/model data once it lands. Until then callers default to `[]` and
+/// the pickers render their empty state.
+struct PickerOption: Identifiable, Equatable {
+    let id: String
+    var detail: String?
+    var available: Bool
+    var disabledReason: String?
+    /// Provider kind (`"anthropic"`, `"openai"`, …) — colors the status dot
+    /// only. `nil` for options that don't need one (models, effort).
+    var kind: String?
+
+    init(
+        id: String,
+        detail: String? = nil,
+        available: Bool = true,
+        disabledReason: String? = nil,
+        kind: String? = nil
+    ) {
+        self.id = id
+        self.detail = detail
+        self.available = available
+        self.disabledReason = disabledReason
+        self.kind = kind
+    }
+
+    fileprivate func dotColor(theme: NexusTheme) -> Color? {
+        guard let kind else { return nil }
+        return providerDotColor(kind: kind, theme: theme).opacity(available ? 1 : 0.4)
+    }
+}
+
+extension PickerOption {
+    /// Maps `ProvidersController`'s `NexusProvider` onto this picker's option
+    /// shape. `ProvidersController` lives in NexusKit and needs a `NexusClient`
+    /// this view has no access to (`ConversationController` keeps its own
+    /// private) — so it is instantiated and refreshed by whoever owns
+    /// `RootView.swift`, which then maps `.selectable`/`.providers` through
+    /// this initializer to fill `ConversationView`'s `providers:` parameter.
+    init(provider: NexusProvider) {
+        self.init(
+            id: provider.id,
+            detail: provider.isUsable ? nil : provider.detail,
+            available: provider.isUsable,
+            disabledReason: provider.isUsable ? nil : provider.detail,
+            kind: provider.kind
+        )
+    }
+
+    /// Maps `ProvidersController.models(for:)`'s `NexusModel` onto this
+    /// picker's option shape, preferring the parsed context window over the
+    /// raw hint string when both are available.
+    init(model: NexusModel) {
+        self.init(
+            id: model.id,
+            detail: model.contextWindow.map { "\($0 / 1_000)k ctx" } ?? model.hint
+        )
+    }
+}
+
+/// Maps a provider kind onto its themed status-dot color, falling back to the
+/// generic "custom" token for anything unrecognized (local models, future
+/// providers) instead of guessing or hardcoding a color.
+private func providerDotColor(kind: String, theme: NexusTheme) -> Color {
+    switch kind.lowercased() {
+    case "anthropic": return theme.color(\.providerAnthropic)
+    case "openai": return theme.color(\.providerOpenai)
+    case "google", "gemini": return theme.color(\.providerGoogle)
+    case "xai", "grok": return theme.color(\.providerXai)
+    case "ollama": return theme.color(\.providerOllama)
+    case "mistral": return theme.color(\.providerMistral)
+    case "deepseek": return theme.color(\.providerDeepseek)
+    default: return theme.color(\.providerCustom)
+    }
+}
+
+/// The dot color for the currently selected provider id, looked up in the
+/// loaded provider list rather than re-deriving a kind from the id string.
+private func providerDotColor(for id: String?, in providers: [PickerOption], theme: NexusTheme) -> Color? {
+    guard let id, let match = providers.first(where: { $0.id == id }) else { return nil }
+    return match.dotColor(theme: theme)
+}
+
+/// A themed dropdown for a list of `PickerOption`s — the provider and model
+/// pickers, and the compare/race "add backend" control, all share this one
+/// implementation. A native `Menu` was ruled out: macOS menu items have no
+/// reliable hover tooltip for a *disabled* row, and the provider list
+/// specifically needs an unavailable/needs-key provider to stay visible with
+/// its reason on hover rather than vanish or go silently inert.
+private struct DropdownPicker: View {
+    @Environment(\.nexusTheme) private var theme
+    var placeholder: String
+    var leadingDot: Color?
+    var options: [PickerOption]
+    var selection: String?
+    var isLoading = false
+    var width: CGFloat = 120
+    var emptyHint: String?
+    var onSelect: (String) -> Void
+
+    @State private var isOpen = false
+
+    private var displayText: String { selection ?? placeholder }
+
+    var body: some View {
+        Button {
+            isOpen = true
+        } label: {
+            HStack(spacing: 5) {
+                if let leadingDot {
+                    Circle().fill(leadingDot).frame(width: 6, height: 6)
+                }
+                Text(displayText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.6)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(theme.color(\.textMuted))
+            }
+            .font(Kind.monoSmall)
+            .foregroundStyle(selection == nil ? theme.color(\.textMuted) : theme.color(\.textSecondary))
             .padding(.horizontal, Space.sm)
             .padding(.vertical, 5)
             .frame(width: width, alignment: .leading)
@@ -388,6 +634,108 @@ struct ControlStrip: View {
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                     .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
             }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            DropdownList(options: options, selection: selection, emptyHint: emptyHint) { id in
+                isOpen = false
+                onSelect(id)
+            }
+        }
+    }
+}
+
+/// The popover body `DropdownPicker` opens — one row per option, unavailable
+/// ones dimmed and inert but still visible with their reason on hover.
+private struct DropdownList: View {
+    @Environment(\.nexusTheme) private var theme
+    let options: [PickerOption]
+    let selection: String?
+    let emptyHint: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 1) {
+                if options.isEmpty {
+                    Text(emptyHint ?? "Nothing available")
+                        .font(Kind.caption)
+                        .foregroundStyle(theme.color(\.textMuted))
+                        .padding(Space.md)
+                } else {
+                    ForEach(options) { option in
+                        row(option)
+                    }
+                }
+            }
+            .padding(4)
+        }
+        .frame(minWidth: 220, maxHeight: 260)
+        .background(theme.color(\.surfaceOverlay))
+    }
+
+    @ViewBuilder
+    private func row(_ option: PickerOption) -> some View {
+        let button = Button {
+            onSelect(option.id)
+        } label: {
+            HStack(spacing: Space.sm) {
+                if let dot = option.dotColor(theme: theme) {
+                    Circle().fill(dot).frame(width: 6, height: 6)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(option.id)
+                        .font(Kind.monoSmall)
+                    if let detail = option.detail {
+                        Text(detail)
+                            .font(Kind.micro)
+                            .foregroundStyle(theme.color(\.textMuted))
+                    }
+                }
+                Spacer(minLength: 0)
+                if option.id == selection {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9, weight: .bold))
+                }
+            }
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(option.available ? theme.color(\.textPrimary) : theme.color(\.textMuted))
+        .opacity(option.available ? 1 : 0.45)
+        .disabled(!option.available)
+
+        if let reason = option.disabledReason, !option.available {
+            button.help(reason)
+        } else {
+            button
+        }
+    }
+}
+
+/// Live token/cost readout, shown only while a turn is streaming — the
+/// composer's "how much is this costing" tell, right next to the "what will
+/// this run" command preview below it.
+private struct UsageReadout: View {
+    @Environment(\.nexusTheme) private var theme
+    let view: ViewState
+
+    var body: some View {
+        HStack(spacing: Space.md) {
+            Metric(label: "in", value: "\(view.lastUsage.inputTokens)")
+            Metric(label: "out", value: "\(view.lastUsage.outputTokens)")
+            Metric(label: "turn cost", value: formatted(view.runUsd), emphasis: true)
+            Spacer(minLength: 0)
+            Metric(label: "session total", value: formatted(view.totals.costUsd))
+        }
+        .foregroundStyle(theme.color(\.textMuted))
+    }
+
+    private func formatted(_ usd: Double) -> String {
+        guard usd > 0 else { return "$0.00" }
+        return usd < 0.01 ? "<$0.01" : String(format: "$%.2f", usd)
     }
 }
 

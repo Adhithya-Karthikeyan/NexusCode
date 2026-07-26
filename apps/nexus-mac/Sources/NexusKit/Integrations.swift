@@ -71,11 +71,13 @@ public struct McpServer: Sendable, Hashable, Identifiable {
 /// One optional-package hint from `tools list -o json`'s per-group
 /// `integrations` array (e.g. `{"name":"playwright","kind":"npm","available":
 /// false,"hint":"npm i playwright"}`).
-public struct ToolIntegration: Sendable, Hashable {
+public struct ToolIntegration: Sendable, Hashable, Identifiable {
     public let name: String
     public let kind: String?
     public let available: Bool
     public let hint: String?
+
+    public var id: String { name }
 
     public init?(json: JSONValue) {
         guard let name = json["name"]?.stringValue else { return nil }

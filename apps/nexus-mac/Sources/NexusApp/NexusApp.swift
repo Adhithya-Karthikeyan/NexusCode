@@ -55,6 +55,10 @@ final class WorkspaceModel {
     private(set) var conversation: ConversationController?
     private(set) var omc: OMCController?
     private(set) var binaryPath: String?
+    /// The resolved CLI, exposed so a screen can build its own controller
+    /// (providers, sessions, tasks) without WorkspaceModel having to own one
+    /// of every kind.
+    private(set) var binary: NexusBinary?
     /// Set when the CLI could not be located — the UI explains rather than
     /// failing silently on every action.
     private(set) var setupProblem: String?
@@ -108,10 +112,12 @@ final class WorkspaceModel {
                 """
             conversation = nil
             omc = nil
+            self.binary = nil
             return
         }
         setupProblem = nil
         binaryPath = binary.url.path
+        self.binary = binary
         conversation = ConversationController(
             client: NexusClient(binary: binary),
             binary: binary,

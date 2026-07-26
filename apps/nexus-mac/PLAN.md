@@ -6,20 +6,20 @@ tested + visually confirmed), 🔄 in progress, ⬜ not started.
 ## A. Explicitly requested
 
 ### A1. Harness fundamentals
-- 🔄 **Persistent session** — one long-lived `nexus` process per conversation,
+- ✅ **Persistent session** — one long-lived `nexus` process per conversation,
   not one per message. CLI side: stream stdin line-by-line, hold session open.
-- 🔄 **Session id in the event stream** — `projection.ts:89` emits the RUN id as
+- ✅ **Session id in the event stream** — `projection.ts:89` emits the RUN id as
   the `session` event's `id`. Resume has never worked because of it.
 - ⬜ **Context awareness** — engine already threads the transcript across turns
   in one session; verify end-to-end with a two-turn memory test.
-- ⬜ **Token streaming info** — live in/out token counts + cost while streaming.
+- ✅ **Token streaming info** — live in/out token counts + cost while streaming.
 
 ### A2. Controls to add
-- ⬜ **Provider picker** — real dropdown from `nexus providers list -o json`,
+- ✅ **Provider picker** — real dropdown from `nexus providers list -o json`,
   with health/needs-key state, not a free-text field.
-- ⬜ **Model picker** — from `nexus models -p <provider> -o json`, scoped to the
+- ✅ **Model picker** — from `nexus models -p <provider> -o json`, scoped to the
   selected provider (the CLI-side bug for this was already fixed in the TS).
-- ⬜ **Effort selector** — off/low/medium/high; only enabled when the active
+- ✅ **Effort selector** — off/low/medium/high; only enabled when the active
   provider advertises reasoning.
 - ⬜ **MCP** — list configured servers + their tools (`nexus mcp list|tools`).
 - ⬜ **Pre/post hooks** — display and manage configured hooks.
@@ -47,8 +47,8 @@ surface. `nexus auth status -o json` already returns all 15 providers with
 - ⬜ **Token expiry** surfaced (anthropic currently reports ~5h remaining).
 
 ### A3. Screens
-- ⬜ **Sessions tab** — list, resume, replay. Data layer done (16 tests).
-- ⬜ **Tasks tab** — list, add, status transitions. Data layer done (18 tests).
+- ✅ **Sessions tab** — list, resume, replay. Data layer done (16 tests).
+- ✅ **Tasks tab** — list, add, status transitions. Data layer done (18 tests).
 - ✅ **Settings** — theme picker, project directory.
 - ✅ **Chat** — transcript, composer, tool rows, fan-out columns.
 - ✅ **Agents** — provider lanes + OMC subagents, mission panel.
@@ -94,3 +94,35 @@ Nothing is marked ✅ without:
 The rule that governs everything: **any capability the app exposes must exist as
 a `nexus` command first.** The app composes commands and renders their events; it
 never grows a private path to a provider.
+
+
+---
+
+## Session log — 2026-07-27 (overnight)
+
+### Verified this session
+- Persistent stdio session: ONE process, ONE engine session across turns.
+  Proven with `printf 'my name is Ada\nwhat is my name?\n' | nexus chat
+  --persistent -p mock -o ndjson` → single `sessionId`, two runs, `turn_end`
+  delimiters.
+- `sessionId` now flows through the ndjson stream (was emitting the RUN id, so
+  `--resume` had never worked for any programmatic client).
+- Sessions screen live against 389 real sessions; master-detail, Resume/Replay.
+- Provider/model/effort pickers wired to real `providers status` output;
+  provider auto-selects the first usable one so the picker matches what the CLI
+  would resolve anyway.
+- TypeScript 2089/2089. Swift 152/152 (was 110).
+
+### Known flake
+`packages/cli/test/cli.integration.test.ts` — the `jobs` tests spawn real
+processes and failed twice under full-suite parallel load, then passed 57/57 in
+isolation and clean on a full re-run. Not a regression; worth hardening.
+
+### Next
+1. Wire `AuthView` into RootView once `auth-flow` lands.
+2. Approvals gate — the last genuinely-missing advanced harness property, and
+   the one with real safety weight (AUTOPILOT still auto-approves everything).
+3. MCP / hooks / git-handler surfaces (data layer exists in Integrations.swift).
+4. Alignment audit at 900pt width — the control strip now carries mode + effort
+   + provider + model + approval + reasoning and needs a narrow-window pass.
+5. App icon; window restoration; accessibility labels.

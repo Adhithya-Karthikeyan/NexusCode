@@ -47,7 +47,7 @@ struct RootView: View {
         switch workspace.tab {
         case .chat:
             if let conversation = workspace.conversation {
-                ConversationView(controller: conversation)
+                ChatTab(controller: conversation)
             } else {
                 HeroEmptyState(
                     icon: "terminal",
@@ -58,17 +58,9 @@ struct RootView: View {
         case .agents:
             AgentsView()
         case .sessions:
-            HeroEmptyState(
-                icon: "clock.arrow.circlepath",
-                title: "Sessions — not built yet",
-                message: "Will list past runs via `nexus session list -o json`."
-            )
+            SessionsView()
         case .tasks:
-            HeroEmptyState(
-                icon: "checklist",
-                title: "Tasks — not built yet",
-                message: "Will list the durable task queue via `nexus task list -o json`."
-            )
+            TasksView()
         case .settings:
             SettingsView()
         }
@@ -587,5 +579,69 @@ struct ThemeSwatch: View {
         .padding(4)
         .background(theme.color(\.surfaceSunken), in: RoundedRectangle(cornerRadius: Radius.card + 4, style: .continuous))
         .contentShape(Rectangle())
+    }
+}
+
+/// Feeds the chat surface its live provider/model options.
+///
+/// `ConversationView` deliberately takes plain option lists rather than owning a
+/// `ProvidersController`, so it stays renderable from previews and tests with no
+/// process behind it. This is the one place that binds the real controller to
+/// that seam.
+struct ChatTab: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    let controller: ConversationController
+
+    @State private var providers: ProvidersController?
+    @State private var models: [PickerOption] = []
+    @State private var loadingModels = false
+
+    var body: some View {
+        ConversationView(
+            controller: controller,
+            providers: providerOptions,
+            models: models,
+            isLoadingModels: loadingModels,
+            onLoadModels: loadModels
+        )
+        .task(id: workspace.projectDirectory) {
+            guard let binary = workspace.binary else { return }
+            let loaded = ProvidersController(
+                client: NexusClient(binary: binary),
+                workingDirectory: workspace.projectDirectory
+            )
+            providers = loaded
+            await loaded.refresh()
+            // Preselect whatever the CLI would have resolved anyway, so the
+            // picker reflects reality instead of reading "none" while the
+            // backend quietly uses its own default.
+            if controller.provider == nil,
+               let first = loaded.selectable.first(where: \.isUsable) {
+                controller.provider = first.id
+                loadModels(first.id)
+            }
+        }
+    }
+
+    private var providerOptions: [PickerOption] {
+        (providers?.selectable ?? []).map { entry in
+            PickerOption(
+                id: entry.id,
+                detail: entry.provider.detail,
+                available: entry.isUsable,
+                disabledReason: entry.reason,
+                kind: entry.provider.kind
+            )
+        }
+    }
+
+    private func loadModels(_ providerId: String) {
+        guard let providers else { return }
+        loadingModels = true
+        Task {
+            let loaded = await providers.models(for: providerId)
+            models = loaded.map { PickerOption(id: $0.id, detail: $0.hint) }
+            loadingModels = false
+        }
     }
 }
