@@ -348,8 +348,13 @@ struct HeroEmptyState<Actions: View>: View {
 
             actions.padding(.top, Space.sm)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Padding BEFORE the flexible frame, never after. `.frame(maxHeight:
+        // .infinity).padding(44)` asks for all available space *plus* 88pt,
+        // which overflows the enclosing VStack and silently clips its siblings
+        // out of the window — that is what made the sidebar, control strip,
+        // composer and status bar disappear.
         .padding(Space.xxl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

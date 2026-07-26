@@ -1,0 +1,28 @@
+[
+  {
+    "id": "t1",
+    "title": "Write tests",
+    "status": "in_progress",
+    "parentId": "t0",
+    "deps": ["t-dep1", "t-dep2"],
+    "notes": "in progress, on track",
+    "createdAt": 1750000000000,
+    "updatedAt": 1750003600000
+  },
+  {
+    "id": "t2",
+    "title": "Ship it",
+    "status": "done",
+    "deps": [],
+    "createdAt": 1750000000000,
+    "updatedAt": 1750003600000
+  },
+  {
+    "id": "t3",
+    "title": "Mystery task",
+    "status": "waiting-on-review"
+  },
+  {
+    "title": "orphan task with no id"
+  }
+]

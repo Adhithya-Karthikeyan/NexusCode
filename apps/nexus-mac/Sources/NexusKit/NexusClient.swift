@@ -1,10 +1,35 @@
 import Foundation
 
-/// Lets `NexusClient.runJSON`'s `Result<JSONValue, String>` use a plain string
-/// as its failure — every failure it produces is already a short, user-facing
-/// message (a launch failure, a non-zero exit, invalid JSON), so a dedicated
-/// `Error` type would just be ceremony the callers immediately unwrap anyway.
-extension String: @retroactive Error {}
+/// Why `NexusClient.runJSON` failed to produce a value.
+///
+/// A typed enum rather than a bare string so a caller — the UI in particular —
+/// can distinguish "nexus isn't installed" from "the command itself failed"
+/// from "we got output back but couldn't parse it", instead of pattern-matching
+/// on prose.
+public enum NexusCommandError: Error, Sendable, Hashable {
+    /// The process could not even be started (e.g. the binary vanished).
+    case launchFailed(String)
+    /// The process ran and exited non-zero; `stderr` is whatever it wrote.
+    case nonZeroExit(code: Int32, stderr: String)
+    /// The process exited 0, but stdout wasn't a single valid JSON document.
+    case malformedJSON(String)
+    case cancelled
+
+    /// A short, user-facing rendering — for call sites (like the controllers
+    /// below) that just want something to display.
+    public var message: String {
+        switch self {
+        case .launchFailed(let detail):
+            return "failed to launch nexus: \(detail)"
+        case .nonZeroExit(let code, let stderr):
+            return stderr.isEmpty ? "nexus exited with code \(code)" : stderr
+        case .malformedJSON(let text):
+            return "nexus did not print valid JSON: \(text)"
+        case .cancelled:
+            return "cancelled"
+        }
+    }
+}
 
 /// One `nexus` invocation.
 ///
@@ -226,7 +251,7 @@ public actor NexusClient {
     /// interleaves anything else onto stdout in `-o json` mode) — so every
     /// collected line is rejoined in order and parsed once, rather than
     /// decoded line-by-line as a `UiEvent` the way `stream` does.
-    public nonisolated func runJSON(_ command: NexusCommand) async -> Result<JSONValue, String> {
+    public nonisolated func runJSON(_ command: NexusCommand) async -> Result<JSONValue, NexusCommandError> {
         let process = Process()
         let collector = OutputCollector()
         let termination = await withCheckedContinuation { (continuation: CheckedContinuation<NexusTermination, Never>) in
@@ -240,19 +265,18 @@ public actor NexusClient {
 
         switch termination {
         case .failedToLaunch(let message):
-            return .failure("failed to launch nexus: \(message)")
+            return .failure(.launchFailed(message))
         case .cancelled:
-            return .failure("cancelled")
+            return .failure(.cancelled)
         case .finished(let exitCode):
             guard exitCode == 0 else {
-                let detail = collector.diagnostics.joined(separator: "\n")
-                return .failure(detail.isEmpty ? "nexus exited with code \(exitCode)" : detail)
+                return .failure(.nonZeroExit(code: exitCode, stderr: collector.diagnostics.joined(separator: "\n")))
             }
             let text = collector.lines.joined(separator: "\n")
             guard let data = text.data(using: .utf8),
                   let value = try? JSONDecoder().decode(JSONValue.self, from: data)
             else {
-                return .failure("nexus did not print valid JSON: \(text)")
+                return .failure(.malformedJSON(text))
             }
             return .success(value)
         }

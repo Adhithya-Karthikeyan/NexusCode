@@ -1,0 +1,204 @@
+import XCTest
+@testable import NexusKit
+
+/// `NexusSession`/`NexusSessionDetail` decode straight from the `JSONValue`
+/// `NexusClient.runJSON` hands back — driven by fixtures shaped exactly like
+/// `nexus session list -o json` / `nexus session show <id> -o json`, each
+/// deliberately including a row too malformed to display (no `sessionId` /
+/// `run_id`) so the decode-drops-one-row-not-the-whole-list behavior has real
+/// coverage, not just the happy path.
+final class SessionsTests: XCTestCase {
+    private func fixtureURL(_ name: String) throws -> URL {
+        try XCTUnwrap(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: "json"))
+    }
+
+    private func fixtureText(_ name: String) throws -> String {
+        try String(contentsOf: try fixtureURL(name), encoding: .utf8)
+    }
+
+    private func fixtureJSON(_ name: String) throws -> JSONValue {
+        try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: try fixtureURL(name)))
+    }
+
+    // MARK: - NexusSession decode
+
+    func testDecodesANormalSessionListEntry() throws {
+        let items = try XCTUnwrap(try fixtureJSON("sessions-list").arrayValue)
+        let sessions = items.compactMap(NexusSession.init(json:))
+
+        let full = try XCTUnwrap(sessions.first { $0.sessionId == "s1" })
+        XCTAssertEqual(full.name, "Fix auth bug")
+        XCTAssertEqual(full.provider, "anthropic")
+        XCTAssertEqual(full.model, "claude-sonnet-5")
+        XCTAssertEqual(full.turnCount, 4)
+        XCTAssertEqual(full.runCount, 4)
+        XCTAssertEqual(full.eventCount, 22)
+        XCTAssertEqual(full.inputTokens, 1200)
+        XCTAssertEqual(full.outputTokens, 340)
+        XCTAssertEqual(full.costUsd, 0.0123, accuracy: 0.00001)
+    }
+
+    func testMissingOptionalFieldsDegradeThatFieldRatherThanTheWholeRow() throws {
+        let items = try XCTUnwrap(try fixtureJSON("sessions-list").arrayValue)
+        let sessions = items.compactMap(NexusSession.init(json:))
+
+        let minimal = try XCTUnwrap(sessions.first { $0.sessionId == "s2" })
+        XCTAssertNil(minimal.name)
+        XCTAssertNil(minimal.provider)
+        XCTAssertNil(minimal.model)
+        // Numeric fields still default sanely rather than propagating nil.
+        XCTAssertEqual(minimal.turnCount, 1)
+    }
+
+    func testRowsWithNoSessionIdAreDroppedRatherThanCrashingTheWholeDecode() throws {
+        let items = try XCTUnwrap(try fixtureJSON("sessions-list").arrayValue)
+        XCTAssertEqual(items.count, 3, "fixture shape changed")
+
+        let sessions = items.compactMap(NexusSession.init(json:))
+        XCTAssertEqual(sessions.count, 2, "the row without sessionId must be dropped, not fail the array")
+    }
+
+    func testEpochMillisAreConvertedNotTreatedAsSeconds() throws {
+        let items = try XCTUnwrap(try fixtureJSON("sessions-list").arrayValue)
+        let session = try XCTUnwrap(items.compactMap(NexusSession.init(json:)).first { $0.sessionId == "s1" })
+
+        // 1_750_000_000_000 ms is 1_750_000_000 s (mid-2025). Treating the wire
+        // value as seconds directly would land somewhere in the year 57426 —
+        // wrong by 1000x, and easy to miss at a glance.
+        XCTAssertEqual(session.createdAt, Date(timeIntervalSince1970: 1_750_000_000))
+        XCTAssertEqual(session.updatedAt, Date(timeIntervalSince1970: 1_750_003_600))
+    }
+
+    func testEmptyArrayProducesAnEmptyListNotAFailure() {
+        XCTAssertTrue([JSONValue]().compactMap(NexusSession.init(json:)).isEmpty)
+    }
+
+    // MARK: - NexusSessionDetail (`session show`)
+
+    func testDecodesSessionShowWithItsRunsList() throws {
+        let detail = NexusSessionDetail(json: try fixtureJSON("session-show"))
+
+        XCTAssertEqual(detail.session?.sessionId, "s1")
+        XCTAssertEqual(detail.runs.count, 2, "the run with no run_id must be dropped")
+
+        let full = try XCTUnwrap(detail.runs.first { $0.runId == "r1" })
+        XCTAssertEqual(full.adapterId, "anthropic")
+        XCTAssertEqual(full.model, "claude-sonnet-5")
+        XCTAssertEqual(full.status, "completed")
+
+        let degraded = try XCTUnwrap(detail.runs.first { $0.runId == "r2" })
+        XCTAssertNil(degraded.adapterId)
+        XCTAssertNil(degraded.model)
+        XCTAssertEqual(degraded.status, "completed")
+    }
+
+    func testSessionShowDegradesToANilSessionRatherThanThrowing() {
+        let detail = NexusSessionDetail(json: .object(["runs": .array([])]))
+        XCTAssertNil(detail.session)
+        XCTAssertTrue(detail.runs.isEmpty)
+    }
+
+    // MARK: - Command factories
+
+    func testSessionListBuildsAJsonCommand() {
+        XCTAssertEqual(NexusCommand.sessionList().arguments, ["session", "list", "-o", "json"])
+    }
+
+    func testSessionShowBuildsAJsonCommandWithTheId() {
+        XCTAssertEqual(NexusCommand.sessionShow(id: "s1").arguments, ["session", "show", "s1", "-o", "json"])
+    }
+
+    func testReplayBuildsAnNdjsonCommandNotAJsonOne() {
+        // `replay` streams the whole `UiEvent` log, so it must NOT go through
+        // `-o json` the way the other session commands do.
+        XCTAssertEqual(NexusCommand.replay(sessionId: "s1").arguments, ["replay", "s1", "-o", "ndjson"])
+    }
+
+    // MARK: - NexusClient.runJSON + SessionsController, against a fake `nexus`
+    //
+    // A tiny shell script stands in for the real CLI so these stay hermetic
+    // (no dependency on a built `nexus`, unlike `NexusClientIntegrationTests`)
+    // while still exercising the real `Process`/pipe/`LineBuffer` plumbing
+    // `runJSON` was added on top of.
+
+    private func fakeNexusBinary(printing output: String, exitCode: Int32 = 0) throws -> NexusBinary {
+        let script = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fake-nexus-\(UUID().uuidString)")
+        let contents = """
+        #!/bin/sh
+        cat <<'NEXUS_FIXTURE_EOF'
+        \(output)
+        NEXUS_FIXTURE_EOF
+        exit \(exitCode)
+        """
+        try contents.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return NexusBinary(url: script)
+    }
+
+    func testRunJSONParsesTheProcesssSingleStdoutDocument() async throws {
+        let binary = try fakeNexusBinary(printing: #"{"sessionId":"s1","turnCount":2}"#)
+        let result = await NexusClient(binary: binary).runJSON(NexusCommand(["session", "list"]))
+
+        guard case .success(let value) = result else {
+            return XCTFail("expected success, got \(result)")
+        }
+        XCTAssertEqual(value["sessionId"]?.stringValue, "s1")
+    }
+
+    func testRunJSONSurfacesMalformedStdoutAsAFailureNotACrash() async throws {
+        let binary = try fakeNexusBinary(printing: "this is not { json")
+        let result = await NexusClient(binary: binary).runJSON(NexusCommand(["session", "list"]))
+
+        guard case .failure(.malformedJSON(let text)) = result else {
+            return XCTFail("expected .malformedJSON, got \(result)")
+        }
+        XCTAssertTrue(text.contains("this is not"))
+    }
+
+    func testRunJSONSurfacesANonZeroExitAsAFailure() async throws {
+        let binary = try fakeNexusBinary(printing: "boom", exitCode: 1)
+        let result = await NexusClient(binary: binary).runJSON(NexusCommand(["session", "list"]))
+
+        guard case .failure(.nonZeroExit(let code, _)) = result else {
+            return XCTFail("expected .nonZeroExit, got \(result)")
+        }
+        XCTAssertEqual(code, 1)
+    }
+
+    @MainActor
+    func testSessionsControllerRefreshPopulatesFromRealProcessOutputNewestUpdatedFirst() async throws {
+        let binary = try fakeNexusBinary(printing: try fixtureText("sessions-list"))
+        let controller = SessionsController(client: NexusClient(binary: binary))
+
+        await controller.refresh()
+
+        XCTAssertNil(controller.error)
+        XCTAssertFalse(controller.isLoading)
+        XCTAssertEqual(controller.sessions.count, 2, "the malformed row must be dropped")
+        XCTAssertEqual(controller.sessions.first?.sessionId, "s2", "s2 was updated later than s1")
+    }
+
+    @MainActor
+    func testSessionsControllerSurfacesRunJSONFailureAsItsError() async throws {
+        let binary = try fakeNexusBinary(printing: "not json")
+        let controller = SessionsController(client: NexusClient(binary: binary))
+
+        await controller.refresh()
+
+        XCTAssertTrue(controller.sessions.isEmpty)
+        XCTAssertNotNil(controller.error)
+    }
+
+    @MainActor
+    func testReplayCommandForThreadsTheWorkingDirectoryAndSessionId() {
+        let cwd = URL(fileURLWithPath: "/tmp")
+        let controller = SessionsController(
+            client: NexusClient(binary: NexusBinary(url: URL(fileURLWithPath: "/bin/echo"))),
+            workingDirectory: cwd
+        )
+        let command = controller.replayCommand(for: "s1")
+        XCTAssertEqual(command.arguments, ["replay", "s1", "-o", "ndjson"])
+        XCTAssertEqual(command.workingDirectory, cwd)
+    }
+}

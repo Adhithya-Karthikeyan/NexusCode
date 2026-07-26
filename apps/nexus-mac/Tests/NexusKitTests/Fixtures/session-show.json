@@ -1,0 +1,21 @@
+{
+  "session": {
+    "sessionId": "s1",
+    "name": "Fix auth bug",
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "turnCount": 4,
+    "runCount": 4,
+    "eventCount": 22,
+    "inputTokens": 1200,
+    "outputTokens": 340,
+    "costUsd": 0.0123,
+    "createdAt": 1750000000000,
+    "updatedAt": 1750003600000
+  },
+  "runs": [
+    { "run_id": "r1", "adapter_id": "anthropic", "model": "claude-sonnet-5", "status": "completed" },
+    { "run_id": "r2", "status": "completed" },
+    { "adapter_id": "orphan-run-no-id" }
+  ]
+}

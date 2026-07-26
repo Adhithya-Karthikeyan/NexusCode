@@ -100,7 +100,7 @@ private extension Array where Element == AgentRow {
                 if a.element.isRunning != b.element.isRunning { return a.element.isRunning }
                 return a.offset < b.offset
             }
-            .map(\.element)
+            .map { $0.element }
     }
 }
 

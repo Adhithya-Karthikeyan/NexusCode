@@ -36,6 +36,37 @@ public struct NexusSession: Sendable, Hashable, Identifiable {
 
     public var id: String { sessionId }
 
+    /// Plain memberwise construction — for previews and tests. Kept separate
+    /// from `init?(json:)` below, which is the only one that talks to the CLI's
+    /// wire format.
+    public init(
+        sessionId: String,
+        name: String? = nil,
+        provider: String? = nil,
+        model: String? = nil,
+        turnCount: Int = 0,
+        runCount: Int = 0,
+        eventCount: Int = 0,
+        inputTokens: Int = 0,
+        outputTokens: Int = 0,
+        costUsd: Double = 0,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
+    ) {
+        self.sessionId = sessionId
+        self.name = name
+        self.provider = provider
+        self.model = model
+        self.turnCount = turnCount
+        self.runCount = runCount
+        self.eventCount = eventCount
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.costUsd = costUsd
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
     /// `nil` only when the row has no `sessionId` at all — every other field
     /// tolerates absence, but `sessionId` is the key `session show` and
     /// `replay` are looked up by, so a row without one is not displayable.
@@ -64,6 +95,13 @@ public struct NexusSessionRun: Sendable, Hashable, Identifiable {
     public let status: String?
 
     public var id: String { runId }
+
+    public init(runId: String, adapterId: String? = nil, model: String? = nil, status: String? = nil) {
+        self.runId = runId
+        self.adapterId = adapterId
+        self.model = model
+        self.status = status
+    }
 
     public init?(json: JSONValue) {
         guard let runId = json["run_id"]?.stringValue else { return nil }
@@ -116,8 +154,8 @@ public final class SessionsController {
             sessions = items.compactMap(NexusSession.init(json:))
                 .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
             error = nil
-        case .failure(let message):
-            error = message
+        case .failure(let commandError):
+            error = commandError.message
         }
     }
 
@@ -126,8 +164,8 @@ public final class SessionsController {
         switch await client.runJSON(.sessionShow(id: sessionId, cwd: workingDirectory)) {
         case .success(let value):
             return NexusSessionDetail(json: value)
-        case .failure(let message):
-            error = message
+        case .failure(let commandError):
+            error = commandError.message
             return nil
         }
     }

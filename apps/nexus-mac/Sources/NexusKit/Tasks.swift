@@ -36,6 +36,29 @@ public struct NexusTask: Sendable, Hashable, Identifiable {
     public let createdAt: Date?
     public let updatedAt: Date?
 
+    /// Plain memberwise construction — for previews and tests. Kept separate
+    /// from `init?(json:)` below, which is the only one that talks to the
+    /// CLI's wire format.
+    public init(
+        id: String,
+        title: String,
+        status: TaskStatus = .todo,
+        parentId: String? = nil,
+        deps: [String] = [],
+        notes: String? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.parentId = parentId
+        self.deps = deps
+        self.notes = notes
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
     /// `nil` only when the row has no `id` at all. Unlike `OMCAgent`'s
     /// synthesized placeholder id, a missing id here is NOT papered over with
     /// a generated one: this id is round-tripped straight into a real command
@@ -82,8 +105,8 @@ public final class TasksController {
             }
             tasks = items.compactMap(NexusTask.init(json:))
             error = nil
-        case .failure(let message):
-            error = message
+        case .failure(let commandError):
+            error = commandError.message
         }
     }
 
@@ -95,8 +118,8 @@ public final class TasksController {
         case .success:
             await refresh()
             return true
-        case .failure(let message):
-            error = message
+        case .failure(let commandError):
+            error = commandError.message
             return false
         }
     }
@@ -114,8 +137,8 @@ public final class TasksController {
         case .success:
             await refresh()
             return true
-        case .failure(let message):
-            error = message
+        case .failure(let commandError):
+            error = commandError.message
             return false
         }
     }
@@ -126,8 +149,8 @@ public final class TasksController {
         case .success:
             await refresh()
             return true
-        case .failure(let message):
-            error = message
+        case .failure(let commandError):
+            error = commandError.message
             return false
         }
     }
