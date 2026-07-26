@@ -17,6 +17,36 @@ struct ConversationView: View {
     @State private var showsReasoning = false
     @FocusState private var composerFocused: Bool
 
+    // MARK: - Provider/model picker seam
+    //
+    // `ProvidersController` (NexusKit) is being built concurrently by another
+    // agent and may not exist yet. Rather than block on it, this view takes
+    // plain option lists plus a load callback; once the controller lands the
+    // caller wires `providers`, `models` and `onLoadModels` from it — nothing
+    // in this file needs to change. `effort` below is local for the same
+    // reason: the controller has no such property yet, so it stays view state
+    // until the lead lifts it — `commandPreview` already treats it as
+    // authoritative for the `--effort` flag it appends.
+    var providers: [PickerOption] = []
+    var models: [PickerOption] = []
+    var isLoadingModels = false
+    var onLoadModels: (String) -> Void = { _ in }
+    @State private var effort: EffortLevel = .off
+
+    init(
+        controller: ConversationController,
+        providers: [PickerOption] = [],
+        models: [PickerOption] = [],
+        isLoadingModels: Bool = false,
+        onLoadModels: @escaping (String) -> Void = { _ in }
+    ) {
+        self.controller = controller
+        self.providers = providers
+        self.models = models
+        self.isLoadingModels = isLoadingModels
+        self.onLoadModels = onLoadModels
+    }
+
     var body: some View {
         transcript
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -26,7 +56,15 @@ struct ConversationView: View {
             // the composer and control strip entirely.
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    ControlStrip(controller: controller, showsReasoning: $showsReasoning)
+                    ControlStrip(
+                        controller: controller,
+                        showsReasoning: $showsReasoning,
+                        effort: $effort,
+                        providers: providers,
+                        models: models,
+                        isLoadingModels: isLoadingModels,
+                        onLoadModels: onLoadModels
+                    )
                     Divider().overlay(theme.color(\.chromeDivider))
                 }
             }
@@ -133,6 +171,10 @@ struct ConversationView: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             if !controller.diagnostics.isEmpty {
                 DiagnosticsStrip(lines: controller.diagnostics)
+            }
+
+            if controller.view.streaming {
+                UsageReadout(view: controller.view)
             }
 
             composerCard

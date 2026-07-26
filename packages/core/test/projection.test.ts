@@ -35,3 +35,28 @@ describe("chunkToUiEvents — usage projection", () => {
     expect(laneKey(1, ["anthropic", "openai"], false)).toBe("openai");
   });
 });
+
+describe("chunkToUiEvents — session event's sessionId (bug fix)", () => {
+  const runStart = {
+    type: "run-start",
+    runId: "run_abc",
+    adapterId: "mock",
+    model: "mock-fast",
+    ts: 0,
+  } as StreamChunk;
+
+  it("omits sessionId when the caller doesn't have one (backward compatible)", () => {
+    const events = chunkToUiEvents(runStart, "main");
+    const session = events.find((e) => e.t === "session");
+    expect(session).toBeDefined();
+    expect(session).not.toHaveProperty("sessionId");
+    // `id` — the run id — is untouched, for callers that only ever knew this field.
+    expect(session).toMatchObject({ id: "run_abc" });
+  });
+
+  it("carries the engine session id, distinct from the run id, when the caller passes one", () => {
+    const events = chunkToUiEvents(runStart, "main", "s_xyz");
+    const session = events.find((e) => e.t === "session");
+    expect(session).toMatchObject({ id: "run_abc", sessionId: "s_xyz" });
+  });
+});

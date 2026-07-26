@@ -28,6 +28,24 @@ tested + visually confirmed), 🔄 in progress, ⬜ not started.
 - ⬜ **Manual/auto handler** — approval mode. Currently AUTOPILOT
   auto-approves everything (`approve: () => true`); needs a real gate.
 
+### A2b. Sign-in / auth — first-class
+This is a harness for Claude, ChatGPT, Gemini etc., so auth is a primary
+surface. `nexus auth status -o json` already returns all 15 providers with
+`kind` (oauth / api-key / cloud-sso / cli-delegate), `loggedIn`, `method`,
+`detail`, `expiresIn`.
+- 🔄 **Auth screen** — signed-in vs available, per-provider action by kind.
+- 🔄 **Browser OAuth** (`nexus login <p>`) — long-running and interactive; must
+  stream its output so the user SEES the URL and can cancel.
+- 🔄 **API key capture** — via `nexus keys set --stdin`. A secret must NEVER be
+  passed as an argv argument: argv is world-readable to every process on the
+  machine. `SecureField` for entry; the CLI's SecretStore owns storage.
+- 🔄 **Device code** — only valid for Google-backed providers; the CLI rejects
+  it elsewhere with a clear error. Do not offer it where it cannot work.
+- 🔄 **CLI delegate** (claude-code / codex) — reuses the vendor CLI's own
+  session; needs no login here, and the UI must say so rather than showing a
+  dead button.
+- ⬜ **Token expiry** surfaced (anthropic currently reports ~5h remaining).
+
 ### A3. Screens
 - ⬜ **Sessions tab** — list, resume, replay. Data layer done (16 tests).
 - ⬜ **Tasks tab** — list, add, status transitions. Data layer done (18 tests).

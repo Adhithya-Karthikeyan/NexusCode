@@ -1,0 +1,31 @@
+{
+  "providers": [
+    { "id": "mock", "kind": "mock", "available": true },
+    {
+      "id": "groq",
+      "kind": "openai-compat",
+      "available": true,
+      "detail": "needs key: GROQ_API_KEY",
+      "needsKey": true
+    }
+  ],
+  "circuits": [],
+  "circuitStore": "~/Library/Application Support/nexuscode/provider-circuits.json",
+  "pricing": [
+    {
+      "providerId": "mock",
+      "models": [
+        { "modelId": "mock-fast", "pricing": null },
+        {
+          "modelId": "mock-smart",
+          "pricing": { "inputPerMTok": 3, "outputPerMTok": 15 }
+        }
+      ]
+    },
+    {
+      "providerId": "groq",
+      "models": [{ "modelId": "llama-3.3-70b-versatile", "pricing": null }]
+    },
+    { "providerId": "no-priced-models", "models": [] }
+  ]
+}
