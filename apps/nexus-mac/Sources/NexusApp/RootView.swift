@@ -61,6 +61,8 @@ struct RootView: View {
             SessionsView()
         case .tasks:
             TasksView()
+        case .accounts:
+            AuthView()
         case .settings:
             SettingsView()
         }
