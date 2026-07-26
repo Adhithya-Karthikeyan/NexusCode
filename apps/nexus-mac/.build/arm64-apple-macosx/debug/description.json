@@ -204,6 +204,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Sessions.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Theme.swift"
         },
         {
@@ -234,6 +238,7 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/OMCModels.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/OMCWorkspace.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/ProjectLocation.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Sessions.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Theme.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/UiEvent.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/ViewState.swift.o"
@@ -319,6 +324,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Sessions.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Theme.swift.o"
         },
         {
@@ -343,6 +352,7 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/OMC/OMCModels.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/OMC/OMCWorkspace.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ProjectLocation.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Sessions.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Theme.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/UiEvent.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ViewState.swift"
@@ -696,6 +706,7 @@
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/OMC/OMCModels.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/OMC/OMCWorkspace.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ProjectLocation.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Sessions.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Theme.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/UiEvent.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ViewState.swift",
@@ -1012,6 +1023,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Sessions.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Theme.swift.o"
         },
         {
@@ -1063,6 +1078,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ProjectLocation.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Sessions.swift"
         },
         {
           "kind" : "file",
@@ -1165,6 +1184,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/ProjectLocation.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Sessions.swift.o"
         },
         {
           "kind" : "file",
