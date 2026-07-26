@@ -1,0 +1,45 @@
+{
+  "groups": [
+    {
+      "group": "web",
+      "description": "web search / fetch / crawl (native fetch; SSRF-guarded)",
+      "enabled": false,
+      "tools": ["web_search", "web_fetch", "web_crawl"],
+      "integrations": []
+    },
+    {
+      "group": "browser",
+      "description": "headless browser automation (navigate/click/extract/screenshot)",
+      "enabled": false,
+      "tools": ["browser_navigate", "browser_click", "browser_extract", "browser_screenshot"],
+      "integrations": [
+        { "name": "playwright", "kind": "npm", "available": false, "hint": "npm i playwright" }
+      ]
+    },
+    {
+      "group": "containers",
+      "description": "read-oriented docker / kubernetes / openshift inspection",
+      "enabled": false,
+      "tools": ["docker_ps", "docker_images", "docker_logs", "k8s_get", "k8s_logs"],
+      "integrations": [
+        { "name": "docker", "kind": "bin", "available": false, "hint": "install the docker CLI" },
+        { "name": "kubectl", "kind": "bin", "available": false, "hint": "install kubectl" }
+      ]
+    },
+    { "description": "group row missing its name must be dropped", "enabled": true }
+  ],
+  "tools": [
+    { "name": "web_search", "permission": "network", "group": "web", "enabled": false, "integrationAvailable": null },
+    {
+      "name": "docker_ps",
+      "permission": "exec",
+      "group": "containers",
+      "enabled": false,
+      "integrationAvailable": false
+    },
+    { "name": "db_query", "permission": "network", "group": "db", "enabled": false, "integrationAvailable": true },
+    { "name": "future_tool", "permission": "admin", "group": "future", "enabled": true },
+    { "permission": "read", "group": "orphan", "enabled": true }
+  ],
+  "plugins": []
+}

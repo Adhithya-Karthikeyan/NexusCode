@@ -264,9 +264,13 @@ struct ConversationView: View {
     }
 
     private var commandPreview: String {
-        "nexus " + controller
-            .plannedCommand(for: draft.isEmpty ? "…" : draft)
-            .arguments
+        var args = controller.plannedCommand(for: draft.isEmpty ? "…" : draft).arguments
+        // `effort` has no home on the controller yet (see the seam note above),
+        // so the flag is spliced in here rather than inside `plannedCommand` —
+        // the one place this view already promises to show the exact `nexus`
+        // invocation, so it can't silently omit a flag the user picked.
+        if effort != .off { args += ["--effort", effort.rawValue] }
+        return "nexus " + args
             .map { $0.contains(" ") ? "\"\($0)\"" : $0 }
             .joined(separator: " ")
     }
