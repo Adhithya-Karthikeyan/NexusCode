@@ -103,3 +103,61 @@ describe("PermissionGate redaction", () => {
     expect((await g.check(tool("write"), {})).allowed).toBe(true);
   });
 });
+
+describe("PermissionGate 'ask' mode", () => {
+  it("allows read, and asks (never auto-allows) for write/exec/network", async () => {
+    const approve = vi.fn(async () => true);
+    const g = new PermissionGate({ mode: "ask", approve });
+    expect((await g.check(tool("read"), {})).allowed).toBe(true);
+    for (const p of ["write", "exec", "network"] as const) {
+      const d = await g.check(tool(p), {});
+      expect(d.allowed).toBe(true);
+      expect(d.viaApproval).toBe(true);
+    }
+    // Unlike workspace-write, EVERY mutating tier went through the approver —
+    // this is the mode that makes "manual" honest.
+    expect(approve).toHaveBeenCalledTimes(3);
+  });
+
+  it("denies write/exec/network outright with no approver configured, same as any other 'ask' outcome", async () => {
+    const g = new PermissionGate({ mode: "ask" });
+    for (const p of ["write", "exec", "network"] as const) {
+      expect((await g.check(tool(p), {})).allowed).toBe(false);
+    }
+  });
+});
+
+describe("PermissionGate ApproveFn returning ApproveOutcome", () => {
+  it("a plain boolean approver keeps the exact original reason text (no behavior change for existing callers)", async () => {
+    const approved = new PermissionGate({ mode: "ask", approve: async () => true });
+    const a = await approved.check(tool("write"), {});
+    expect(a.allowed).toBe(true);
+    expect(a.reason).toBe("write requires approval in ask mode: approved");
+
+    const denied = new PermissionGate({ mode: "ask", approve: async () => false });
+    const d = await denied.check(tool("write"), {});
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toBe("write requires approval in ask mode: denied");
+  });
+
+  it("an ApproveOutcome's note is appended to the reason, for both a grant and a denial", async () => {
+    const g = new PermissionGate({
+      mode: "ask",
+      approve: async (req) => ({ granted: false, note: req.toolName === "t_exec" ? "timeout" : "cancelled" }),
+    });
+    const exec = await g.check(tool("exec"), {});
+    expect(exec.allowed).toBe(false);
+    expect(exec.reason).toBe("exec requires approval in ask mode: denied (timeout)");
+
+    const g2 = new PermissionGate({ mode: "ask", approve: async () => ({ granted: true, note: "auto" }) });
+    const net = await g2.check(tool("network"), {});
+    expect(net.allowed).toBe(true);
+    expect(net.reason).toBe("network requires approval in ask mode: approved (auto)");
+  });
+
+  it("an ApproveOutcome with no note reads identically to a plain boolean", async () => {
+    const g = new PermissionGate({ mode: "ask", approve: async () => ({ granted: false }) });
+    const d = await g.check(tool("write"), {});
+    expect(d.reason).toBe("write requires approval in ask mode: denied");
+  });
+});
