@@ -85,6 +85,30 @@ public struct PendingApproval: Identifiable, Sendable, Hashable {
     #endif
 }
 
+/// The CLI's own settlement of an approval this app did not necessarily
+/// decide itself — decoded from a `UiEvent.Approval` whose `resolution` is
+/// set (a second wire event, same `id` as the original request).
+///
+/// `cause` is what a view reacts to instead of an explicit decision: `.explicit`
+/// already happened locally via `allow`/`deny` (this just confirms it — no
+/// further UI action needed); `.timeout` means no one answered in time (offer
+/// "ask again", never imply a refusal the human never gave); `.cancelled`/
+/// `.stdinClosed` mean the conversation is gone (dismiss as moot, don't show
+/// it as a "no").
+public struct ApprovalResolution: Identifiable, Sendable, Hashable {
+    public let id: String
+    public let granted: Bool
+    public let cause: UiEvent.Approval.Cause
+    public let receivedAt: Date
+
+    public init(id: String, granted: Bool, cause: UiEvent.Approval.Cause, receivedAt: Date = Date()) {
+        self.id = id
+        self.granted = granted
+        self.cause = cause
+        self.receivedAt = receivedAt
+    }
+}
+
 /// One yes/no decision, ready to become the persistent stdin control line
 /// `nexus chat --persistent -t` documents.
 public struct ApprovalDecision: Sendable, Hashable {
@@ -125,18 +149,39 @@ public struct ApprovalDecision: Sendable, Hashable {
 public final class ApprovalsController {
     public private(set) var pending: [PendingApproval] = []
 
+    /// The most recent settlement the CLI reported, for ANY approval — including
+    /// ones this app itself decided (`cause == .explicit`, a simple echo/no-op
+    /// by the time it arrives) and ones the harness decided on its own
+    /// (`.timeout`/`.cancelled`/`.stdinClosed`), which a view DOES need to
+    /// react to since nothing local already handled them. Overwritten by each
+    /// new resolution — a view that needs the full history should keep its
+    /// own log keyed off this.
+    public private(set) var lastResolution: ApprovalResolution?
+
     public init() {}
 
     /// The approval a view should show right now, if any — the oldest
     /// unresolved one, so a burst of tool calls is worked through in order.
     public var current: PendingApproval? { pending.first }
 
-    /// Fold one event in. Non-`.approval` events (and a malformed `.approval`
-    /// whose `detail` doesn't decode) are silently ignored, so this can be
+    /// Fold one event in. Non-`.approval` events are ignored, so this can be
     /// wired straight into the same event stream `ConversationController`
     /// already consumes with no extra filtering at the call site.
+    ///
+    /// An `.approval` event is one of two things: a REQUEST (no `resolution` —
+    /// added to `pending`) or a SETTLEMENT (`resolution` present — removes the
+    /// matching pending entry, if still there, and records `lastResolution`).
+    /// A malformed request (whose `detail` doesn't decode) is silently
+    /// ignored; a malformed/settlement-shaped event is never treated as a new
+    /// pending item even if it doesn't otherwise decode.
     public func ingest(_ event: UiEvent) {
-        guard case .approval(let raw) = event, let approval = PendingApproval(event: raw) else { return }
+        guard case .approval(let raw) = event else { return }
+        if let resolution = raw.resolution {
+            pending.removeAll { $0.id == raw.id }
+            lastResolution = ApprovalResolution(id: raw.id, granted: resolution.granted, cause: resolution.cause)
+            return
+        }
+        guard let approval = PendingApproval(event: raw) else { return }
         // A duplicate id (e.g. a replayed log, or a retried emit) replaces
         // rather than duplicates the queued entry.
         pending.removeAll { $0.id == approval.id }

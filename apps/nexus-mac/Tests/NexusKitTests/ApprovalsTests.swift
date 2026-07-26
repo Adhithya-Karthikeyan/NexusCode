@@ -27,6 +27,14 @@ final class ApprovalsTests: XCTestCase {
         """#
     }
 
+    /// The SECOND wire event for a given approval — its settlement. Matches
+    /// `ApprovalBroker.request`'s `settle` on the CLI side exactly.
+    private func resolutionLine(id: String = "appr_1", granted: Bool, cause: String) -> String {
+        #"""
+        {"t":"approval","lane":"main","id":"\#(id)","action":"shell","detail":"{\"toolName\":\"shell_exec\",\"permission\":\"exec\",\"mode\":\"ask\",\"reason\":\"exec requires approval in ask mode\",\"input\":{\"command\":\"echo\",\"args\":[\"hi\"]}}","resolution":{"granted":\#(granted),"cause":"\#(cause)"}}
+        """#
+    }
+
     // MARK: - PendingApproval decoding
 
     func testDecodesTheRealApprovalBrokerPayload() throws {
@@ -75,6 +83,33 @@ final class ApprovalsTests: XCTestCase {
             return XCTFail("expected an approval UiEvent")
         }
         XCTAssertNil(PendingApproval(event: raw))
+    }
+
+    // MARK: - Resolution decoding
+
+    func testARequestEventHasNoResolution() throws {
+        guard case .approval(let raw)? = UiEventDecoder.decodeLine(execLine()) else {
+            return XCTFail("expected an approval UiEvent")
+        }
+        XCTAssertNil(raw.resolution, "the original request is still pending — nothing has settled it yet")
+    }
+
+    func testDecodesEveryResolutionCause() throws {
+        let cases: [(String, UiEvent.Approval.Cause, Bool)] = [
+            ("explicit", .explicit, true),
+            ("timeout", .timeout, false),
+            ("cancelled", .cancelled, false),
+            ("stdin-closed", .stdinClosed, false),
+        ]
+        for (wire, expected, granted) in cases {
+            guard case .approval(let raw)? = UiEventDecoder.decodeLine(resolutionLine(granted: granted, cause: wire)) else {
+                XCTFail("expected an approval UiEvent for cause \(wire)")
+                continue
+            }
+            let resolution = try XCTUnwrap(raw.resolution, "cause \(wire) must decode a resolution")
+            XCTAssertEqual(resolution.cause, expected)
+            XCTAssertEqual(resolution.granted, granted)
+        }
     }
 
     // MARK: - ApprovalDecision wire format
@@ -202,5 +237,68 @@ final class ApprovalsTests: XCTestCase {
 
         controller.clear()
         XCTAssertTrue(controller.pending.isEmpty)
+    }
+
+    // MARK: - Resolution ingestion
+
+    @MainActor
+    func testIngestingATimeoutResolutionRemovesItFromPendingAndRecordsIt() throws {
+        let controller = ApprovalsController()
+        guard case .approval(let request)? = UiEventDecoder.decodeLine(execLine()) else {
+            return XCTFail("expected an approval UiEvent")
+        }
+        controller.ingest(.approval(request))
+        XCTAssertEqual(controller.pending.count, 1)
+
+        guard case .approval(let resolved)? = UiEventDecoder.decodeLine(resolutionLine(granted: false, cause: "timeout")) else {
+            return XCTFail("expected an approval UiEvent")
+        }
+        controller.ingest(.approval(resolved))
+
+        // The harness decided FOR the human — this must clear the pending
+        // item (there is nothing left to show a sheet for) and surface WHY,
+        // distinctly from an explicit "no".
+        XCTAssertTrue(controller.pending.isEmpty)
+        XCTAssertNil(controller.current)
+        let last = try XCTUnwrap(controller.lastResolution)
+        XCTAssertEqual(last.id, "appr_1")
+        XCTAssertEqual(last.cause, .timeout)
+        XCTAssertFalse(last.granted)
+    }
+
+    @MainActor
+    func testAResolutionForAnAlreadyLocallyDecidedApprovalIsHarmless() throws {
+        let controller = ApprovalsController()
+        guard case .approval(let request)? = UiEventDecoder.decodeLine(execLine()) else {
+            return XCTFail("expected an approval UiEvent")
+        }
+        controller.ingest(.approval(request))
+        // The app already decided locally (e.g. the user tapped Allow) —
+        // `allow()` already popped it from `pending` before the CLI's own
+        // echo of that decision arrives back over the wire.
+        _ = controller.allow()
+        XCTAssertTrue(controller.pending.isEmpty)
+
+        guard case .approval(let resolved)? = UiEventDecoder.decodeLine(resolutionLine(granted: true, cause: "explicit")) else {
+            return XCTFail("expected an approval UiEvent")
+        }
+        controller.ingest(.approval(resolved))
+
+        XCTAssertTrue(controller.pending.isEmpty, "must not resurrect an already-resolved approval")
+        XCTAssertEqual(controller.lastResolution?.cause, .explicit)
+    }
+
+    @MainActor
+    func testAResolutionEventNeverAddsANewPendingItem() throws {
+        let controller = ApprovalsController()
+        guard case .approval(let resolved)? = UiEventDecoder.decodeLine(resolutionLine(granted: false, cause: "cancelled")) else {
+            return XCTFail("expected an approval UiEvent")
+        }
+        // A resolution arriving with no matching request in `pending` (e.g. a
+        // reconnecting client that missed the original) must not be
+        // misread as a brand-new approval to show a sheet for.
+        controller.ingest(.approval(resolved))
+        XCTAssertTrue(controller.pending.isEmpty)
+        XCTAssertEqual(controller.lastResolution?.cause, .cancelled)
     }
 }

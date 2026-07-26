@@ -37,42 +37,29 @@
 > The app was rendering all eight tabs correctly earlier in the session; four
 > were audited at two window sizes. Nothing is lost.
 
-## A0. NEXT TASK, fully specified — structured deny reason
+## A0. NEXT TASK — use the resolution cause in the UI
 
-Approvals works and is verified (real ALLOW/DENY transcript, fail-closed 120s
-timeout). What is MISSING is a machine-readable deny reason. Today it is prose
-only: `"...: denied (timeout)"` / `"(cancelled)"` / `"(stdin-closed)"` / plain
-`": denied"` for an explicit no. `ApprovalBroker` in
-`packages/cli/src/commands.ts` ALREADY computes the distinction (grep `note:`) —
-it simply is not exposed as data.
+✅ DONE: structured deny reason. The CLI emits TWO `approval` events per gated
+call, same `id`. `resolution` absent = pending; present = settled, carrying
+`{granted, cause}` where cause is a closed set:
+`"explicit" | "timeout" | "cancelled" | "stdin-closed"`. Swift decodes it as
+`UiEvent.Approval.Resolution` and `ApprovalsController` records `lastResolution`.
+Deliberately a follow-up event rather than a field on `tool_result`: that would
+have meant touching the FROZEN `StreamChunk` contract shared by every tool
+execution, for what is really approval-specific bookkeeping.
 
-WHY THIS IS NOT COSMETIC — the three cases need different UI:
-- explicit   -> final. Do NOT offer a retry; the user decided.
-- timeout    -> NOT a decision. Offer "ask again"; do not imply refusal.
-- cancelled / stdin-closed -> the conversation is gone; dismiss it, do not
-  report it as a refusal.
-A client cannot tell these apart safely by substring-matching prose, and the
-failure is SILENT: reword the message for readability and every consumer quietly
-stops distinguishing them. This is the same mistake as the original
-`Result<JSONValue, String>` that had to be replaced with a typed
-`NexusCommandError`. Do not repeat it.
+⬜ REMAINING — the UI does not yet BRANCH on `cause`. The data is there and the
+sheet correctly dismisses on settlement, but all four causes currently look the
+same to the user. They should not:
+- `.explicit`    -> final. Show the outcome; do NOT offer a retry.
+- `.timeout`     -> NOT a refusal. Say the request expired and offer "ask again".
+- `.cancelled` / `.stdinClosed` -> moot. Dismiss silently; never word it as a
+  refusal, because the user never refused anything.
+Wire this in `ApprovalSheet` / the sheet presentation in `ConversationView`,
+reading `ApprovalsController.lastResolution`. Small and self-contained — the hard
+part (getting the cause out of the CLI as data) is done.
 
-THE CHANGE (additive — nothing existing changes shape):
-1. `packages/tools/src/permission.ts` — turn `ApproveOutcome.note?: string` into
-   a closed set, e.g. `reason?: "explicit" | "timeout" | "cancelled" | "stdin-closed"`.
-   Keep appending the human-readable string to the recorded reason exactly as now.
-2. Surface it as DATA on the event the app already folds — `tool_result` is most
-   useful; a follow-up `approval` event is acceptable if cleaner.
-3. Absence of the field MUST mean `"explicit"`, so older CLI builds decode
-   sensibly rather than failing.
-4. Swift: decode it optionally on `UiEvent` (same pattern as `Session.sessionId`,
-   optional precisely so the app works against both old and new CLIs), then
-   branch the retry affordance in `ApprovalSheet` on it.
-5. Tests both sides: every reason round-trips, AND a plain `boolean` approver
-   still produces the byte-identical reason string (that regression test already
-   exists — keep it green).
-
-## A. Explicitly requested
+## A. Explicitly requested## A. Explicitly requested
 
 ### A1. Harness fundamentals
 - ✅ **Persistent session** — one long-lived `nexus` process per conversation,

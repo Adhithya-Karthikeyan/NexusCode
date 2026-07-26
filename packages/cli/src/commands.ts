@@ -2977,8 +2977,20 @@ async function buildApprovalDiff(req: ApprovalRequest, cwd: string): Promise<str
  * Never leaves a tool call — and thus the whole persistent process — blocked
  * forever with no signal.
  */
+/**
+ * The closed set of WHY an approval was settled — a structured companion to
+ * the human-readable `reason` string `PermissionGate` already records (kept
+ * verbatim, for the CLI transcript and logs). A client needs this to react
+ * correctly: `"explicit"` is a real decision (final — show it and stop);
+ * `"timeout"` is NOT a decision (no one answered — offer to ask again);
+ * `"cancelled"`/`"stdin-closed"` mean the conversation is gone (the approval
+ * is moot, dismiss it rather than reporting a refusal). A substring match on
+ * `reason` can't safely tell these apart, and reason text is free to reword.
+ */
+type ApprovalCause = "explicit" | "timeout" | "cancelled" | "stdin-closed";
+
 class ApprovalBroker {
-  private readonly pending = new Map<string, (outcome: ApproveOutcome) => void>();
+  private readonly pending = new Map<string, (outcome: ApproveOutcome, cause: ApprovalCause) => void>();
 
   constructor(
     private readonly cwd: string,
@@ -3010,37 +3022,50 @@ class ApprovalBroker {
 
     return new Promise<ApproveOutcome>((resolve) => {
       const scope = this.getScope();
+      // A second `approval` event, same `id`, carrying the structured
+      // `resolution` — see the `ApprovalCause` doc above for why a client
+      // needs this alongside (not instead of) the prose `reason`.
+      const settle = (outcome: ApproveOutcome, cause: ApprovalCause): void => {
+        this.emit({
+          t: "approval",
+          lane: "main",
+          id,
+          action,
+          detail: JSON.stringify(detail),
+          resolution: { granted: outcome.granted, cause },
+        });
+        resolve(outcome);
+      };
       if (scope?.isCancelled) {
-        resolve({ granted: false, note: "cancelled" });
+        settle({ granted: false, note: "cancelled" }, "cancelled");
         return;
       }
       let timer: ReturnType<typeof setTimeout>;
-      const finish = (outcome: ApproveOutcome): void => {
+      const finish = (outcome: ApproveOutcome, cause: ApprovalCause): void => {
         if (!this.pending.delete(id)) return; // already settled
         clearTimeout(timer);
         scope?.signal.removeEventListener("abort", onAbort);
-        resolve(outcome);
+        settle(outcome, cause);
       };
-      const onAbort = (): void => finish({ granted: false, note: "cancelled" });
+      const onAbort = (): void => finish({ granted: false, note: "cancelled" }, "cancelled");
       scope?.signal.addEventListener("abort", onAbort);
-      timer = setTimeout(() => finish({ granted: false, note: "timeout" }), APPROVAL_TIMEOUT_MS);
+      timer = setTimeout(() => finish({ granted: false, note: "timeout" }, "timeout"), APPROVAL_TIMEOUT_MS);
       this.pending.set(id, finish);
     });
   }
 
   /**
    * Resolve a pending approval from an explicit decision line. A no-op for an
-   * unknown/expired id. No `note`: the recorded reason stays the plain
-   * "...: approved"/"...: denied" — its ABSENCE is what marks this as a real
-   * human answer, distinct from a harness-side timeout/cancellation/shutdown.
+   * unknown/expired id. `cause: "explicit"` — a real human (or scripted
+   * client) answer, distinct from the harness deciding for them.
    */
   decide(id: string, decision: "allow" | "deny"): void {
-    this.pending.get(id)?.({ granted: decision === "allow" });
+    this.pending.get(id)?.({ granted: decision === "allow" }, "explicit");
   }
 
   /** Deny every still-pending approval (stdin EOF: no more decisions can ever arrive). */
   denyAll(): void {
-    for (const resolve of [...this.pending.values()]) resolve({ granted: false, note: "stdin-closed" });
+    for (const finish of [...this.pending.values()]) finish({ granted: false, note: "stdin-closed" }, "stdin-closed");
   }
 }
 

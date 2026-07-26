@@ -105,6 +105,35 @@ public enum UiEvent: Sendable, Hashable {
         public let id: String
         public let action: String
         public let detail: String
+        /// Present only on a SECOND `approval` event carrying the same `id` as
+        /// an earlier request — the CLI's own settlement of that approval.
+        /// `nil` on the original request (still pending) and on the
+        /// wrapped-coding-CLI's unrelated approval-request flow, which never
+        /// resolves this way.
+        public let resolution: Resolution?
+
+        /// The structured outcome of an approval, alongside (not instead of)
+        /// the human-readable `reason` prose the CLI still records in the
+        /// corresponding `tool_result` — this is what a client switches on
+        /// instead of parsing that prose.
+        public struct Resolution: Sendable, Hashable, Codable {
+            public let granted: Bool
+            public let cause: Cause
+        }
+
+        /// A closed set — exactly what `nexus chat --persistent -t`'s real
+        /// approval broker can report. `.explicit` is a real human (or
+        /// scripted client) decision — final, show it and stop. The other
+        /// three are the HARNESS deciding FOR the human and want different
+        /// treatment: `.timeout` is NOT a decision (offer to ask again);
+        /// `.cancelled`/`.stdinClosed` mean the conversation is gone (the
+        /// approval is moot — dismiss it, don't report it as a refusal).
+        public enum Cause: String, Sendable, Hashable, Codable {
+            case explicit
+            case timeout
+            case cancelled
+            case stdinClosed = "stdin-closed"
+        }
     }
 
     public struct Usage: Sendable, Hashable, Codable {

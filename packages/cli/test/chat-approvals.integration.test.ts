@@ -169,6 +169,8 @@ interface NdjsonLine {
   ok?: boolean;
   result?: unknown;
   turnId?: string;
+  /** Present only on the SECOND `approval` event for a given `id` — its settlement. */
+  resolution?: { granted: boolean; cause: "explicit" | "timeout" | "cancelled" | "stdin-closed" };
   [key: string]: unknown;
 }
 
@@ -261,6 +263,13 @@ describe("nexus chat --persistent -t — real tool approvals", () => {
 
     child.stdin.write(`${JSON.stringify({ type: "approval", id: approval.id, decision: "allow" })}\n`);
 
+    // The structured settlement: a SECOND `approval` event, same id, carrying
+    // `resolution` — the machine-readable companion to the prose reason, so a
+    // client never has to substring-match to tell an explicit "yes" apart
+    // from the harness timing out or cancelling on the human's behalf.
+    const resolved = await lines.waitFor((e) => e.t === "approval" && e.id === approval.id && e.resolution !== undefined);
+    expect(resolved.resolution).toEqual({ granted: true, cause: "explicit" });
+
     const toolResult = await lines.waitFor((e) => e.t === "tool_result");
     expect(toolResult.ok).toBe(true);
     expect(JSON.stringify(toolResult.result)).toContain("approved-token");
@@ -287,6 +296,9 @@ describe("nexus chat --persistent -t — real tool approvals", () => {
 
     const approval = await waitForApproval(lines);
     child.stdin.write(`${JSON.stringify({ type: "approval", id: approval.id, decision: "deny" })}\n`);
+
+    const resolved = await lines.waitFor((e) => e.t === "approval" && e.id === approval.id && e.resolution !== undefined);
+    expect(resolved.resolution).toEqual({ granted: false, cause: "explicit" });
 
     const toolResult = await lines.waitFor((e) => e.t === "tool_result");
     expect(toolResult.ok).toBe(false);
@@ -329,8 +341,14 @@ describe("nexus chat --persistent -t — real tool approvals", () => {
     const lines = lineWaiter(child);
 
     child.stdin.write("please run the command\n");
-    await waitForApproval(lines);
+    const approval = await waitForApproval(lines);
     // No decision line ever written — the broker's own timeout must fire.
+
+    const resolved = await lines.waitFor(
+      (e) => e.t === "approval" && e.id === approval.id && e.resolution !== undefined,
+      5_000,
+    );
+    expect(resolved.resolution).toEqual({ granted: false, cause: "timeout" });
 
     const toolResult = await lines.waitFor((e) => e.t === "tool_result", 5_000);
     expect(toolResult.ok).toBe(false);
@@ -353,10 +371,16 @@ describe("nexus chat --persistent -t — real tool approvals", () => {
     const lines = lineWaiter(child);
 
     child.stdin.write("please run the command\n");
-    await waitForApproval(lines);
+    const approval = await waitForApproval(lines);
     // No decision line ever written — SIGINT cancels the turn (and with it,
     // this pending approval) instead of a timeout or an explicit deny.
     child.kill("SIGINT");
+
+    const resolved = await lines.waitFor(
+      (e) => e.t === "approval" && e.id === approval.id && e.resolution !== undefined,
+      5_000,
+    );
+    expect(resolved.resolution).toEqual({ granted: false, cause: "cancelled" });
 
     const toolResult = await lines.waitFor((e) => e.t === "tool_result", 5_000);
     expect(toolResult.ok).toBe(false);
@@ -365,6 +389,30 @@ describe("nexus chat --persistent -t — real tool approvals", () => {
     // SIGINT closes the process (mirrors every other command's Ctrl+C); it
     // must exit cleanly rather than hang or crash.
     expect(await closed).not.toBeNull();
+  }, 30_000);
+
+  it("stdin EOF with an approval still pending denies it as 'stdin-closed' — no decision can ever arrive", async () => {
+    received.length = 0;
+    const child = spawnChat(["--ask"]);
+    const closed = new Promise<number>((resolve) => child.on("close", (code) => resolve(code ?? -1)));
+    const lines = lineWaiter(child);
+
+    child.stdin.write("please run the command\n");
+    const approval = await waitForApproval(lines);
+    // Close stdin (plain EOF, no SIGINT) with the approval still unanswered.
+    child.stdin.end();
+
+    const resolved = await lines.waitFor(
+      (e) => e.t === "approval" && e.id === approval.id && e.resolution !== undefined,
+      5_000,
+    );
+    expect(resolved.resolution).toEqual({ granted: false, cause: "stdin-closed" });
+
+    const toolResult = await lines.waitFor((e) => e.t === "tool_result", 5_000);
+    expect(toolResult.ok).toBe(false);
+    expect(JSON.stringify(toolResult.result)).toContain("denied (stdin-closed)");
+
+    expect(await closed).toBe(0);
   }, 30_000);
 
   it("default mode (no --ask/--yolo/--approve) denies exec outright, with no approval prompt at all", async () => {
