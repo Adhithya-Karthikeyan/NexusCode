@@ -71,6 +71,68 @@ describe("subprocess base — transport failures", () => {
     expect(chunks.filter((c) => c.type === "run-end" || c.type === "error")).toHaveLength(1);
     expect(chunks[0]?.type).toBe("run-start");
   });
+
+  it("classifies a CLI usage-limit diagnostic on stderr as quota_exhausted", async () => {
+    const quotaSpec: CliSpec<SubprocessConfig> = {
+      ...noopSpec,
+      buildArgs: () => [
+        "-e",
+        "process.stderr.write(\"You've hit your usage limit; limit resets at 2am\\n\"); process.exit(1)",
+      ],
+    };
+    const adapter = createSubprocessAdapter({ bin: process.execPath }, quotaSpec);
+    const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
+    const last = chunks.at(-1);
+    expect(last?.type === "error" && last.error.code).toBe("quota_exhausted");
+    expect(last?.type === "error" && last.error.message).toContain("resets at 2am");
+  });
+
+  it("drains large stderr without deadlocking and caps the surfaced diagnostic", async () => {
+    const noisySpec: CliSpec<SubprocessConfig> = {
+      ...noopSpec,
+      buildArgs: () => [
+        "-e",
+        "process.stderr.write('x'.repeat(1024 * 1024)); process.exit(1)",
+      ],
+    };
+    const adapter = createSubprocessAdapter({ bin: process.execPath }, noisySpec);
+    const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
+    const last = chunks.at(-1);
+    expect(last?.type === "error" && last.error.code).toBe("cli_exit");
+    expect(last?.type === "error" && last.error.message.length).toBeLessThanOrEqual(16_384);
+  }, 10_000);
+
+  it("turns malformed stdout into one terminal parse error instead of continuing after an error chunk", async () => {
+    const malformedSpec: CliSpec<SubprocessConfig> = {
+      ...noopSpec,
+      buildArgs: () => ["-e", "process.stdout.write('not-json\\n'); process.exit(0)"],
+    };
+    const adapter = createSubprocessAdapter({ bin: process.execPath }, malformedSpec);
+    const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
+    expect(chunks.filter((c) => c.type === "run-end" || c.type === "error")).toHaveLength(1);
+    const last = chunks.at(-1);
+    expect(last?.type === "error" && last.error.code).toBe("parse");
+    expect(last?.type === "error" && last.error.message).toContain("not-json");
+  });
+
+  it("bounds an oversized NDJSON record before parsing it", async () => {
+    const oversizedSpec: CliSpec<SubprocessConfig> = {
+      ...noopSpec,
+      buildArgs: () => [
+        "-e",
+        "process.stdout.write(JSON.stringify({type:'future-event',payload:'x'.repeat(4096)})+'\\n')",
+      ],
+    };
+    const adapter = createSubprocessAdapter(
+      { bin: process.execPath, maxOutputLineChars: 1024 },
+      oversizedSpec,
+    );
+    const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
+    expect(chunks.filter((c) => c.type === "run-end" || c.type === "error")).toHaveLength(1);
+    const last = chunks.at(-1);
+    expect(last?.type === "error" && last.error.code).toBe("parse");
+    expect(last?.type === "error" && last.error.message).toContain("exceeded the 1024-character");
+  });
 });
 
 // A spec that launches the fixture via `node <fixture>` and never maps a

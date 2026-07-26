@@ -129,6 +129,95 @@ describe("wave 6 — sessions", () => {
     expect(events.map((e) => e.t)).toContain("session");
     expect(events.some((e) => e.t === "text")).toBe(true);
   }, 20_000);
+
+  it("session rename/branch/delete mutations emit valid JSON", async () => {
+    const id = await firstSessionId();
+    const rename = await runCli([
+      "session",
+      "rename",
+      id,
+      "json-session",
+      "-o",
+      "json",
+    ]);
+    expect(rename.code).toBe(0);
+    expect(JSON.parse(rename.stdout.trim())).toEqual({
+      sessionId: id,
+      name: "json-session",
+    });
+
+    const branch = await runCli([
+      "session",
+      "branch",
+      id,
+      "--name",
+      "json-branch",
+      "-o",
+      "json",
+    ]);
+    expect(branch.code).toBe(0);
+    const branched = JSON.parse(branch.stdout.trim()) as {
+      sessionId: string;
+      parentSessionId: string;
+      name: string;
+    };
+    expect(branched).toMatchObject({
+      parentSessionId: id,
+      name: "json-branch",
+    });
+
+    const remove = await runCli([
+      "session",
+      "delete",
+      branched.sessionId,
+      "-o",
+      "json",
+    ]);
+    expect(remove.code).toBe(0);
+    expect(JSON.parse(remove.stdout.trim())).toEqual({
+      sessionId: branched.sessionId,
+      deleted: true,
+    });
+  }, 20_000);
+});
+
+describe("wave 6 — history JSON contract", () => {
+  it("uses public camelCase fields and accepts the listed runId in history show", async () => {
+    await seedMockRun("history json contract");
+    const list = await runCli(["history", "list", "-o", "json"]);
+    expect(list.code).toBe(0);
+    const runs = JSON.parse(list.stdout.trim()) as Array<{
+      runId: string;
+      sessionId: string;
+      provider: string;
+      createdAt: number;
+      run_id?: string;
+    }>;
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs[0]).toMatchObject({
+      runId: expect.any(String),
+      sessionId: expect.any(String),
+      provider: "mock",
+      createdAt: expect.any(Number),
+    });
+    expect(runs[0]!.run_id).toBeUndefined();
+
+    const show = await runCli(["history", "show", runs[0]!.runId, "-o", "json"]);
+    expect(show.code).toBe(0);
+    const events = JSON.parse(show.stdout.trim()) as Array<{
+      runId: string;
+      sessionId: string;
+      payload: unknown;
+      run_id?: string;
+    }>;
+    expect(events.length).toBeGreaterThan(0);
+    expect(events[0]).toMatchObject({
+      runId: runs[0]!.runId,
+      sessionId: runs[0]!.sessionId,
+      payload: expect.any(Object),
+    });
+    expect(events[0]!.run_id).toBeUndefined();
+  }, 20_000);
 });
 
 describe("wave 6 — code receipt (private, local, redaction-safe)", () => {

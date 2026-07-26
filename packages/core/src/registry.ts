@@ -68,6 +68,16 @@ export class ProviderRegistry {
     return this.byId.get(id)?.health;
   }
 
+  /**
+   * Record an offline availability result discovered by the runtime (missing
+   * credential/binary, without probing the network).
+   */
+  setHealth(id: string, health: HealthStatus): void {
+    const entry = this.byId.get(id);
+    if (!entry) throw new AdapterError("invalid_request", `no provider "${id}"`);
+    entry.health = { ...health };
+  }
+
   /** All adapters whose capabilities satisfy the predicate. */
   select(pred: (c: Capabilities) => boolean): ProviderAdapter[] {
     const out: ProviderAdapter[] = [];

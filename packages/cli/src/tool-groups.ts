@@ -20,7 +20,7 @@ import { createBrowserTools } from "@nexuscode/tools-browser";
 import { createDbTools } from "@nexuscode/tools-db";
 import { createCloudTools } from "@nexuscode/tools-cloud";
 import { createContainerTools } from "@nexuscode/tools-containers";
-import { createAiTools } from "@nexuscode/tools-ai";
+import { createAiTools, type AiToolDeps } from "@nexuscode/tools-ai";
 import { createRequire } from "node:module";
 import type { Tool, ToolRegistry } from "@nexuscode/tools";
 import type { NexusConfig, ToolGroupName } from "@nexuscode/config";
@@ -126,7 +126,16 @@ function webToolsOptions(config: NexusConfig): WebToolsOptions {
 }
 
 /** Build the tools for one group from config. Never throws; never imports a heavy lib. */
-export function buildToolGroup(group: ToolGroupName, config: NexusConfig): Tool[] {
+export interface ToolGroupBuildOptions {
+  /** Active provider/model used by vision and OCR fallback tools. */
+  ai?: AiToolDeps;
+}
+
+export function buildToolGroup(
+  group: ToolGroupName,
+  config: NexusConfig,
+  options: ToolGroupBuildOptions = {},
+): Tool[] {
   switch (group) {
     case "web":
       return webTools(webToolsOptions(config));
@@ -139,7 +148,7 @@ export function buildToolGroup(group: ToolGroupName, config: NexusConfig): Tool[
     case "containers":
       return createContainerTools();
     case "ai":
-      return createAiTools();
+      return createAiTools(options.ai);
     default:
       return [];
   }
@@ -162,13 +171,17 @@ export interface RegisteredGroup {
  * registered per group so a caller can report it. Fully offline: building a group
  * never loads its optional client library.
  */
-export function registerToolGroups(registry: ToolRegistry, config: NexusConfig): RegisteredGroup[] {
+export function registerToolGroups(
+  registry: ToolRegistry,
+  config: NexusConfig,
+  options: ToolGroupBuildOptions = {},
+): RegisteredGroup[] {
   const out: RegisteredGroup[] = [];
   // De-dupe while preserving the canonical order.
   const enabled = TOOL_GROUP_NAMES.filter((g) => config.tools.enabledGroups.includes(g));
   for (const group of enabled) {
     const toolNames: string[] = [];
-    for (const tool of buildToolGroup(group, config)) {
+    for (const tool of buildToolGroup(group, config, options)) {
       if (registry.has(tool.name)) continue;
       registry.register(tool);
       toolNames.push(tool.name);

@@ -18,6 +18,7 @@ import {
   userText,
   type Capabilities,
   type ChatRequest,
+  type ContentBlock,
   type FinishReason,
   type Message,
   type StreamChunk,
@@ -35,10 +36,11 @@ import {
   type ToolResult,
 } from "@nexuscode/tools";
 import { randomUUID } from "node:crypto";
-import type { CallContext, ProviderAdapter } from "../adapter.js";
+import type { CallContext } from "../adapter.js";
 import type { Labeled } from "../bus.js";
 import type { CancelScope } from "../cancel.js";
-import { DEFAULT_RETRY_POLICY, withRetry } from "../resilience.js";
+import { DEFAULT_RETRY_POLICY } from "../resilience.js";
+import type { PartialRecoveryPlan } from "../partial-recovery.js";
 import {
   spanEnd,
   spanFirstToken,
@@ -55,6 +57,15 @@ import {
   type RouteRule,
   type RouterMetadata,
 } from "../router.js";
+import {
+  adaptRequestForSwitch,
+  assessSwitchTarget,
+  compatibleSwitchCandidates,
+  inferSwitchRequirements,
+  makeSwitchReceipt,
+  type ProviderSwitchAssessment,
+  type ProviderSwitchPlan,
+} from "../switching.js";
 import type {
   ChainStage,
   ContextAssembler,
@@ -71,6 +82,7 @@ import type {
   RunStatus,
   SamplingParams,
   ToolCall,
+  TransferHandle,
   UnifiedDiff,
 } from "../types.js";
 import { createJudge, type CreateJudgeOptions } from "./judge.js";
@@ -151,6 +163,11 @@ function makeCallContext(runId: string, spec: RunSpec, scope: CancelScope, ctx: 
     traceId: ctx.turnId,
     runId,
   };
+  const providerSessionId =
+    ctx.switching?.nativeSessionSlots === false
+      ? undefined
+      : ctx.providerSessions?.[spec.adapterId];
+  if (providerSessionId) c.providerSessionId = providerSessionId;
   if (ctx.emit) c.emit = ctx.emit;
   return c;
 }
@@ -238,20 +255,364 @@ async function* traceRunStream(
   }
 }
 
-function makeRun(spec: RunSpec, ctx: RunContext): Run {
+/**
+ * Apply project context to an ordinary (non-agent) run. This deliberately lives
+ * in the kernel so `ask`, `chat`, every orchestration primitive, and routed
+ * failover cannot accidentally bypass the same assembler that agents use.
+ */
+async function assembleRunSpec(
+  spec: RunSpec,
+  ctx: RunContext,
+  signal: AbortSignal,
+): Promise<RunSpec> {
+  const assembler = ctx.contextAssembler;
+  if (!assembler) return spec;
+  try {
+    const system = spec.params?.system;
+    const assembled = await assembler.assemble(
+      system !== undefined ? { messages: spec.input, system } : { messages: spec.input },
+      signal,
+    );
+    const params: SamplingParams = { ...(spec.params ?? {}) };
+    if (assembled.system !== undefined) params.system = assembled.system;
+    else delete params.system;
+    return {
+      ...spec,
+      input: assembled.messages,
+      ...(Object.keys(params).length > 0 ? { params } : {}),
+    };
+  } catch (e) {
+    ctx.emit?.({ type: "context-error", traceId: ctx.turnId, ts: Date.now(), data: String(e) });
+    return spec;
+  }
+}
+
+/** Resolve one run-local transfer handle without ever breaking dispatch. */
+function transferFor(ctx: RunContext, runId: string): TransferHandle | undefined {
+  if (ctx.transfer) return ctx.transfer;
+  try {
+    return ctx.transferFactory?.({
+      sessionId: ctx.sessionId,
+      turnId: ctx.turnId,
+      runId,
+    });
+  } catch (e) {
+    emitTransferError(ctx, e);
+    return undefined;
+  }
+}
+
+/** Capture an ordinary provider stream into the provider-neutral store. */
+async function* captureRunStream(
+  source: AsyncIterable<StreamChunk>,
+  transfer: TransferHandle | undefined,
+  ctx: RunContext,
+): AsyncIterable<StreamChunk> {
+  if (!transfer) {
+    yield* source;
+    return;
+  }
+  try {
+    try {
+      await transfer.turnBoundary("start", 0);
+    } catch (e) {
+      emitTransferError(ctx, e);
+    }
+    for await (const chunk of source) {
+      try {
+        transfer.captureVerbatim(chunk);
+      } catch (e) {
+        emitTransferError(ctx, e);
+      }
+      try {
+        await transfer.project(chunk);
+      } catch (e) {
+        emitTransferError(ctx, e);
+      }
+      yield chunk;
+    }
+  } finally {
+    try {
+      await transfer.turnBoundary("end", 0);
+    } catch (e) {
+      emitTransferError(ctx, e);
+    }
+    try {
+      transfer.flush();
+    } catch (e) {
+      emitTransferError(ctx, e);
+    }
+  }
+}
+
+function makeRun(spec: RunSpec, ctx: RunContext, allowUniversalSwitch = false): Run {
   const runId = `run_${randomUUID()}`;
   return {
     id: runId,
     spec,
-    stream(scope: CancelScope): AsyncIterable<StreamChunk> {
+    async *stream(scope: CancelScope): AsyncIterable<StreamChunk> {
+      let effectiveSpec = await assembleRunSpec(spec, ctx, scope.signal);
+      const previous = ctx.previousProvider;
+      if (
+        previous &&
+        previous.providerId !== effectiveSpec.adapterId &&
+        ctx.handoffBuilder
+      ) {
+        try {
+          const handoff = ctx.handoffBuilder({
+            sessionId: ctx.sessionId,
+            turnId: ctx.turnId,
+            fromProviderId: previous.providerId,
+            fromModelId: previous.modelId,
+            toProviderId: effectiveSpec.adapterId,
+            toModelId: effectiveSpec.model,
+            error: new AdapterError(
+              "unknown",
+              `explicit provider switch from ${previous.providerId} to ${effectiveSpec.adapterId}`,
+              { providerId: previous.providerId, retryable: false },
+            ),
+            attempt: 0,
+            messages: effectiveSpec.input,
+            ...(effectiveSpec.params?.system !== undefined
+              ? { system: effectiveSpec.params.system }
+              : {}),
+          });
+          if (handoff) effectiveSpec = { ...effectiveSpec, input: [handoff, ...effectiveSpec.input] };
+        } catch (error) {
+          ctx.emit?.({
+            type: "transfer-error",
+            traceId: ctx.turnId,
+            runId,
+            ts: Date.now(),
+            data: `handoff capsule failed: ${String(error)}`,
+          });
+        }
+      }
       const policy = ctx.retryPolicy ?? DEFAULT_RETRY_POLICY;
-      const req = specToRequest(spec);
-      const attempt = (): AsyncIterable<StreamChunk> => {
-        const adapter = ctx.registry.get(spec.adapterId); // throws → folded to error chunk
-        return adapter.stream(req, makeCallContext(runId, spec, scope, ctx));
+      const sourceCandidate: RouteCandidate = {
+        providerId: effectiveSpec.adapterId,
+        modelId: effectiveSpec.model,
+        reason: "explicit",
       };
-      const base = stampRunId(withRetry(attempt, policy, scope.signal), runId);
-      return traceRunStream(base, runId, spec, ctx, runSpanKind(ctx, spec.adapterId));
+      let baseRequest = specToRequest(effectiveSpec);
+      try {
+        const sourceAssessment = assessSwitchTarget(
+          sourceCandidate.providerId,
+          sourceCandidate.modelId,
+          ctx.registry.capabilitiesOf(sourceCandidate.providerId),
+          inferSwitchRequirements(baseRequest, ctx.switching?.executionRequirements),
+          {
+            ...(ctx.pricing ? { pricing: ctx.pricing } : {}),
+            ...(ctx.switching?.contextSafetyMarginTokens !== undefined
+              ? {
+                  contextSafetyMarginTokens:
+                    ctx.switching.contextSafetyMarginTokens,
+                }
+              : {}),
+          },
+        );
+        if (sourceAssessment.compatible) {
+          baseRequest = adaptRequestForSwitch(
+            baseRequest,
+            sourceAssessment,
+            ctx.switching?.contextSafetyMarginTokens,
+          ).request;
+        }
+      } catch {
+        // Capability metadata is advisory for the explicitly selected source.
+      }
+      const fallbackRows =
+        allowUniversalSwitch && ctx.switching
+          ? compatibleSwitchCandidates(
+              ctx.registry,
+              sourceCandidate,
+              baseRequest,
+              ctx.switching,
+              ctx.pricing,
+            )
+          : [];
+      const candidates = [
+        sourceCandidate,
+        ...fallbackRows.map((row) => row.candidate),
+      ];
+      const assessments = new Map<string, ProviderSwitchAssessment>(
+        fallbackRows.map((row) => [
+          `${row.candidate.providerId}\u0000${row.candidate.modelId}`,
+          row.assessment,
+        ]),
+      );
+      let nextHandoff: Message | undefined;
+      let latestAdaptations: string[] = [];
+      const makeCandidateRun = registryRunFactory(
+        ctx.registry,
+        (candidate, adapter, recovery) => {
+          let request: ChatRequest = {
+            ...baseRequest,
+            model: candidate.modelId,
+            messages: [
+              ...(nextHandoff ? [nextHandoff] : []),
+              ...baseRequest.messages,
+              ...(recovery?.messages ?? []),
+            ],
+          };
+          latestAdaptations = [];
+          const assessment = assessments.get(
+            `${candidate.providerId}\u0000${candidate.modelId}`,
+          );
+          if (assessment) {
+            const adapted = adaptRequestForSwitch(
+              request,
+              assessment,
+              ctx.switching?.contextSafetyMarginTokens,
+            );
+            request = adapted.request;
+            latestAdaptations = adapted.adaptations;
+          }
+          const candidateSpec: RunSpec = {
+            ...effectiveSpec,
+            adapterId: candidate.providerId,
+            model: candidate.modelId,
+            input: request.messages,
+          };
+          return adapter.stream(
+            request,
+            makeCallContext(runId, candidateSpec, scope, ctx),
+          );
+        },
+        scope,
+        policy,
+        {
+          ...(ctx.providerCircuit ? { providerCircuit: ctx.providerCircuit } : {}),
+          ...(ctx.circuitTargetFor ? { circuitTargetFor: ctx.circuitTargetFor } : {}),
+        },
+      );
+      const originalGoal =
+        [...effectiveSpec.input]
+          .reverse()
+          .find((message) => message.role === "user")
+          ?.content.filter(
+            (block): block is Extract<ContentBlock, { type: "text" }> =>
+              block.type === "text",
+          )
+          .map((block) => block.text)
+          .join("\n")
+          .trim() || "Continue the current Nexus project task.";
+      const failoverOptions = {
+        ...(ctx.switching?.policy === "ask"
+          ? {
+              beforeFailover: async (event: FailoverEvent): Promise<boolean> => {
+                const assessment = assessments.get(
+                  `${event.to.providerId}\u0000${event.to.modelId}`,
+                );
+                if (!assessment || !ctx.switching?.approve) return false;
+                const plan: ProviderSwitchPlan = {
+                  from: event.from,
+                  to: event.to,
+                  assessment,
+                  reason: `${event.error.code}: ${event.error.message}`,
+                };
+                return ctx.switching.approve(plan);
+              },
+            }
+          : {}),
+        onFailover: (event: FailoverEvent): void => {
+          if (ctx.handoffBuilder) {
+            try {
+              nextHandoff = ctx.handoffBuilder({
+                sessionId: ctx.sessionId,
+                turnId: ctx.turnId,
+                fromProviderId: event.from.providerId,
+                fromModelId: event.from.modelId,
+                toProviderId: event.to.providerId,
+                toModelId: event.to.modelId,
+                error: event.error,
+                attempt: event.attempt,
+                messages: effectiveSpec.input,
+                ...(effectiveSpec.params?.system !== undefined
+                  ? { system: effectiveSpec.params.system }
+                  : {}),
+              });
+            } catch (error) {
+              ctx.emit?.({
+                type: "transfer-error",
+                traceId: ctx.turnId,
+                runId,
+                ts: Date.now(),
+                data: `handoff capsule failed: ${String(error)}`,
+              });
+            }
+          }
+          const assessment = assessments.get(
+            `${event.to.providerId}\u0000${event.to.modelId}`,
+          );
+          const targetAdaptations = assessment
+            ? adaptRequestForSwitch(
+                { ...baseRequest, model: event.to.modelId },
+                assessment,
+                ctx.switching?.contextSafetyMarginTokens,
+              ).adaptations
+            : latestAdaptations;
+          const receipt = makeSwitchReceipt({
+            sessionId: ctx.sessionId,
+            turnId: ctx.turnId,
+            from: event.from,
+            to: event.to,
+            reason: `${event.error.code}: ${event.error.message}`,
+            automatic: true,
+            adaptations: targetAdaptations,
+            warnings: assessment?.warnings ?? [],
+          });
+          ctx.lastSwitchReceipt = receipt;
+          try {
+            const reported = ctx.switching?.onReceipt?.(receipt);
+            if (reported instanceof Promise) reported.catch(() => {});
+          } catch {
+            /* a receipt observer cannot sink the switch */
+          }
+          ctx.emit?.({
+            type: "provider-switch",
+            traceId: ctx.turnId,
+            runId,
+            ts: Date.now(),
+            data: receipt,
+          });
+        },
+        ...(ctx.partialRecovery?.enabled
+          ? {
+              partialRecovery: {
+                enabled: true,
+                originalGoal,
+                ...(ctx.partialRecovery.classifyAction
+                  ? { classifyAction: ctx.partialRecovery.classifyAction }
+                  : {}),
+                ...(ctx.partialRecovery.maxPartialContextCodePoints !== undefined
+                  ? {
+                      maxPartialContextCodePoints:
+                        ctx.partialRecovery.maxPartialContextCodePoints,
+                    }
+                  : {}),
+                ...(ctx.partialRecovery.mutationApproval
+                  ? { mutationApproval: ctx.partialRecovery.mutationApproval }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+      const switched = runWithFailover(
+        candidates,
+        makeCandidateRun,
+        scope,
+        failoverOptions,
+      );
+      const base = stampRunId(switched, runId);
+      const traced = traceRunStream(
+        base,
+        runId,
+        effectiveSpec,
+        ctx,
+        runSpanKind(ctx, effectiveSpec.adapterId),
+      );
+      yield* captureRunStream(traced, transferFor(ctx, runId), ctx);
     },
   };
 }
@@ -273,6 +634,8 @@ interface LaneBuilder {
 }
 
 function makeLaneBuilder(spec: RunSpec, runId: string): LaneBuilder {
+  let adapterId = spec.adapterId;
+  let modelId = spec.model;
   let text = "";
   const toolCalls: ToolCall[] = [];
   const openTools = new Map<string, { name: string; args: string }>();
@@ -289,6 +652,10 @@ function makeLaneBuilder(spec: RunSpec, runId: string): LaneBuilder {
   return {
     consume(chunk: StreamChunk): void {
       switch (chunk.type) {
+        case "run-start":
+          adapterId = chunk.adapterId;
+          modelId = chunk.model;
+          break;
         case "text-delta":
           if (chunk.channel !== "reasoning") text += chunk.text;
           break;
@@ -337,14 +704,14 @@ function makeLaneBuilder(spec: RunSpec, runId: string): LaneBuilder {
         });
         finishReason = "error";
       }
-      const price = pricing?.[spec.model];
+      const price = pricing?.[modelId];
       if (price) usage.costUsd = computeCost(usage, price);
       else if (usage.reportedCostUsd != null) usage.costUsd = usage.reportedCostUsd;
 
       const result: RunResult = {
         runId,
-        adapterId: spec.adapterId,
-        model: spec.model,
+        adapterId,
+        model: modelId,
         status,
         text,
         toolCalls,
@@ -363,7 +730,7 @@ function makeLaneBuilder(spec: RunSpec, runId: string): LaneBuilder {
 function runLanes(kind: OrchestrationKind, specs: RunSpec[], ctx: RunContext): OrchestrationHandle {
   const scope = ctx.scope.child();
   const queue = new AsyncQueue<Labeled<StreamChunk>>();
-  const runs = specs.map((s) => makeRun(s, ctx));
+  const runs = specs.map((s) => makeRun(s, ctx, kind === "single"));
   const builders = runs.map((r) => makeLaneBuilder(r.spec, r.id));
 
   let resolveOutcome!: (o: OrchestrationOutcome) => void;
@@ -873,6 +1240,8 @@ export function selectRoute(spec: RouteRunSpec, ctx: RunContext): RouteCandidate
   return router.select(spec.rule, {
     registry: ctx.registry,
     ...(spec.capabilitiesNeeded ? { capabilitiesNeeded: spec.capabilitiesNeeded } : {}),
+    ...(ctx.providerCircuit ? { providerCircuit: ctx.providerCircuit } : {}),
+    ...(ctx.circuitTargetFor ? { circuitTargetFor: ctx.circuitTargetFor } : {}),
   });
 }
 
@@ -894,50 +1263,162 @@ export function dispatchRoute(
     const runId = `run_${randomUUID()}`;
     const laneScope = scope.child();
     const policy = ctx.retryPolicy ?? DEFAULT_RETRY_POLICY;
-
-    const makeRun = registryRunFactory(
-      ctx.registry,
-      (candidate, adapter) => {
-        const runSpec: RunSpec = {
-          adapterId: candidate.providerId,
-          model: candidate.modelId,
-          input: spec.input,
-          idempotencyKey: spec.idempotencyKey,
-          ...(spec.params ? { params: spec.params } : {}),
-        };
-        const req = specToRequest(runSpec);
-        const callCtx: CallContext = {
-          signal: laneScope.signal,
-          idempotencyKey: spec.idempotencyKey,
-          traceId: ctx.turnId,
-          runId,
-        };
-        if (ctx.emit) callCtx.emit = ctx.emit;
-        return adapter.stream(req, callCtx);
-      },
-      laneScope,
-      policy,
-    );
-
     const templateSpec: RunSpec = {
       adapterId: candidates[0]?.providerId ?? "",
       model: candidates[0]?.modelId ?? "",
       input: spec.input,
       idempotencyKey: spec.idempotencyKey,
+      ...(spec.params ? { params: spec.params } : {}),
     };
-    const builder = makeLaneBuilder(templateSpec, runId);
+    const effectiveSpec = await assembleRunSpec(templateSpec, ctx, laneScope.signal);
     let observedAdapter: string | undefined;
     let observedModel: string | undefined;
+    let nextHandoff: Message | undefined;
+    const firstCandidate = candidates[0];
+    if (
+      firstCandidate &&
+      ctx.previousProvider &&
+      ctx.previousProvider.providerId !== firstCandidate.providerId &&
+      ctx.handoffBuilder
+    ) {
+      try {
+        nextHandoff = ctx.handoffBuilder({
+          sessionId: ctx.sessionId,
+          turnId: ctx.turnId,
+          fromProviderId: ctx.previousProvider.providerId,
+          fromModelId: ctx.previousProvider.modelId,
+          toProviderId: firstCandidate.providerId,
+          toModelId: firstCandidate.modelId,
+          error: new AdapterError(
+            "unknown",
+            `explicit provider switch from ${ctx.previousProvider.providerId} to ${firstCandidate.providerId}`,
+            { providerId: ctx.previousProvider.providerId, retryable: false },
+          ),
+          attempt: 0,
+          messages: effectiveSpec.input,
+          ...(effectiveSpec.params?.system !== undefined
+            ? { system: effectiveSpec.params.system }
+            : {}),
+        });
+      } catch (error) {
+        ctx.emit?.({
+          type: "transfer-error",
+          traceId: ctx.turnId,
+          runId,
+          ts: Date.now(),
+          data: `handoff capsule failed: ${String(error)}`,
+        });
+      }
+    }
 
-    const failoverOpts = opts.onFailover ? { onFailover: opts.onFailover } : {};
+    const makeRun = registryRunFactory(
+      ctx.registry,
+      (candidate, adapter, recovery) => {
+        const input: Message[] = [
+          ...(nextHandoff ? [nextHandoff] : []),
+          ...effectiveSpec.input,
+          ...(recovery?.messages ?? []),
+        ];
+        const runSpec: RunSpec = {
+          adapterId: candidate.providerId,
+          model: candidate.modelId,
+          input,
+          idempotencyKey: spec.idempotencyKey,
+          ...(effectiveSpec.params ? { params: effectiveSpec.params } : {}),
+        };
+        const req = specToRequest(runSpec);
+        const callCtx = makeCallContext(runId, runSpec, laneScope, ctx);
+        return adapter.stream(req, callCtx);
+      },
+      laneScope,
+      policy,
+      {
+        ...(ctx.providerCircuit ? { providerCircuit: ctx.providerCircuit } : {}),
+        ...(ctx.circuitTargetFor ? { circuitTargetFor: ctx.circuitTargetFor } : {}),
+      },
+    );
+
+    const builder = makeLaneBuilder(templateSpec, runId);
+    const originalGoal =
+      [...spec.input]
+        .reverse()
+        .find((message) => message.role === "user")
+        ?.content.filter((block): block is Extract<ContentBlock, { type: "text" }> => block.type === "text")
+        .map((block) => block.text)
+        .join("\n")
+        .trim() || "Continue the current Nexus project task.";
+    const onFailover = (event: FailoverEvent): void => {
+      observedAdapter = event.to.providerId;
+      observedModel = event.to.modelId;
+      if (ctx.handoffBuilder) {
+        try {
+          nextHandoff = ctx.handoffBuilder({
+            sessionId: ctx.sessionId,
+            turnId: ctx.turnId,
+            fromProviderId: event.from.providerId,
+            fromModelId: event.from.modelId,
+            toProviderId: event.to.providerId,
+            toModelId: event.to.modelId,
+            error: event.error,
+            attempt: event.attempt,
+            messages: effectiveSpec.input,
+            ...(effectiveSpec.params?.system !== undefined
+              ? { system: effectiveSpec.params.system }
+              : {}),
+          });
+        } catch (error) {
+          ctx.emit?.({
+            type: "transfer-error",
+            traceId: ctx.turnId,
+            runId,
+            ts: Date.now(),
+            data: `handoff capsule failed: ${String(error)}`,
+          });
+        }
+      }
+      opts.onFailover?.(event);
+    };
+    const failoverOpts = {
+      onFailover,
+      ...(ctx.partialRecovery?.enabled
+        ? {
+            partialRecovery: {
+              enabled: true,
+              originalGoal,
+              ...(ctx.partialRecovery.classifyAction
+                ? { classifyAction: ctx.partialRecovery.classifyAction }
+                : {}),
+              ...(ctx.partialRecovery.maxPartialContextCodePoints !== undefined
+                ? {
+                    maxPartialContextCodePoints:
+                      ctx.partialRecovery.maxPartialContextCodePoints,
+                  }
+                : {}),
+              ...(ctx.partialRecovery.mutationApproval
+                ? { mutationApproval: ctx.partialRecovery.mutationApproval }
+                : {}),
+              onPlan: (plan: PartialRecoveryPlan) => {
+                ctx.emit?.({
+                  type: "partial-recovery",
+                  traceId: ctx.turnId,
+                  runId,
+                  ts: Date.now(),
+                  data: plan.audit,
+                });
+              },
+            },
+          }
+        : {}),
+    };
     const rawSource = stampRunId(runWithFailover(candidates, makeRun, laneScope, failoverOpts), runId);
-    const source = traceRunStream(
+    const traced = traceRunStream(
       rawSource,
       runId,
       templateSpec,
       ctx,
       runSpanKind(ctx, templateSpec.adapterId),
     );
+    const source = captureRunStream(traced, transferFor(ctx, runId), ctx);
     const labeledStream = ctx.bus.publish(source, { runId, laneIndex: 0 });
     for await (const labeled of labeledStream) {
       if (labeled.chunk.type === "run-start") {
@@ -952,7 +1433,19 @@ export function dispatchRoute(
     const result = builder.finish(ctx.pricing);
     // The winner is whichever candidate actually answered (failover may switch it).
     if (observedAdapter) result.adapterId = observedAdapter;
-    if (observedModel) result.model = observedModel;
+    if (observedModel) {
+      result.model = observedModel;
+      // The lane builder started with the first route candidate. A failover can
+      // land on a differently priced model, so re-price against the model that
+      // actually answered rather than retaining the abandoned candidate's cost.
+      const actualPrice = ctx.pricing?.[observedModel];
+      if (actualPrice) result.usage.costUsd = computeCost(result.usage, actualPrice);
+      else if (result.usage.reportedCostUsd != null) {
+        result.usage.costUsd = result.usage.reportedCostUsd;
+      } else {
+        delete result.usage.costUsd;
+      }
+    }
     await persistSummaries(ctx, [result]);
 
     const outcome: OrchestrationOutcome = {
@@ -1079,6 +1572,7 @@ async function executeToolCall(
   scope: CancelScope,
   runId: string,
   traceId: string,
+  ctx: RunContext,
 ): Promise<ToolResult> {
   let tool: Tool;
   try {
@@ -1103,6 +1597,40 @@ async function executeToolCall(
         return errText(`tool ${call.name} blocked by hook${verdict.reason ? `: ${verdict.reason}` : ""}`);
       }
       if (verdict.input !== undefined) input = verdict.input;
+    }
+  }
+
+  if (ctx.actionGuard) {
+    let permission = tool.permission;
+    if (tool.permissionFor) {
+      try {
+        permission = tool.permissionFor(input);
+      } catch {
+        permission = tool.permission;
+      }
+    }
+    try {
+      const guarded = await ctx.actionGuard({
+        sessionId: ctx.sessionId,
+        turnId: ctx.turnId,
+        actionId: call.id,
+        name: call.name,
+        input,
+        permission,
+      });
+      if (guarded.blocked) {
+        return errText(
+          `tool ${call.name} blocked by provider handoff guard${
+            guarded.reason ? `: ${guarded.reason}` : ""
+          }`,
+        );
+      }
+    } catch {
+      // A broken host guard fails closed for mutating actions, but never prevents
+      // harmless reconstruction reads.
+      if (permission !== "read") {
+        return errText(`tool ${call.name} blocked because the handoff guard failed`);
+      }
     }
   }
 
@@ -1160,10 +1688,15 @@ async function* agentStream(
   opts: ResolvedAgentOptions,
   scope: CancelScope,
   runId: string,
+  onProviderStart?: (providerId: string, modelId: string) => void,
 ): AsyncIterable<StreamChunk> {
-  let adapter: ProviderAdapter;
+  let activeCandidate: RouteCandidate = {
+    providerId: run.adapterId,
+    modelId: run.model,
+    reason: "explicit",
+  };
   try {
-    adapter = ctx.registry.get(run.adapterId);
+    ctx.registry.get(run.adapterId);
   } catch (e) {
     const err = e instanceof AdapterError ? e : new AdapterError("invalid_request", String(e));
     yield { type: "error", runId, error: err, retryable: err.retryable };
@@ -1172,6 +1705,58 @@ async function* agentStream(
 
   let system = run.params?.system;
   let messages: Message[] = [...run.input];
+  const previous = ctx.previousProvider;
+  if (previous && previous.providerId !== activeCandidate.providerId && ctx.handoffBuilder) {
+    try {
+      const handoff = ctx.handoffBuilder({
+        sessionId: ctx.sessionId,
+        turnId: ctx.turnId,
+        fromProviderId: previous.providerId,
+        fromModelId: previous.modelId,
+        toProviderId: activeCandidate.providerId,
+        toModelId: activeCandidate.modelId,
+        error: new AdapterError(
+          "unknown",
+          `explicit provider switch from ${previous.providerId} to ${activeCandidate.providerId}`,
+          { providerId: previous.providerId, retryable: false },
+        ),
+        attempt: 0,
+        messages,
+        ...(system !== undefined ? { system } : {}),
+      });
+      if (handoff) messages = [handoff, ...messages];
+      const receipt = makeSwitchReceipt({
+        sessionId: ctx.sessionId,
+        turnId: ctx.turnId,
+        from: {
+          providerId: previous.providerId,
+          modelId: previous.modelId,
+          reason: "explicit",
+        },
+        to: activeCandidate,
+        reason: "explicit provider selection",
+        automatic: false,
+        adaptations: [],
+        warnings: [],
+      });
+      ctx.lastSwitchReceipt = receipt;
+      ctx.emit?.({
+        type: "provider-switch",
+        traceId: ctx.turnId,
+        runId,
+        ts: Date.now(),
+        data: receipt,
+      });
+    } catch (error) {
+      ctx.emit?.({
+        type: "transfer-error",
+        traceId: ctx.turnId,
+        runId,
+        ts: Date.now(),
+        data: `handoff capsule failed: ${String(error)}`,
+      });
+    }
+  }
   // ZLCTS capture handle — optional. When present, the runner externalizes
   // every chunk (verbatim + projected), tool output, and turn boundary into the
   // Provider-Neutral Knowledge Core. When absent, behavior is unchanged.
@@ -1218,7 +1803,7 @@ async function* agentStream(
       }
     }
 
-    const req: ChatRequest = { model: run.model, messages };
+    let req: ChatRequest = { model: activeCandidate.modelId, messages };
     if (system !== undefined) req.system = system;
     // On the FINAL permitted turn, DROP the tools so the model must summarize
     // what it found into a real text answer instead of requesting yet another
@@ -1233,7 +1818,166 @@ async function* agentStream(
     if (run.params?.temperature !== undefined) req.temperature = run.params.temperature;
     if (run.params?.reasoning !== undefined) req.reasoning = run.params.reasoning;
 
-    const callCtx = makeCallContext(runId, run, scope, ctx);
+    try {
+      const sourceAssessment = assessSwitchTarget(
+        activeCandidate.providerId,
+        activeCandidate.modelId,
+        ctx.registry.capabilitiesOf(activeCandidate.providerId),
+        inferSwitchRequirements(req, ctx.switching?.executionRequirements),
+        {
+          ...(ctx.pricing ? { pricing: ctx.pricing } : {}),
+          ...(ctx.switching?.contextSafetyMarginTokens !== undefined
+            ? { contextSafetyMarginTokens: ctx.switching.contextSafetyMarginTokens }
+            : {}),
+        },
+      );
+      if (sourceAssessment.compatible) {
+        req = adaptRequestForSwitch(
+          req,
+          sourceAssessment,
+          ctx.switching?.contextSafetyMarginTokens,
+        ).request;
+      }
+    } catch {
+      // Capability metadata is advisory for an explicitly selected source.
+    }
+
+    const fallbackRows = ctx.switching
+      ? compatibleSwitchCandidates(
+          ctx.registry,
+          activeCandidate,
+          req,
+          ctx.switching,
+          ctx.pricing,
+        )
+      : [];
+    const candidates = [
+      activeCandidate,
+      ...fallbackRows.map((row) => row.candidate),
+    ];
+    const assessments = new Map<string, ProviderSwitchAssessment>(
+      fallbackRows.map((row) => [
+        `${row.candidate.providerId}\u0000${row.candidate.modelId}`,
+        row.assessment,
+      ]),
+    );
+    const handoffsThisTurn: Message[] = [];
+    let winningCandidate: RouteCandidate | undefined;
+    const makeProviderTurn = registryRunFactory(
+      ctx.registry,
+      (candidate, adapter) => {
+        let candidateRequest: ChatRequest = {
+          ...req,
+          model: candidate.modelId,
+          messages: [...handoffsThisTurn, ...req.messages],
+        };
+        const assessment = assessments.get(
+          `${candidate.providerId}\u0000${candidate.modelId}`,
+        );
+        if (assessment) {
+          candidateRequest = adaptRequestForSwitch(
+            candidateRequest,
+            assessment,
+            ctx.switching?.contextSafetyMarginTokens,
+          ).request;
+        }
+        const candidateSpec: RunSpec = {
+          ...run,
+          adapterId: candidate.providerId,
+          model: candidate.modelId,
+          input: candidateRequest.messages,
+        };
+        return adapter.stream(
+          candidateRequest,
+          makeCallContext(runId, candidateSpec, scope, ctx),
+        );
+      },
+      scope,
+      ctx.retryPolicy ?? DEFAULT_RETRY_POLICY,
+      {
+        ...(ctx.providerCircuit ? { providerCircuit: ctx.providerCircuit } : {}),
+        ...(ctx.circuitTargetFor ? { circuitTargetFor: ctx.circuitTargetFor } : {}),
+      },
+    );
+    const switchedTurn = runWithFailover(candidates, makeProviderTurn, scope, {
+      ...(ctx.switching?.policy === "ask"
+        ? {
+            beforeFailover: async (event: FailoverEvent): Promise<boolean> => {
+              const assessment = assessments.get(
+                `${event.to.providerId}\u0000${event.to.modelId}`,
+              );
+              if (!assessment || !ctx.switching?.approve) return false;
+              return ctx.switching.approve({
+                from: event.from,
+                to: event.to,
+                assessment,
+                reason: `${event.error.code}: ${event.error.message}`,
+              });
+            },
+          }
+        : {}),
+      onFailover: (event: FailoverEvent): void => {
+        if (ctx.handoffBuilder) {
+          try {
+            const handoff = ctx.handoffBuilder({
+              sessionId: ctx.sessionId,
+              turnId: ctx.turnId,
+              fromProviderId: event.from.providerId,
+              fromModelId: event.from.modelId,
+              toProviderId: event.to.providerId,
+              toModelId: event.to.modelId,
+              error: event.error,
+              attempt: event.attempt,
+              messages,
+              ...(system !== undefined ? { system } : {}),
+            });
+            if (handoff) handoffsThisTurn.push(handoff);
+          } catch (error) {
+            ctx.emit?.({
+              type: "transfer-error",
+              traceId: ctx.turnId,
+              runId,
+              ts: Date.now(),
+              data: `handoff capsule failed: ${String(error)}`,
+            });
+          }
+        }
+        const assessment = assessments.get(
+          `${event.to.providerId}\u0000${event.to.modelId}`,
+        );
+        const adaptations = assessment
+          ? adaptRequestForSwitch(
+              { ...req, model: event.to.modelId },
+              assessment,
+              ctx.switching?.contextSafetyMarginTokens,
+            ).adaptations
+          : [];
+        const receipt = makeSwitchReceipt({
+          sessionId: ctx.sessionId,
+          turnId: ctx.turnId,
+          from: event.from,
+          to: event.to,
+          reason: `${event.error.code}: ${event.error.message}`,
+          automatic: true,
+          adaptations,
+          warnings: assessment?.warnings ?? [],
+        });
+        ctx.lastSwitchReceipt = receipt;
+        try {
+          const reported = ctx.switching?.onReceipt?.(receipt);
+          if (reported instanceof Promise) reported.catch(() => {});
+        } catch {
+          /* a receipt observer cannot sink the switch */
+        }
+        ctx.emit?.({
+          type: "provider-switch",
+          traceId: ctx.turnId,
+          runId,
+          ts: Date.now(),
+          data: receipt,
+        });
+      },
+    });
 
     let heldRunEnd: Extract<StreamChunk, { type: "run-end" }> | undefined;
     let assistantMessage: Message | undefined;
@@ -1242,7 +1986,7 @@ async function* agentStream(
     let turnUsageChunk: Partial<Usage> | undefined;
     let errored = false;
 
-    for await (const chunk of adapter.stream(req, callCtx)) {
+    for await (const chunk of switchedTurn) {
       const stamped: StreamChunk = chunk.runId === runId ? chunk : ({ ...chunk, runId } as StreamChunk);
       // ZLCTS: capture every adapter chunk verbatim (unredacted, before
       // SessionStore.append redacts) and project it into the PNKC. Both are
@@ -1261,10 +2005,32 @@ async function* agentStream(
       }
       switch (stamped.type) {
         case "run-start":
+          onProviderStart?.(stamped.adapterId, stamped.model);
+          winningCandidate = {
+            providerId: stamped.adapterId,
+            modelId: stamped.model,
+            reason: stamped.adapterId === run.adapterId ? "explicit" : "fallback",
+          };
           // Only the very first provider invocation's run-start reaches consumers.
           if (!emittedRunStart) {
             emittedRunStart = true;
             yield stamped;
+          } else if (
+            stamped.raw &&
+            typeof stamped.raw === "object" &&
+            Array.isArray((stamped.raw as { failover?: unknown }).failover)
+          ) {
+            // Keep the exactly-one-run-start contract while still surfacing a
+            // provider switch that happens on a later tool-loop turn.
+            yield {
+              type: "session-init",
+              runId,
+              providerId: stamped.adapterId,
+              raw: {
+                ...(stamped.raw as Record<string, unknown>),
+                nexusProviderId: stamped.adapterId,
+              },
+            };
           }
           break;
         case "run-end":
@@ -1308,6 +2074,8 @@ async function* agentStream(
     }
 
     if (errored) return;
+    if (winningCandidate) activeCandidate = winningCandidate;
+    if (handoffsThisTurn.length > 0) messages = [...handoffsThisTurn, ...messages];
 
     // Record this turn's usage (prefer the terminal's figure; fall back to the
     // streamed usage chunk) for the run-wide aggregate. Normalize the possibly
@@ -1369,7 +2137,7 @@ async function* agentStream(
           attributes: { "nexus.tool": call.name || "" },
         }),
       );
-      const result = await executeToolCall(opts, call, scope, runId, ctx.turnId);
+      const result = await executeToolCall(opts, call, scope, runId, ctx.turnId, ctx);
       // ZLCTS: record the completed tool output for mid-tool-call-termination
       // resume, then capture the runner-synthesized tool-result chunk (it is
       // NOT emitted by the adapter, so the per-chunk hook above misses it).
@@ -1405,6 +2173,17 @@ async function* agentStream(
     messages = assistantMessage
       ? [...messages, assistantMessage, ...toolMessages]
       : [...messages, ...toolMessages];
+    // A tool-using provider turn is complete even though the overall agent run
+    // continues. Close it before opening the next boundary so recovery sees
+    // properly paired turns. The final iteration is closed by the max-turns
+    // terminal below.
+    if (transfer && turn < opts.maxTurns - 1) {
+      try {
+        await transfer.turnBoundary("end", turn);
+      } catch (e) {
+        emitTransferError(ctx, e);
+      }
+    }
   }
 
   // maxTurns exhausted while the model still wanted tools → synthesize a clean
@@ -1442,6 +2221,8 @@ export function dispatchAgent(run: RunSpec, ctx: RunContext, options: AgentOptio
   const queue = new AsyncQueue<Labeled<StreamChunk>>();
   const runId = `run_${randomUUID()}`;
   const builder = makeLaneBuilder(run, runId);
+  let observedAdapter = run.adapterId;
+  let observedModel = run.model;
 
   const opts: ResolvedAgentOptions = {
     tools: options.tools,
@@ -1461,31 +2242,57 @@ export function dispatchAgent(run: RunSpec, ctx: RunContext, options: AgentOptio
 
   const pump = async (): Promise<void> => {
     const runScope = scope.child();
+    const transfer = transferFor(ctx, runId);
+    const runCtx: RunContext = transfer ? { ...ctx, transfer } : ctx;
     // Bracket the agent run as a span; the tool spans emitted inside
     // `agentStream` (through `ctx.emit`) nest under it.
-    const rawSource = agentStream(run, ctx, opts, runScope, runId);
-    const source = traceRunStream(rawSource, runId, run, ctx, runSpanKind(ctx, run.adapterId));
+    const rawSource = agentStream(
+      run,
+      runCtx,
+      opts,
+      runScope,
+      runId,
+      (providerId, modelId) => {
+        observedAdapter = providerId;
+        observedModel = modelId;
+      },
+    );
+    const source = traceRunStream(rawSource, runId, run, runCtx, runSpanKind(runCtx, run.adapterId));
     const labeledStream = ctx.bus.publish(source, { runId, laneIndex: 0 });
 
-    for await (const labeled of labeledStream) {
-      builder.consume(labeled.chunk);
-      if (ctx.store) {
+    try {
+      for await (const labeled of labeledStream) {
+        builder.consume(labeled.chunk);
+        if (ctx.store) {
+          try {
+            await ctx.store.append({
+              sessionId: ctx.sessionId,
+              turnId: ctx.turnId,
+              runId: labeled.runId,
+              seq: labeled.seq,
+              chunk: labeled.chunk,
+            });
+          } catch (e) {
+            ctx.emit?.({ type: "store-error", traceId: ctx.turnId, ts: Date.now(), data: String(e) });
+          }
+        }
+        queue.push(labeled);
+      }
+    } finally {
+      if (transfer) {
         try {
-          await ctx.store.append({
-            sessionId: ctx.sessionId,
-            turnId: ctx.turnId,
-            runId: labeled.runId,
-            seq: labeled.seq,
-            chunk: labeled.chunk,
-          });
+          transfer.flush();
         } catch (e) {
-          ctx.emit?.({ type: "store-error", traceId: ctx.turnId, ts: Date.now(), data: String(e) });
+          emitTransferError(runCtx, e);
         }
       }
-      queue.push(labeled);
     }
 
     const result = builder.finish(ctx.pricing);
+    result.adapterId = observedAdapter;
+    result.model = observedModel;
+    const actualPrice = ctx.pricing?.[observedModel];
+    if (actualPrice) result.usage.costUsd = computeCost(result.usage, actualPrice);
     if (ctx.store) {
       try {
         await ctx.store.summarize({ ...result, sessionId: ctx.sessionId, turnId: ctx.turnId });

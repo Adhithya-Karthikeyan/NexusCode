@@ -40,6 +40,27 @@ describe("mapOpenAIError — secret redaction", () => {
   });
 });
 
+describe("mapOpenAIError — account limits vs transient throttling", () => {
+  it("maps insufficient_quota to a non-retryable quota_exhausted error", () => {
+    const err = new APIError(
+      429,
+      { message: "You exceeded your current quota", code: "insufficient_quota" },
+      undefined,
+      undefined,
+    );
+    const mapped = mapOpenAIError(err, "openai");
+    expect(mapped.code).toBe("quota_exhausted");
+    expect(mapped.retryable).toBe(false);
+  });
+
+  it("keeps a generic 429 as a retryable rate_limit", () => {
+    const err = new APIError(429, { message: "Too many requests" }, undefined, undefined);
+    const mapped = mapOpenAIError(err, "openai");
+    expect(mapped.code).toBe("rate_limit");
+    expect(mapped.retryable).toBe(true);
+  });
+});
+
 describe("redactSecrets", () => {
   it("masks known provider key prefixes", () => {
     expect(redactSecrets("key=xai-abcdef123456")).not.toContain("abcdef123456");

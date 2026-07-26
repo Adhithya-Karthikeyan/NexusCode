@@ -93,9 +93,9 @@ describe("dispatchAgent — ZLCTS transfer seam", () => {
     // The tool call was recorded for mid-call-termination resume.
     expect(seen.toolOutput).toContain("echo");
 
-    // Both provider turns got a start boundary; the terminal turn got an end.
+    // Every provider turn gets a paired start/end boundary.
     expect(seen.turnStart).toBe(2);
-    expect(seen.turnEnd).toBeGreaterThanOrEqual(1);
+    expect(seen.turnEnd).toBe(seen.turnStart);
 
     // Frozen contract still holds: one run-start first, one run-end last.
     expect(seen.chunks[0]?.type).toBe("run-start");

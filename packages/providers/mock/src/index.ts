@@ -73,11 +73,25 @@ function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-/** Pull the prompt to echo: the last user message's text, else all text joined. */
+/**
+ * Pull the prompt to echo.
+ *
+ * NexusCode's context assembler prepends volatile project context as its own
+ * text block on the final user message, keeping the user's actual prompt as the
+ * last text block. Echoing every block made the offline provider dump git
+ * status, RAG excerpts, and terminal context before a simple "hello", which is
+ * unusable in the first-run/TUI experience. Prefer that final user-authored
+ * block; retain the joined-text fallback for unusual callers with no text block
+ * on their last user message.
+ */
 function extractPrompt(req: ChatRequest): string {
   for (let i = req.messages.length - 1; i >= 0; i--) {
     const msg = req.messages[i];
     if (!msg || msg.role !== "user") continue;
+    const finalText = [...msg.content]
+      .reverse()
+      .find((block): block is Extract<ContentBlock, { type: "text" }> => block.type === "text");
+    if (finalText && finalText.text.length > 0) return finalText.text;
     const text = textOfBlocks(msg);
     if (text.length > 0) return text;
   }
@@ -94,7 +108,14 @@ function textOfBlocks(msg: Message): string {
 
 /** The default deterministic transform: an echo whose tone depends on the model. */
 function defaultTransform(prompt: string, model: string): string {
-  const p = prompt.trim() || "(empty prompt)";
+  const raw = prompt.trim() || "(empty prompt)";
+  // The mock is a UX/testing provider, not a transcript dump. Git and code
+  // workflows can legitimately send very large prompts; bound the echo so one
+  // offline activation cannot flood a terminal with tens of thousands of lines.
+  const p =
+    raw.length <= 2_000
+      ? raw
+      : `${raw.slice(0, 1_600)}\n… (${raw.length - 2_000} characters omitted) …\n${raw.slice(-400)}`;
   if (model.includes("smart")) {
     return (
       `[mock-smart] Considering your request: "${p}". ` +

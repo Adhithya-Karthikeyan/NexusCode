@@ -22,6 +22,7 @@ import {
   isTerminal,
   userText,
   textOf,
+  looksLikeQuotaExhaustion,
   type Usage,
   type Pricing,
   type StreamChunk,
@@ -36,7 +37,7 @@ describe("AdapterError — retryability defaults", () => {
   });
 
   it("defaults every other code to non-retryable", () => {
-    for (const code of ["auth", "invalid_request", "context_length", "content_filter", "cancelled", "cli_exit", "parse", "empty_output", "unknown"] as const) {
+    for (const code of ["auth", "quota_exhausted", "invalid_request", "context_length", "content_filter", "cancelled", "cli_exit", "parse", "empty_output", "unknown"] as const) {
       expect(new AdapterError(code, "x").retryable).toBe(false);
     }
   });
@@ -52,6 +53,22 @@ describe("AdapterError — retryability defaults", () => {
     expect(e).toBeInstanceOf(Error);
     expect(e.name).toBe("AdapterError");
     expect(e.cause).toBe(cause);
+  });
+});
+
+describe("looksLikeQuotaExhaustion", () => {
+  it("recognizes hard quota, billing, credit, and provider-CLI usage limits", () => {
+    expect(looksLikeQuotaExhaustion(undefined, "insufficient_quota")).toBe(true);
+    expect(looksLikeQuotaExhaustion("Your credit balance is too low. Please purchase credits.")).toBe(true);
+    expect(looksLikeQuotaExhaustion("You've hit your usage limit; limit resets at 2am.")).toBe(true);
+    expect(looksLikeQuotaExhaustion("You exceeded your current quota. Check your plan and billing details.")).toBe(true);
+    expect(looksLikeQuotaExhaustion(undefined, "ServiceQuotaExceededException")).toBe(true);
+  });
+
+  it("does not confuse transient request throttling with an account quota", () => {
+    expect(looksLikeQuotaExhaustion("Rate limit exceeded; retry after 20 seconds.")).toBe(false);
+    expect(looksLikeQuotaExhaustion("Too many requests.")).toBe(false);
+    expect(looksLikeQuotaExhaustion("Server overloaded.")).toBe(false);
   });
 });
 

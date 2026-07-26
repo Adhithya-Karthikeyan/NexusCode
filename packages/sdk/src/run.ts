@@ -22,7 +22,7 @@ import type {
   StreamChunk,
   UiEvent,
 } from "@nexuscode/core";
-import { projectLabeled } from "@nexuscode/core";
+import { AdapterError, projectLabeled } from "@nexuscode/core";
 import { Broadcast } from "./emitter.js";
 
 /** How a chunk is projected into UI events (lane keys + single-run flag). */
@@ -98,6 +98,21 @@ export class NexusRun {
    */
   async text(): Promise<string> {
     const result = await this.result();
+    if (result.status !== "ok") {
+      throw (
+        result.error ??
+        new AdapterError(
+          "unknown",
+          `provider ${result.adapterId} failed without an error detail`,
+          { providerId: result.adapterId },
+        )
+      );
+    }
+    if (result.text.trim().length === 0 && result.toolCalls.length === 0 && result.diffs.length === 0) {
+      throw new AdapterError("empty_output", `provider ${result.adapterId} returned no usable output`, {
+        providerId: result.adapterId,
+      });
+    }
     return result.text;
   }
 

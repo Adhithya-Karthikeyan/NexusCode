@@ -60,6 +60,8 @@ export interface CodexConfig extends SubprocessConfig {
   skipGitRepoCheck?: boolean;
   /** `--cd` working root for the agent. */
   workdir?: string;
+  /** Resume a prior Codex thread (`codex exec … resume <id> <prompt>`). */
+  resume?: string;
 }
 
 // ── Argv ────────────────────────────────────────────────────────────────────────
@@ -75,7 +77,7 @@ function resolveModel(cfg: CodexConfig, req: ChatRequest): string {
   return cfg.modelMap?.[req.model] ?? req.model;
 }
 
-function buildArgs(cfg: CodexConfig, req: ChatRequest): string[] {
+function buildArgs(cfg: CodexConfig, req: ChatRequest, ctx?: CallContext): string[] {
   // `codex exec` is the non-interactive subcommand; `--json` emits JSONL events.
   const args: string[] = ["exec", "--json"];
 
@@ -87,7 +89,9 @@ function buildArgs(cfg: CodexConfig, req: ChatRequest): string[] {
   if (cfg.workdir) args.push("--cd", cfg.workdir);
   for (const extra of cfg.extraArgs ?? []) args.push(extra);
 
-  // The prompt is a positional trailing arg.
+  const resume = cfg.resume ?? ctx?.providerSessionId;
+  if (resume) args.push("resume", resume);
+  // The prompt is a positional trailing arg (after the resume id when present).
   args.push(promptOf(req));
   return args;
 }

@@ -17,6 +17,19 @@ import type { CancelScope } from "./cancel.js";
 import type { RetryPolicy } from "./resilience.js";
 import type { ProviderRegistry } from "./registry.js";
 import type { TraceEvent } from "./adapter.js";
+import type {
+  ProviderCircuitBreaker,
+  ProviderCircuitTarget,
+} from "./provider-circuit.js";
+import type { RouteCandidate } from "./router.js";
+import type {
+  ProviderSwitchReceipt,
+  ProviderSwitchRuntimeOptions,
+} from "./switching.js";
+import type {
+  MutationRecoveryApproval,
+  PartialRecoveryTrackerOptions,
+} from "./partial-recovery.js";
 
 export interface SamplingParams {
   maxTokens?: number;
@@ -189,6 +202,17 @@ export interface EventStore {
    * rather than presenting as a resumed conversation.
    */
   loadTranscript?(sessionId: string): Message[] | Promise<Message[]>;
+  /** Last successful provider/model for an explicitly resumed session. */
+  loadLastProvider?(
+    sessionId: string,
+  ):
+    | { providerId: string; modelId: string }
+    | undefined
+    | Promise<{ providerId: string; modelId: string } | undefined>;
+  /** Provider-native session ids, kept in independent provider slots. */
+  loadProviderSessions?(
+    sessionId: string,
+  ): Record<string, string> | Promise<Record<string, string>>;
 }
 
 /** The model-ready request an assembler produces from a raw turn input. */
@@ -237,6 +261,64 @@ export interface TransferHandle {
   flush(): void;
 }
 
+/** Identity of one concrete provider run handed to a transfer factory. */
+export interface TransferRunIdentity {
+  sessionId: string;
+  turnId: string;
+  runId: string;
+}
+
+/**
+ * Lazily create one transfer handle per provider run. Concurrent orchestration
+ * lanes need independent projector state while sharing the same durable store.
+ */
+export type TransferHandleFactory = (identity: TransferRunIdentity) => TransferHandle | undefined;
+
+/** Provider-neutral facts available when constructing a switch handoff capsule. */
+export interface ProviderHandoffBuildInput {
+  sessionId: string;
+  turnId: string;
+  fromProviderId: string;
+  fromModelId: string;
+  toProviderId: string;
+  toModelId: string;
+  error: AdapterError;
+  attempt: number;
+  messages: Message[];
+  system?: string;
+}
+
+/**
+ * Structural seam implemented by `@nexuscode/transfer`. Core never imports the
+ * concrete capsule implementation; it only appends the returned system message
+ * to the next provider request.
+ */
+export type ProviderHandoffBuilder = (input: ProviderHandoffBuildInput) => Message | undefined;
+
+export interface ProviderActionGuardInput {
+  sessionId: string;
+  turnId: string;
+  actionId: string;
+  name: string;
+  input: unknown;
+  permission: "read" | "write" | "exec" | "network";
+}
+
+export interface ProviderActionGuardDecision {
+  blocked: boolean;
+  reason?: string;
+}
+
+/** Harness-owned duplicate-effect gate applied before the ordinary permission gate. */
+export type ProviderActionGuard = (
+  input: ProviderActionGuardInput,
+) => ProviderActionGuardDecision | Promise<ProviderActionGuardDecision>;
+
+/** Opt-in runtime policy for recovering a response after useful text streamed. */
+export interface PartialRecoveryRuntimeOptions extends PartialRecoveryTrackerOptions {
+  mutationApproval?: MutationRecoveryApproval;
+}
+
 /** Everything a dispatched orchestration needs, produced by `Turn.context()`. */
 export interface RunContext {
   sessionId: string;
@@ -252,4 +334,24 @@ export interface RunContext {
   contextAssembler?: ContextAssembler;
   /** Optional ZLCTS capture handle; when set, the runner externalizes the run. */
   transfer?: TransferHandle;
+  /** Optional run-local ZLCTS handle factory used by every dispatch primitive. */
+  transferFactory?: TransferHandleFactory;
+  /** Persistent provider/account/model availability state. */
+  providerCircuit?: ProviderCircuitBreaker;
+  /** Adds stable credential/account identity to circuit scopes without exposing secrets. */
+  circuitTargetFor?: (candidate: RouteCandidate) => ProviderCircuitTarget;
+  /** Structured handoff capsule renderer used during provider failover. */
+  handoffBuilder?: ProviderHandoffBuilder;
+  /** Disabled unless explicitly configured; permits safe text-only continuation. */
+  partialRecovery?: PartialRecoveryRuntimeOptions;
+  /** Last successful backend in this live session, used for explicit switches. */
+  previousProvider?: { providerId: string; modelId: string };
+  /** Universal provider-switch policy shared by direct, routed, and agent runs. */
+  switching?: ProviderSwitchRuntimeOptions;
+  /** Blocks replay of completed/partial actions reconstructed at a handoff. */
+  actionGuard?: ProviderActionGuard;
+  /** Most recent switch receipt, exposed to hosts that want an inline summary. */
+  lastSwitchReceipt?: ProviderSwitchReceipt;
+  /** Provider-native session slots restored for this Nexus session. */
+  providerSessions?: Readonly<Record<string, string>>;
 }

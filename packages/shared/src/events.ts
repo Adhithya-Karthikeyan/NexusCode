@@ -31,7 +31,15 @@ export interface RawCarrier {
 
 export type StreamChunk =
   | ({ type: "run-start"; runId: string; adapterId: string; model: string; ts: number } & RawCarrier)
-  | ({ type: "session-init"; runId: string; providerSessionId?: string; tools?: string[]; mcpServers?: string[] } & RawCarrier)
+  | ({
+      type: "session-init";
+      runId: string;
+      /** Harness-owned provider identity for a later agent-loop provider switch. */
+      providerId?: string;
+      providerSessionId?: string;
+      tools?: string[];
+      mcpServers?: string[];
+    } & RawCarrier)
   | ({ type: "text-delta"; runId: string; text: string; channel?: "answer" | "reasoning" } & RawCarrier)
   | ({ type: "reasoning-delta"; runId: string; text: string } & RawCarrier)
   | ({ type: "tool-call-start"; runId: string; id: string; name: string } & RawCarrier)

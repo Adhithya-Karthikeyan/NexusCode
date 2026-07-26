@@ -311,4 +311,25 @@ describe("user-config writes target the file the loader actually reads", () => {
     const parsed = JSON.parse(show.stdout) as { budgets: { id: string }[] };
     expect(parsed.budgets.map((b) => b.id)).toContain("b1");
   });
+
+  it("returns the persisted budget as one JSON document in JSON mode", async () => {
+    const box = sandbox();
+    const res = await runCli(box, [
+      "budget", "set",
+      "--id", "json-budget", "--scope", "org", "--key", "acme",
+      "--limit", "12", "--window", "month",
+      "-o", "json",
+    ]);
+    expect(res.code).toBe(0);
+    expect(JSON.parse(res.stdout)).toMatchObject({
+      budget: {
+        id: "json-budget",
+        scope: "org",
+        key: "acme",
+        limitUsd: 12,
+        window: "month",
+      },
+      file: expect.any(String),
+    });
+  });
 });

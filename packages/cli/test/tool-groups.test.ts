@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NexusConfig, type NexusConfig as NexusConfigT } from "@nexuscode/config";
 import { ToolRegistry } from "@nexuscode/tools";
+import { createMockAdapter } from "@nexuscode/provider-mock";
 import {
   buildToolGroup,
   groupOfTool,
@@ -137,6 +138,36 @@ describe("tool-groups module — catalog + registration", () => {
     }
     // Every group reported.
     expect(result.map((r) => r.group).sort()).toEqual([...TOOL_GROUP_NAMES].sort());
+  });
+
+  it("binds the active provider/model into AI vision tools", async () => {
+    const reg = new ToolRegistry();
+    registerToolGroups(reg, cfg({ enabledGroups: ["ai"] }), {
+      ai: { provider: createMockAdapter(), model: "mock-fast" },
+    });
+    const tool = reg.get("ai_vision");
+    const result = await tool.run(
+      {
+        prompt: "describe the test image",
+        data: Buffer.from("fake-image").toString("base64"),
+        mime: "image/png",
+      },
+      {
+        signal: new AbortController().signal,
+        cwd: process.cwd(),
+        runId: "ai-tool-test",
+        traceId: "ai-tool-test",
+      },
+    );
+    expect(Symbol.asyncIterator in Object(result)).toBe(false);
+    const settled = await result as Awaited<typeof result> & {
+      ok: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(settled.ok).toBe(true);
+    expect(settled.content.map((block) => block.text ?? "").join("")).toContain(
+      "describe the test image",
+    );
   });
 
   it("never overwrites an already-registered (e.g. built-in / MCP) tool name", () => {

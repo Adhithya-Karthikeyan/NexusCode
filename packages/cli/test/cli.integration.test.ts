@@ -53,6 +53,15 @@ beforeAll(() => {
   }
 });
 
+describe("nexus version", () => {
+  it("matches the installed CLI package manifest", async () => {
+    const expected = (JSON.parse(readFileSync(PKG, "utf8")) as { version: string }).version;
+    const r = await runCli(["--version"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe(expected);
+  }, 20_000);
+});
+
 describe("nexus ask (mock provider)", () => {
   it("streams assistant text to stdout and exits 0", async () => {
     const r = await runCli(["ask", "-p", "mock", "hi there"]);
@@ -238,6 +247,26 @@ describe("nexus config", () => {
     expect(check.code).toBe(0);
     expect(JSON.parse(check.stdout) as Record<string, unknown>).not.toHaveProperty("x");
   }, 20_000);
+
+  it("accepts documented JSON arrays for structured settings", async () => {
+    const set = await runCli([
+      "config",
+      "set",
+      "tools.enabledGroups",
+      '["web","browser","db","cloud","containers","ai"]',
+    ]);
+    expect(set.code).toBe(0);
+    const get = await runCli(["config", "get", "tools.enabledGroups", "-o", "json"]);
+    expect(get.code).toBe(0);
+    expect(JSON.parse(get.stdout.trim())).toEqual([
+      "web",
+      "browser",
+      "db",
+      "cloud",
+      "containers",
+      "ai",
+    ]);
+  }, 20_000);
 });
 
 describe("nexus bin aliases", () => {
@@ -284,6 +313,26 @@ describe("nexus memory (durable store round-trip)", () => {
     const after = await runCli(["memory", "get", id]);
     expect(after.code).not.toBe(0);
   }, 20_000);
+
+  it("keeps add/remove machine-readable under -o json", async () => {
+    const add = await runCli([
+      "memory",
+      "add",
+      "json memory",
+      "--tier",
+      "knowledge",
+      "-o",
+      "json",
+    ]);
+    expect(add.code).toBe(0);
+    const item = JSON.parse(add.stdout.trim()) as { id: string; text: string; tier: string };
+    expect(item.text).toBe("json memory");
+    expect(item.tier).toBe("knowledge");
+
+    const rm = await runCli(["memory", "rm", item.id, "-o", "json"]);
+    expect(rm.code).toBe(0);
+    expect(JSON.parse(rm.stdout.trim())).toEqual({ id: item.id, removed: true });
+  }, 20_000);
 });
 
 // Force the coding CLIs to be treated as absent regardless of what is actually
@@ -319,6 +368,59 @@ describe("nexus providers list (subprocess coding CLIs in the catalog)", () => {
     expect(r.stdout).toMatch(/\[--\]\s+claude-code/);
     // No MCP servers configured by default → the doctor line says so.
     expect(r.stdout).toMatch(/mcp servers/);
+  }, 20_000);
+});
+
+describe("nexus providers add", () => {
+  it("normalizes the documented openai alias, emits JSON, and rejects duplicates", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-provider-add-")), "cfg");
+    const env = { NEXUS_CONFIG_DIR: freshConfigDir };
+    const add = await runCli(
+      [
+        "providers",
+        "add",
+        "acme",
+        "--kind",
+        "openai",
+        "--adapter",
+        "@nexuscode/provider-openai",
+        "--base-url",
+        "http://127.0.0.1:9/v1",
+        "--api-key-env",
+        "ACME_API_KEY",
+        "-o",
+        "json",
+      ],
+      "",
+      env,
+    );
+    expect(add.code).toBe(0);
+    const added = JSON.parse(add.stdout.trim()) as {
+      provider: { id: string; kind: string };
+    };
+    expect(added.provider).toMatchObject({ id: "acme", kind: "openai-compat" });
+
+    const duplicate = await runCli(
+      [
+        "providers",
+        "add",
+        "acme",
+        "--kind",
+        "openai-compatible",
+        "--adapter",
+        "@nexuscode/provider-openai",
+      ],
+      "",
+      env,
+    );
+    expect(duplicate.code).toBe(1);
+    expect(duplicate.stderr).toContain("already exists");
+
+    const config = await runCli(["config", "get", "providers"], "", env);
+    const providers = JSON.parse(config.stdout.trim()) as { id: string; kind: string }[];
+    expect(providers).toEqual([
+      expect.objectContaining({ id: "acme", kind: "openai-compat" }),
+    ]);
   }, 20_000);
 });
 
@@ -580,6 +682,35 @@ describe("nexus mcp (declare + discover tools from an in-process stdio server)",
 
     await runCli(["mcp", "rm", "kyp-mem"]);
   }, 20_000);
+
+  it("emits one JSON document for add and remove mutations", async () => {
+    const add = await runCli([
+      "mcp",
+      "add",
+      "json-mcp",
+      "--transport",
+      "stdio",
+      "--command",
+      process.execPath,
+      "--args",
+      FAKE_MCP,
+      "-o",
+      "json",
+    ]);
+    expect(add.code).toBe(0);
+    expect(JSON.parse(add.stdout.trim())).toMatchObject({
+      server: { name: "json-mcp", transport: "stdio", enabled: true },
+      file: expect.any(String),
+    });
+
+    const rm = await runCli(["mcp", "rm", "json-mcp", "-o", "json"]);
+    expect(rm.code).toBe(0);
+    expect(JSON.parse(rm.stdout.trim())).toMatchObject({
+      name: "json-mcp",
+      removed: true,
+      file: expect.any(String),
+    });
+  }, 20_000);
 });
 
 describe("nexus agent (native tool loop, mock-tools)", () => {
@@ -708,6 +839,24 @@ describe("nexus task (durable task management, §15)", () => {
     expect(list.code).toBe(0);
     expect(list.stdout).toContain("no tasks");
   }, 20_000);
+
+  it("keeps the complete mutation lifecycle machine-readable under -o json", async () => {
+    const add = await runCli(["task", "add", "json task", "-o", "json"]);
+    const task = JSON.parse(add.stdout.trim()) as { id: string; status: string };
+    expect(task.status).toBe("todo");
+
+    const started = await runCli(["task", "start", task.id, "-o", "json"]);
+    expect(JSON.parse(started.stdout.trim()).status).toBe("in_progress");
+
+    const done = await runCli(["task", "done", task.id, "-o", "json"]);
+    expect(JSON.parse(done.stdout.trim()).status).toBe("done");
+
+    const removed = await runCli(["task", "rm", task.id, "-o", "json"]);
+    expect(JSON.parse(removed.stdout.trim())).toEqual({ id: task.id, removed: true });
+
+    const cleared = await runCli(["task", "clear", "-o", "json"]);
+    expect(JSON.parse(cleared.stdout.trim())).toEqual({ cleared: 0 });
+  }, 20_000);
 });
 
 describe("nexus jobs (terminal integration, §13)", () => {
@@ -732,5 +881,38 @@ describe("nexus jobs (terminal integration, §13)", () => {
     const r = await runCli(["jobs", "pty"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/pty:/);
+  }, 20_000);
+
+  it("keeps list/run/history/pty as one valid JSON value in JSON mode", async () => {
+    const list = await runCli(["jobs", "list", "-o", "json"]);
+    expect(JSON.parse(list.stdout.trim())).toEqual([]);
+
+    const run = await runCli([
+      "jobs",
+      "run",
+      "-o",
+      "json",
+      "--",
+      "node",
+      "-e",
+      "console.log('JSON_JOB_OK')",
+    ]);
+    expect(run.code).toBe(0);
+    const job = JSON.parse(run.stdout.trim()) as {
+      status: string;
+      exitCode: number;
+      output: string;
+    };
+    expect(job).toMatchObject({ status: "exited", exitCode: 0 });
+    expect(job.output).toContain("JSON_JOB_OK");
+
+    const history = await runCli(["jobs", "history", "-o", "json"]);
+    expect(Array.isArray(JSON.parse(history.stdout.trim()))).toBe(true);
+
+    const pty = await runCli(["jobs", "pty", "-o", "json"]);
+    expect(JSON.parse(pty.stdout.trim())).toMatchObject({
+      available: expect.any(Boolean),
+      implementation: expect.any(String),
+    });
   }, 20_000);
 });

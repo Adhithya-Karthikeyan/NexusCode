@@ -15,6 +15,7 @@
 import {
   createSecretStore,
   loadConfig,
+  nexusPaths,
   NexusConfig,
   type NexusConfigInput,
   type SecretStore,
@@ -24,6 +25,7 @@ import {
   createEngine,
   dispatch,
   dispatchAgent,
+  ProviderCircuitBreaker,
   userText,
   type ChainStage,
   type ContextAssembler,
@@ -37,7 +39,13 @@ import {
   type OrchestrationOutcome,
   type OrchestrationSpec,
   type ProviderAdapter,
+  type ProviderActionGuard,
+  type ProviderCircuitTarget,
+  type ProviderHandoffBuilder,
+  type PartialRecoveryRuntimeOptions,
+  type ProviderSwitchRuntimeOptions,
   type ProviderRegistry,
+  type RouteCandidate,
   type RunContext,
   type RunResult,
   type RunSpec,
@@ -45,10 +53,12 @@ import {
   type Session,
   type StreamChunk,
   type TraceEvent,
+  type TransferHandleFactory,
   type Turn,
   type UiEvent,
 } from "@nexuscode/core";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import {
   PermissionGate,
   ToolRegistry,
@@ -90,6 +100,20 @@ export interface NexusOptions {
   emit?: (event: TraceEvent) => void;
   /** Context Engine run before the first provider dispatch of every run. */
   contextAssembler?: ContextAssembler;
+  /** Optional provider-neutral transfer capture for every dispatched run. */
+  transferFactory?: TransferHandleFactory;
+  /** Optional signed handoff capsule builder supplied by a host integration. */
+  handoffBuilder?: ProviderHandoffBuilder;
+  /** Optional harness-owned duplicate-effect guard for provider handoffs. */
+  actionGuard?: ProviderActionGuard;
+  /** Override the persistent circuit, or pass `false` to disable config defaults. */
+  providerCircuit?: ProviderCircuitBreaker | false;
+  /** Override account scoping for quota/auth circuits. */
+  circuitTargetFor?: (candidate: RouteCandidate) => ProviderCircuitTarget;
+  /** Override the config-derived opt-in partial-response recovery policy. */
+  partialRecovery?: PartialRecoveryRuntimeOptions;
+  /** Override the config-derived universal provider-switching policy. */
+  switching?: ProviderSwitchRuntimeOptions;
   /**
    * Conversation memory. ON by default: every turn on a session is dispatched
    * with the prior turns ahead of it, bounded to a token budget. Pass
@@ -327,6 +351,82 @@ export class Nexus {
       emitter.emit("trace", event);
       options.emit?.(event);
     };
+    const providerCircuit =
+      options.providerCircuit === false
+        ? undefined
+        : options.providerCircuit ??
+          (cfg.providerCircuit.enabled
+            ? new ProviderCircuitBreaker({
+                ...(cfg.providerCircuit.filePath
+                  ? { filePath: cfg.providerCircuit.filePath }
+                  : options.loadFromDisk
+                    ? {
+                        filePath: join(
+                          process.env["NEXUS_DATA_DIR"] ?? nexusPaths().data,
+                          "provider-circuits.json",
+                        ),
+                      }
+                    : {}),
+                transientFailureThreshold: cfg.providerCircuit.transientFailureThreshold,
+                baseCooldownMs: cfg.providerCircuit.baseCooldownMs,
+                maxCooldownMs: cfg.providerCircuit.maxCooldownMs,
+                quotaCooldownMs: cfg.providerCircuit.quotaCooldownMs,
+                modelUnavailableCooldownMs:
+                  cfg.providerCircuit.modelUnavailableCooldownMs,
+                maxClockSkewMs: cfg.providerCircuit.maxClockSkewMs,
+                maxEntries: cfg.providerCircuit.maxEntries,
+              })
+            : undefined);
+    const partialRecovery =
+      options.partialRecovery ??
+      (cfg.transfer.handoff.partialContinuation.enabled
+        ? {
+            enabled: true,
+            maxPartialContextCodePoints:
+              cfg.transfer.handoff.partialContinuation.maxContextCodePoints,
+          }
+        : undefined);
+    const switching: ProviderSwitchRuntimeOptions =
+      options.switching ?? {
+        policy: cfg.switching.policy,
+        maxFallbacks: cfg.switching.maxFallbacks,
+        preferredProviders: cfg.switching.preferredProviders,
+        ...(cfg.switching.allowProviders.length > 0
+          ? { allowProviders: cfg.switching.allowProviders }
+          : {}),
+        ...(cfg.switching.denyProviders.length > 0
+          ? { denyProviders: cfg.switching.denyProviders }
+          : {}),
+        maxCostMultiplier: cfg.switching.maxCostMultiplier,
+        contextSafetyMarginTokens: cfg.switching.contextSafetyMarginTokens,
+        nativeSessionSlots: cfg.switching.nativeSessionSlots,
+      };
+    const circuitTargetFor =
+      options.circuitTargetFor ??
+      ((candidate: RouteCandidate): ProviderCircuitTarget => {
+        const declared = cfg.providers.find((provider) => provider.id === candidate.providerId);
+        const identity =
+          declared?.apiKeyRef ??
+          declared?.apiKeyEnv ??
+          declared?.baseUrl ??
+          (candidate.providerId === "gemini"
+            ? cfg.gemini.apiKeyEnv
+            : candidate.providerId === "bedrock"
+              ? process.env["AWS_PROFILE"] ?? "aws-default-chain"
+              : candidate.providerId === "vertex"
+                ? process.env["GOOGLE_CLOUD_PROJECT"] ??
+                  cfg.vertex.project ??
+                  "gcp-default-chain"
+                : candidate.providerId);
+        return {
+          providerId: candidate.providerId,
+          accountId: createHash("sha256")
+            .update(`${candidate.providerId}\0${identity}`)
+            .digest("hex")
+            .slice(0, 16),
+          modelId: candidate.modelId,
+        };
+      });
 
     const engine = createEngine({
       registry: runtime.registry,
@@ -334,6 +434,13 @@ export class Nexus {
       emit: emitSpan,
       ...(options.store ? { store: options.store } : {}),
       ...(options.contextAssembler ? { contextAssembler: options.contextAssembler } : {}),
+      ...(options.transferFactory ? { transferFactory: options.transferFactory } : {}),
+      ...(options.handoffBuilder ? { handoffBuilder: options.handoffBuilder } : {}),
+      ...(options.actionGuard ? { actionGuard: options.actionGuard } : {}),
+      ...(providerCircuit ? { providerCircuit } : {}),
+      ...(providerCircuit ? { circuitTargetFor } : {}),
+      ...(partialRecovery ? { partialRecovery } : {}),
+      switching,
       ...(options.history ? { history: options.history } : {}),
     });
 
@@ -420,7 +527,7 @@ export class Nexus {
       .outcome()
       .then((outcome: OrchestrationOutcome) => turn.record(outcome))
       .catch(() => {
-        /* a failed run contributes no reply; the user line stays in history */
+        /* a rejected framework promise never produced a settled outcome */
       });
   }
 

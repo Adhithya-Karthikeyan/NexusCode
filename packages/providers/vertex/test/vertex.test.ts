@@ -129,6 +129,7 @@ describe("vertex adapter — error mapping (reused from gemini)", () => {
   it("maps HTTP-ish statuses to the taxonomy", () => {
     expect(mapError({ status: 401, message: "bad" }).code).toBe("auth");
     expect(mapError({ status: 429, message: "slow" }).code).toBe("rate_limit");
+    expect(mapError({ status: 429, message: "You exceeded your current quota" }).code).toBe("quota_exhausted");
     expect(mapError({ status: 503, message: "down" }).code).toBe("overloaded");
     expect(mapError({ status: 500, message: "boom" }).code).toBe("transport");
   });

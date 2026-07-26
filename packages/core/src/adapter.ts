@@ -44,6 +44,8 @@ export interface CallContext {
   traceId: string;
   /** The Run this call belongs to (stamped onto chunks). */
   runId: string;
+  /** Provider-native session slot restored for this Nexus session, when supported. */
+  providerSessionId?: string;
   /** Per-call auth override; else the adapter's resolved credential. */
   credential?: ResolvedCredential;
   /** Trace sink (no-op in tests). */

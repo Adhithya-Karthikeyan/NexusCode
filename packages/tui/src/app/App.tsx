@@ -18,7 +18,7 @@
  */
 
 import { Box, useApp, useInput, useStdin } from "ink";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   BUILTIN_THEMES,
   BUILTIN_THEME_LIST,
@@ -37,11 +37,12 @@ import { Workspace } from "../layout/Workspace.js";
 import { ThemeProvider } from "../theme/ThemeProvider.js";
 import type { EventStore } from "../store/store.js";
 import { MAIN_LANE, type UiEvent } from "../store/events.js";
-import { reduceEvents, type ViewState } from "../store/viewState.js";
+import { initialViewState, reduceEvents, type ViewState } from "../store/viewState.js";
 import { useEventStore } from "../bridge/useEventStore.js";
 import { buildSlashCommands, type SlashCommandSpec } from "../chrome/commands.js";
 import { Conversation } from "./Conversation.js";
 import { Onboarding } from "./Onboarding.js";
+import type { ProviderSelectionResult } from "../bridge/runTui.js";
 
 /** A provider→model pair for the `/model` picker (real registry data). */
 export interface ModelChoice {
@@ -96,6 +97,8 @@ export interface AppProps {
   tools?: readonly { name: string; description?: string }[];
   /** Configured MCP servers for the `/mcp` list. */
   mcpServers?: readonly { name: string; hint?: string }[];
+  /** Current session id, accepted by `nexus trace <id>`. */
+  traceTarget?: string;
   /** Active model/provider (defaults derived from the session). */
   activeModel?: string;
   activeProvider?: string;
@@ -108,9 +111,9 @@ export interface AppProps {
    */
   listModelsFor?: (providerId: string) => Promise<readonly { model: string; hint?: string }[]>;
   /** Live `/model` switch — the CLI re-points its dispatch at the new model. */
-  onModelChange?: (model: string, provider: string) => void;
+  onModelChange?: (model: string, provider: string) => ProviderSelectionResult | void;
   /** Live `/provider` switch. */
-  onProviderChange?: (provider: string) => void;
+  onProviderChange?: (provider: string) => ProviderSelectionResult | void;
   /** Live `/effort` switch — apply the picked reasoning effort. */
   onEffortChange?: (effort: string) => void;
   /** Whether the active provider supports reasoning (drives the `/effort` picker). */
@@ -120,6 +123,28 @@ export interface AppProps {
   onNewSession?: () => void;
   /** `/quit` — exit the TUI (defaults to Ink's app exit). */
   onQuit?: () => void;
+
+  /**
+   * Initial interaction role for `/agent`. The role is what every submitted turn
+   * is dispatched with, so it decides whether the host runs a plain chat, a
+   * read-only tool loop, or the autonomous (workspace-write) loop.
+   */
+  initialRole?: UiMode;
+  /** Fully controlled role (tests); overrides internal state. */
+  role?: UiMode;
+  /** Notified when `/agent` changes the role. */
+  onRoleChange?: (role: UiMode) => void;
+}
+
+/** The roles `/agent` offers — exactly the ones a host dispatch understands. */
+const ROLE_CHOICES: readonly { id: UiMode; hint: string }[] = [
+  { id: "CHAT", hint: "plain chat" },
+  { id: "AGENT", hint: "read-only tools" },
+  { id: "AUTOPILOT", hint: "autonomous tools (can write files)" },
+];
+
+function isRole(value: string): value is UiMode {
+  return ROLE_CHOICES.some((r) => r.id === value);
 }
 
 /** Presets the `Ctrl+L` ring cycles through (and the palette lists). */
@@ -172,6 +197,7 @@ export function App(props: AppProps): React.JSX.Element {
     providers,
     tools,
     mcpServers,
+    traceTarget,
     activeModel,
     activeProvider,
     listModelsFor,
@@ -182,6 +208,9 @@ export function App(props: AppProps): React.JSX.Element {
     onClearConversation,
     onNewSession,
     onQuit,
+    initialRole,
+    role: controlledRole,
+    onRoleChange,
   } = props;
 
   const { exit } = useApp();
@@ -196,11 +225,25 @@ export function App(props: AppProps): React.JSX.Element {
   // state; the CLI mirrors the switch into its dispatch via `onModelChange`).
   const [modelOverride, setModelOverride] = useState<string | undefined>(undefined);
   const [providerOverride, setProviderOverride] = useState<string | undefined>(undefined);
+  const [contextMaxOverride, setContextMaxOverride] = useState<number | undefined>(undefined);
+  const [reasoningOverride, setReasoningOverride] = useState<boolean | undefined>(undefined);
   const [effortOverride, setEffortOverride] = useState<string>("off");
+  // The outcome of the last `/model` / `/provider` / `/effort` switch. Switch
+  // receipts and rejections used to go only into `view.notifications`, which the
+  // DEFAULT conversation surface never renders (the notification rail exists only
+  // in the multi-pane presets) — so a rejected switch closed the picker and did
+  // nothing at all, with no message anywhere. This is TUI-local view state, like
+  // the theme and the overrides beside it, and it renders above the status bar.
+  const [notice, setNotice] = useState<{ kind: "info" | "error"; text: string } | undefined>(
+    undefined,
+  );
+
+  const [roleState, setRoleState] = useState<UiMode>(initialRole ?? "CHAT");
 
   const themeId = controlledThemeId ?? themeState;
   const preset = controlledPreset ?? presetState;
   const paletteOpen = controlledPalette ?? paletteState;
+  const role = controlledRole ?? roleState;
 
   const theme = useMemo(() => resolveTheme(themeId), [themeId]);
 
@@ -252,6 +295,68 @@ export function App(props: AppProps): React.JSX.Element {
   // the same client intents the keymap already exposes (the engine stays SoT).
   const currentModel = modelOverride ?? activeModel;
   const currentProvider = providerOverride ?? activeProvider;
+  const currentContextMax = contextMaxOverride ?? contextMax;
+  const currentReasoningSupported = reasoningOverride ?? reasoningSupported;
+  const staticView = useMemo(
+    () => view ?? (events ? reduceEvents(events) : initialViewState),
+    [view, events],
+  );
+  const getStaticView = useCallback(() => staticView, [staticView]);
+  const subscribeStatic = useCallback(() => () => {}, []);
+  // Keep the slash-command facts on the same live projection as the HUD. This
+  // makes /context and /cost update after every usage event rather than staying
+  // at their initial empty values.
+  const projectedView = useSyncExternalStore(
+    store?.subscribe ?? subscribeStatic,
+    store?.getView ?? getStaticView,
+    store?.getView ?? getStaticView,
+  );
+  const applyProviderSelection = (
+    selection: ProviderSelectionResult | void,
+    fallbackProvider: string,
+    fallbackModel?: string,
+  ): boolean => {
+    if (selection?.accepted === false) {
+      // Visible where the user is looking (above the composer) AND recorded in the
+      // event log for the presets that show the notification rail.
+      setNotice({ kind: "error", text: selection.reason });
+      store?.append({
+        t: "error",
+        lane: MAIN_LANE,
+        code: "switch_rejected",
+        message: selection.reason,
+        retryable: false,
+      });
+      return false;
+    }
+    const provider = selection?.accepted === true ? selection.provider : fallbackProvider;
+    const model = selection?.accepted === true ? selection.model : fallbackModel;
+    setProviderOverride(provider);
+    setModelOverride(model);
+    if (selection?.accepted === true) {
+      setContextMaxOverride(selection.contextMax);
+      setReasoningOverride(selection.reasoningSupported);
+      setNotice({
+        kind: "info",
+        text: selection.receipt ?? `switched to ${provider}/${selection.model}`,
+      });
+      // NOTE: no `failover` event here. A deliberate user switch is not a
+      // failure — emitting one marked the provider the user just left as
+      // "degraded" in the health projection and filed the receipt under an error
+      // notification. The `session` event below is the real record of the switch.
+      store?.append({
+        t: "session",
+        id: `switch:${provider}:${selection.model}`,
+        provider,
+        model: selection.model,
+        ts: Date.now(),
+      });
+    } else {
+      // No host callback (static/test mounts): still tell the user what changed.
+      setNotice({ kind: "info", text: model ? `switched to ${provider}/${model}` : `switched to ${provider}` });
+    }
+    return true;
+  };
   const slashCommands = useMemo<SlashCommandSpec[]>(
     () =>
       buildSlashCommands({
@@ -273,29 +378,97 @@ export function App(props: AppProps): React.JSX.Element {
           ? { listModelsForProvider: (pid: string) => Promise.resolve(listModelsFor(pid)).then((r) => r.map((m) => ({ ...m }))) }
           : {}),
         onPickModel: (model, provider) => {
-          setModelOverride(model);
-          if (provider) setProviderOverride(provider);
-          onModelChange?.(model, provider);
+          const targetProvider = provider || currentProvider || "";
+          try {
+            const selection = onModelChange?.(model, targetProvider);
+            applyProviderSelection(selection, targetProvider, model);
+          } catch (error) {
+            applyProviderSelection(
+              {
+                accepted: false,
+                provider: targetProvider,
+                reason: error instanceof Error ? error.message : String(error),
+              },
+              targetProvider,
+              model,
+            );
+          }
         },
         providers: (providers ?? []).map((p) => ({ ...p })),
         onPickProvider: (id) => {
-          setProviderOverride(id);
-          onProviderChange?.(id);
+          try {
+            const selection = onProviderChange?.(id);
+            applyProviderSelection(selection, id);
+          } catch (error) {
+            applyProviderSelection(
+              {
+                accepted: false,
+                provider: id,
+                reason: error instanceof Error ? error.message : String(error),
+              },
+              id,
+            );
+          }
+        },
+        // `/agent` used to be inert: the registry supplied a default role list but
+        // the shell passed no `onPickRole`, so the chosen role was discarded — and
+        // every submit hard-coded "CHAT" anyway, making AGENT/AUTOPILOT
+        // unreachable from this surface even though the host dispatch supports
+        // them. The role now drives `onSubmit`.
+        roles: ROLE_CHOICES.map((r) => ({ id: r.id, hint: r.hint })),
+        currentRole: role,
+        onPickRole: (id) => {
+          if (!isRole(id)) return;
+          setRoleState(id);
+          onRoleChange?.(id);
+          setNotice({
+            kind: "info",
+            text:
+              id === "AUTOPILOT"
+                ? "role: AUTOPILOT — tools may write files in this workspace"
+                : `role: ${id}`,
+          });
         },
         currentEffort: effortOverride,
-        ...(reasoningSupported !== undefined ? { reasoningSupported } : {}),
+        ...(currentReasoningSupported !== undefined
+          ? { reasoningSupported: currentReasoningSupported }
+          : {}),
         onPickEffort: (effort) => {
           setEffortOverride(effort);
           onEffortChange?.(effort);
+          setNotice({ kind: "info", text: `reasoning effort: ${effort}` });
         },
         tools: (tools ?? []).map((t) => ({ ...t })),
-        ...(mcpServers ? { info: { mcpServers: mcpServers.map((s) => ({ ...s })) } } : {}),
+        info: {
+          contextUsed:
+            projectedView.lastUsage.inputTokens + projectedView.lastUsage.outputTokens,
+          ...(currentContextMax !== undefined ? { contextMax: currentContextMax } : {}),
+          sessionCost: projectedView.totals.costUsd,
+          runCost: projectedView.runUsd,
+          ...(traceTarget ? { traceTarget } : {}),
+          ...(mcpServers ? { mcpServers: mcpServers.map((s) => ({ ...s })) } : {}),
+        },
         onClear: () => (onClearConversation ? onClearConversation() : resetConversation()),
         onNewSession: () => (onNewSession ? onNewSession() : resetConversation()),
         onQuit: () => (onQuit ? onQuit() : exit()),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themeId, models, providers, tools, mcpServers, currentModel, currentProvider, listModelsFor, effortOverride, reasoningSupported],
+    [
+      themeId,
+      models,
+      providers,
+      tools,
+      mcpServers,
+      traceTarget,
+      currentModel,
+      currentProvider,
+      currentContextMax,
+      listModelsFor,
+      effortOverride,
+      currentReasoningSupported,
+      projectedView,
+      role,
+    ],
   );
 
   // Coerce to a strict boolean: on a real non-TTY `isRawModeSupported` is
@@ -325,7 +498,7 @@ export function App(props: AppProps): React.JSX.Element {
     preset,
     ...(viewport ? { viewport } : {}),
     ...(sessionName !== undefined ? { sessionName } : {}),
-    ...(contextMax !== undefined ? { contextMax } : {}),
+    ...(currentContextMax !== undefined ? { contextMax: currentContextMax } : {}),
     ...(onSubmit ? { onSubmit } : {}),
     ...(onInterrupt ? { onInterrupt } : {}),
     ...(history ? { history } : {}),
@@ -344,12 +517,15 @@ export function App(props: AppProps): React.JSX.Element {
   const isConversation = preset === "conversation";
   const promptSeq = useRef(0);
   const handleConversationSubmit = (text: string): void => {
+    // The switch notice describes the state the NEXT turn will run under; once
+    // that turn is submitted it has served its purpose.
+    setNotice(undefined);
     if (store) {
       store.append({ t: "prompt", lane: MAIN_LANE, id: `p${promptSeq.current++}`, text });
     } else {
       setPrompts((p) => [...p, text]);
     }
-    onSubmit?.(text, "CHAT");
+    onSubmit?.(text, role);
   };
   const conversationProps = {
     // In store mode the prompt lives on the turn (marker); pass no positional
@@ -357,19 +533,22 @@ export function App(props: AppProps): React.JSX.Element {
     prompts: store ? [] : prompts,
     commands: slashCommands,
     ...(viewport ? { viewport } : {}),
-    ...(contextMax !== undefined ? { contextMax } : {}),
+    ...(currentContextMax !== undefined ? { contextMax: currentContextMax } : {}),
     ...(modelOverride !== undefined ? { modelOverride } : {}),
     ...(providerOverride !== undefined ? { providerOverride } : {}),
     ...(activeModel !== undefined ? { fallbackModel: activeModel } : {}),
     ...(activeProvider !== undefined ? { fallbackProvider: activeProvider } : {}),
+    ...(notice ? { notice } : {}),
+    // An elevated role changes what a turn is ALLOWED to do (AUTOPILOT can write
+    // files), so it stays on the status bar rather than only in a transient
+    // notice. CHAT is the default and adds no chrome.
+    ...(role !== "CHAT" ? { role } : {}),
     ...(onSubmit ? { onSubmit: handleConversationSubmit } : {}),
     ...(onInterrupt ? { onInterrupt } : {}),
     ...(history ? { history } : {}),
     ...(now ? { now } : {}),
     inputActive: !paletteOpen,
   };
-
-  const staticView: ViewState | undefined = view ?? (events ? reduceEvents(events) : undefined);
 
   const body = showOnboarding ? (
     <Onboarding
@@ -391,7 +570,7 @@ export function App(props: AppProps): React.JSX.Element {
         store ? (
           <StoreConversation store={store} {...conversationProps} />
         ) : (
-          <Conversation view={staticView ?? reduceEvents([])} {...conversationProps} />
+          <Conversation view={staticView} {...conversationProps} />
         )
       ) : store ? (
         <StoreWorkspace store={store} {...workspaceProps} />

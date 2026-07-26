@@ -46,7 +46,7 @@ import type {
   ToolDef,
   Usage,
 } from "@nexuscode/shared";
-import { AdapterError } from "@nexuscode/shared";
+import { AdapterError, looksLikeQuotaExhaustion } from "@nexuscode/shared";
 
 const PROVIDER_ID = "bedrock";
 
@@ -333,6 +333,9 @@ export function mapError(e: unknown): AdapterError {
   const msg = redactSecrets(e instanceof Error ? e.message : err?.message ?? "unknown Bedrock transport error");
   const opts = { ...(status !== undefined ? { httpStatus: status } : {}), providerId: PROVIDER_ID, cause: e };
 
+  if (name === "ServiceQuotaExceededException" || looksLikeQuotaExhaustion(msg, name)) {
+    return new AdapterError("quota_exhausted", msg, opts);
+  }
   if (name === "AccessDeniedException" || name === "UnrecognizedClientException" || status === 401 || status === 403) {
     return new AdapterError("auth", msg, opts);
   }

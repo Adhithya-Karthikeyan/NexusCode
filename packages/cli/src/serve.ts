@@ -13,12 +13,15 @@
  * client can authenticate — it is the operator's own token on their own machine.
  */
 
-import { createSecretStore, loadConfig } from "@nexuscode/config";
+import { createSecretStore, loadConfig, nexusPaths } from "@nexuscode/config";
 import { createNexusServer } from "@nexuscode/server";
 import type { ParsedArgs } from "./args.js";
 import type { Io } from "./commands.js";
 import { buildEnterprise, toServerEnterprise } from "./enterprise.js";
 import { userConfigDir } from "./config-io.js";
+import { NEXUS_VERSION } from "./version.js";
+import { openTransferRuntime } from "./transfer.js";
+import { continuityEngineOptions, openProviderCircuit } from "./reliability.js";
 
 const defaultIo: Io = {
   out: (s) => process.stdout.write(s),
@@ -42,6 +45,10 @@ export async function cmdServe(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   // behavior is unchanged.
   const { config } = await loadConfig({ userConfigDir: userConfigDir() });
   const enterprise = await buildEnterprise(config, secrets);
+  const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
+  const transfer = await openTransferRuntime(config, secrets, historyDb);
+  const providerCircuit = openProviderCircuit(config);
+  const continuity = continuityEngineOptions(config, transfer, providerCircuit);
 
   let server;
   try {
@@ -49,11 +56,27 @@ export async function cmdServe(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       host,
       port,
       secrets,
-      nexusOptions: { loadFromDisk: true, cwd: process.cwd() },
+      nexusOptions: {
+        loadFromDisk: true,
+        cwd: process.cwd(),
+        ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+        ...(continuity.handoffBuilder
+          ? { handoffBuilder: continuity.handoffBuilder }
+          : {}),
+        ...(continuity.actionGuard ? { actionGuard: continuity.actionGuard } : {}),
+        ...(continuity.providerCircuit
+          ? { providerCircuit: continuity.providerCircuit }
+          : {}),
+        ...(continuity.partialRecovery
+          ? { partialRecovery: continuity.partialRecovery }
+          : {}),
+        ...(continuity.switching ? { switching: continuity.switching } : {}),
+      },
       ...(enterprise.enabled ? { enterprise: toServerEnterprise(enterprise) } : {}),
-      version: "0.0.0",
+      version: NEXUS_VERSION,
     });
   } catch (e) {
+    transfer.close();
     io.err(`nexus serve: failed to build server — ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
@@ -63,6 +86,7 @@ export async function cmdServe(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   } catch (e) {
     io.err(`nexus serve: failed to bind ${host}:${port} — ${e instanceof Error ? e.message : String(e)}\n`);
     await server.close();
+    transfer.close();
     return 1;
   }
 
@@ -83,6 +107,7 @@ export async function cmdServe(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       stopping = true;
       io.err("\nnexus serve: shutting down…\n");
       void server.close().then(() => {
+        transfer.close();
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);
         resolve(0);

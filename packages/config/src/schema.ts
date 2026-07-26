@@ -403,12 +403,68 @@ export const ContextTransferConfig = z
         inflightWaitMs: z.number().int().positive().default(30000),
         /** Turns after a switch during which the per-action preventRetry gate is enforced. */
         preventRetryWindow: z.number().int().positive().default(5),
+        /** Hard token budget for the signed reconstructed handoff capsule. */
+        maxCapsuleTokens: z.number().int().positive().default(24_000),
+        /** Hard UTF-8 byte budget for the signed reconstructed handoff capsule. */
+        maxCapsuleBytes: z.number().int().positive().default(128 * 1024),
+        /**
+         * Opt-in recovery after useful output streamed. Disabled by default
+         * because mutating/ambiguous actions must never be replayed implicitly.
+         */
+        partialContinuation: z
+          .object({
+            enabled: z.boolean().default(false),
+            maxContextCodePoints: z.number().int().positive().default(32_768),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),
   })
   .strict();
 export type ContextTransferConfig = z.infer<typeof ContextTransferConfig>;
+
+/** Persistent provider/account/model availability and cooldown policy. */
+export const ProviderCircuitConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Override the private JSON state file; defaults under the Nexus data directory. */
+    filePath: z.string().optional(),
+    transientFailureThreshold: z.number().int().positive().default(3),
+    baseCooldownMs: z.number().int().positive().default(30_000),
+    maxCooldownMs: z.number().int().positive().default(15 * 60_000),
+    quotaCooldownMs: z.number().int().positive().default(60 * 60_000),
+    modelUnavailableCooldownMs: z.number().int().positive().default(5 * 60_000),
+    maxClockSkewMs: z.number().int().positive().default(5_000),
+    maxEntries: z.number().int().positive().default(512),
+  })
+  .strict();
+export type ProviderCircuitConfig = z.infer<typeof ProviderCircuitConfig>;
+
+/** Cross-provider switching policy shared by CLI, SDK, server, and TUI. */
+export const ProviderSwitchingConfig = z
+  .object({
+    /**
+     * `strict` never changes provider, `fallback` moves automatically to a
+     * compatible target, and `ask` requires an interactive/host approval hook.
+     */
+    policy: z.enum(["strict", "fallback", "ask"]).default("fallback"),
+    maxFallbacks: z.number().int().min(0).max(32).default(3),
+    preferredProviders: z.array(z.string().min(1)).default([]),
+    allowProviders: z.array(z.string().min(1)).default([]),
+    denyProviders: z.array(z.string().min(1)).default([]),
+    /** Prevent an automatic move to a target priced far above the source. */
+    maxCostMultiplier: z.number().positive().default(4),
+    /** Context capacity held aside for tokenizer variance and provider framing. */
+    contextSafetyMarginTokens: z.number().int().positive().default(1024),
+    /** Show an inline summary after each explicit or automatic switch. */
+    showReceipts: z.boolean().default(true),
+    /** Keep provider-native session identifiers in separate provider slots when supported. */
+    nativeSessionSlots: z.boolean().default(true),
+  })
+  .strict();
+export type ProviderSwitchingConfig = z.infer<typeof ProviderSwitchingConfig>;
 
 export const HistoryConfig = z
   .object({
@@ -418,14 +474,13 @@ export const HistoryConfig = z
      * Persist USER PROMPTS to the history db so a conversation can be resumed in
      * a later process (`nexus chat --resume <id>` / `--continue`).
      *
-     * OFF by default, deliberately: everything else in history is provider
-     * OUTPUT, and writing what you typed to disk is a privacy decision that
-     * belongs to you, not to a default. With it off, `--resume` says so plainly
-     * rather than silently restoring half a conversation. Prompts are run
-     * through the same secret-redaction pass as tool results before they are
-     * written.
+     * ON by default so provider switching and process restart preserve the
+     * conversation. Rows are encrypted at rest unless `encryptPrompts` is
+     * explicitly disabled, and are secret-redacted before persistence.
      */
-    storePrompts: z.boolean().default(false),
+    storePrompts: z.boolean().default(true),
+    /** AES-256-GCM encrypt durable transcript rows. */
+    encryptPrompts: z.boolean().default(true),
   })
   .strict();
 
@@ -1070,6 +1125,10 @@ export const NexusConfig = z
     context: ContextConfig.default({}),
     /** Zero-Loss Context Transfer (ZLCTS) — harness-owned, provider-neutral knowledge store. */
     transfer: ContextTransferConfig.default({}),
+    /** Persistent provider availability/cooldown state used by every engine run. */
+    providerCircuit: ProviderCircuitConfig.default({}),
+    /** Universal capability-aware provider switching and receipt policy. */
+    switching: ProviderSwitchingConfig.default({}),
     /** Agent framework settings (OODA loop bounds, default role). */
     agent: AgentConfig.default({}),
     /** Task-management settings (durable plan store). */

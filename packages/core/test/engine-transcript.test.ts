@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
+  AdapterError,
   ProviderRegistry,
   boundTranscript,
   createEngine,
@@ -10,6 +11,7 @@ import {
   type Engine,
   type ProviderAdapter,
   type Session,
+  type RunResult,
 } from "@nexuscode/core";
 import type { ChatRequest, Message } from "@nexuscode/shared";
 import { createMockAdapter } from "@nexuscode/provider-mock";
@@ -84,6 +86,34 @@ function occurrences(haystack: string, needle: string): number {
 }
 
 describe("engine — session transcript (conversation memory)", () => {
+  it("rolls back an unanswered failed turn before the next provider request", async () => {
+    const { engine, session } = await setup();
+    const failed = session.newTurn({ prompt: "this request hit the provider limit" });
+    const result: RunResult = {
+      runId: "failed",
+      adapterId: "spy",
+      model: "mock-fast",
+      status: "error",
+      text: "",
+      toolCalls: [],
+      diffs: [],
+      usage: { inputTokens: 0, outputTokens: 0 },
+      finishReason: "error",
+      error: new AdapterError("quota_exhausted", "usage limit reached"),
+    };
+    failed.record(result);
+
+    expect(session.transcript).toHaveLength(0);
+    const next = session.newTurn({ prompt: "retry this on another provider" });
+    expect(next.input.map((message) => message.role)).toEqual(["user"]);
+    expect(transcriptText({ model: "m", messages: next.input })).not.toContain(
+      "this request hit the provider limit",
+    );
+
+    await session.dispose();
+    await engine.dispose();
+  });
+
   it("sends turn 1 and turn 2 back with turn 3, so the model can answer from history", async () => {
     const { engine, session, requests } = await setup();
 

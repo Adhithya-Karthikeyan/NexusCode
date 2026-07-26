@@ -41,6 +41,7 @@ describe("withRetry — retry only before the first content chunk", () => {
     expect(attempts).toBe(2);
     expect(chunks.some((c) => c.type === "run-end")).toBe(true);
     expect(chunks.some((c) => c.type === "error")).toBe(false);
+    expect(chunks.filter((c) => c.type === "run-start")).toHaveLength(1);
   });
 
   it("does NOT retry once real content has streamed (no replay / dedupe)", async () => {
@@ -103,6 +104,93 @@ describe("withRetry — retry only before the first content chunk", () => {
     const last = chunks[chunks.length - 1];
     expect(last?.type).toBe("error");
     if (last?.type === "error") expect(last.error.code).toBe("cancelled");
+  });
+
+  it("turns a stream that ends without a terminal into a visible empty_output error", async () => {
+    const chunks = await collect(
+      withRetry(
+        () =>
+          (async function* () {
+            yield { type: "run-start", runId: "r", adapterId: "x", model: "m", ts: 0 };
+          })(),
+        FAST,
+        new AbortController().signal,
+      ),
+    );
+
+    expect(chunks.map((c) => c.type)).toEqual(["run-start", "error"]);
+    const last = chunks.at(-1);
+    expect(last?.type === "error" && last.error.code).toBe("empty_output");
+  });
+
+  it("turns a successful empty terminal into a visible empty_output error", async () => {
+    const chunks = await collect(
+      withRetry(
+        () =>
+          (async function* () {
+            yield { type: "run-start", runId: "r", adapterId: "x", model: "m", ts: 0 };
+            yield { type: "usage", runId: "r", usage: { inputTokens: 5, outputTokens: 0 } };
+            yield {
+              type: "run-end",
+              runId: "r",
+              finishReason: "stop",
+              message: { role: "assistant", content: [] },
+              ts: 0,
+            };
+          })(),
+        FAST,
+        new AbortController().signal,
+      ),
+    );
+
+    expect(chunks.map((c) => c.type)).toEqual(["run-start", "usage", "error"]);
+    const last = chunks.at(-1);
+    expect(last?.type === "error" && last.error.code).toBe("empty_output");
+  });
+
+  it("surfaces content-filter and unspecified terminal failures as errors", async () => {
+    for (const [finishReason, expected] of [
+      ["content_filter", "content_filter"],
+      ["error", "unknown"],
+      ["cancelled", "cancelled"],
+    ] as const) {
+      const chunks = await collect(
+        withRetry(
+          () =>
+            (async function* () {
+              yield { type: "run-start", runId: "r", adapterId: "x", model: "m", ts: 0 };
+              yield {
+                type: "run-end",
+                runId: "r",
+                finishReason,
+                message: { role: "assistant", content: [] },
+                ts: 0,
+              };
+            })(),
+          FAST,
+          new AbortController().signal,
+        ),
+      );
+      const last = chunks.at(-1);
+      expect(last?.type === "error" && last.error.code).toBe(expected);
+    }
+  });
+
+  it("recovers a final-only SDK response into a text delta before run-end", async () => {
+    const chunks = await collect(
+      withRetry(
+        () =>
+          (async function* () {
+            yield { type: "run-start", runId: "r", adapterId: "x", model: "m", ts: 0 };
+            yield { type: "run-end", runId: "r", finishReason: "stop", message: MSG, ts: 0 };
+          })(),
+        FAST,
+        new AbortController().signal,
+      ),
+    );
+
+    expect(chunks.map((c) => c.type)).toEqual(["run-start", "text-delta", "run-end"]);
+    expect(chunks.find((c) => c.type === "text-delta")).toMatchObject({ text: "ok" });
   });
 });
 

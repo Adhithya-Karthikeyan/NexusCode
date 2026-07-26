@@ -68,6 +68,28 @@ function orderedBefore(frame: string, a: string, b: string): void {
 }
 
 describe("prompt↔turn pairing is intrinsic (drift-proof)", () => {
+  it("renders a quota failure inline in the conversation instead of a blank reply", () => {
+    const view = reduceEvents([
+      { t: "session", id: "run1", provider: "anthropic", model: "claude-opus-4", ts: 1 },
+      { t: "prompt", lane: "main", id: "p0", text: "ARE-YOU-THERE" },
+      {
+        t: "error",
+        lane: "main",
+        code: "quota_exhausted",
+        message: "You've hit your usage limit; resets at 2am",
+        retryable: false,
+      },
+    ]);
+
+    const { lastFrame } = render(
+      wrap(<Conversation view={view} viewport={{ cols: 100, rows: 40 }} />),
+    );
+    const frame = strip(lastFrame());
+    expect(frame).toContain("› ARE-YOU-THERE");
+    expect(frame).toContain("Provider usage limit expired or quota exhausted");
+    expect(frame).toContain("resets at 2am");
+  });
+
   it("keeps every answer under its OWN prompt across an interrupted middle turn", () => {
     // Three prompts. The MIDDLE turn is interrupted (streams partial text, gets
     // NO `done`); the next prompt marker finalizes it. Positional pairing used

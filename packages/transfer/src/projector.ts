@@ -164,8 +164,42 @@ const REGISTRY: Record<string, ChunkHandler> = {
   "run-start": () => [],
   "session-init": () => [],
   "tool-call-delta": () => [],
-  "file-edit": () => [],
-  "approval-request": () => [],
+  "file-edit": (chunk, ctx) => {
+    const c = chunk as Extract<StreamChunk, { type: "file-edit" }>;
+    const result: EpisodicFields["result"] =
+      c.status === "applied"
+        ? "success"
+        : c.status === "cancelled"
+          ? "failure"
+          : "in-progress";
+    const delta = makeExecDelta(
+      ctx,
+      "file-edit",
+      result,
+      c.approvalId ?? c.path,
+      undefined,
+      undefined,
+      `File edit ${c.status}: ${c.path}`,
+      `${c.status} file edit for ${c.path}`,
+    );
+    if (delta.op === "execution-event") delta.fields.deltaFiles = [c.path];
+    return [delta];
+  },
+  "approval-request": (chunk, ctx) => {
+    const c = chunk as Extract<StreamChunk, { type: "approval-request" }>;
+    return [
+      makeExecDelta(
+        ctx,
+        "approval",
+        "in-progress",
+        c.approvalId,
+        undefined,
+        undefined,
+        `Approval requested: ${c.kind}`,
+        `Pending ${c.kind} approval ${c.approvalId}: ${JSON.stringify(c.detail)}`,
+      ),
+    ];
+  },
   "usage": () => [],
   "error": (chunk, ctx) => {
     const c = chunk as Extract<StreamChunk, { type: "error" }>;

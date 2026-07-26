@@ -137,6 +137,42 @@ describe("nexus plugin (discovery + management)", () => {
     expect(p?.contributions.tools).toContain("wave10_ping");
     expect(p?.contributions.providers).toContain("wave10-llm");
   }, 20_000);
+
+  it("plugin add/info/remove stay machine-readable in JSON mode", async () => {
+    const add = await runCli(["plugin", "add", PLUGINS_DIR, "-o", "json"]);
+    expect(add.code).toBe(0);
+    expect(JSON.parse(add.stdout.trim())).toMatchObject({
+      dir: PLUGINS_DIR,
+      added: true,
+      file: expect.any(String),
+    });
+
+    const info = await runCli([
+      "plugin",
+      "info",
+      "nexuscode-plugin-wave10",
+      "-o",
+      "json",
+    ]);
+    expect(info.code).toBe(0);
+    expect(JSON.parse(info.stdout.trim()).manifest.name).toBe(
+      "nexuscode-plugin-wave10",
+    );
+
+    const remove = await runCli([
+      "plugin",
+      "remove",
+      PLUGINS_DIR,
+      "-o",
+      "json",
+    ]);
+    expect(remove.code).toBe(0);
+    expect(JSON.parse(remove.stdout.trim())).toMatchObject({
+      dir: PLUGINS_DIR,
+      removed: true,
+      file: expect.any(String),
+    });
+  }, 20_000);
 });
 
 describe("nexus tools list (plugin contributions)", () => {

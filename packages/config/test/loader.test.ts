@@ -19,6 +19,16 @@ describe("loadConfig — precedence", () => {
     expect(config.defaultProvider).toBe("anthropic");
     expect(config.approval).toBe("confirm");
     expect(config.history.enabled).toBe(true);
+    expect(config.history).toMatchObject({
+      storePrompts: true,
+      encryptPrompts: true,
+    });
+    expect(config.providerCircuit).toMatchObject({
+      enabled: true,
+      transientFailureThreshold: 3,
+      quotaCooldownMs: 60 * 60_000,
+    });
+    expect(config.transfer.handoff.partialContinuation.enabled).toBe(false);
     expect(layers).toEqual(["defaults"]);
   });
 

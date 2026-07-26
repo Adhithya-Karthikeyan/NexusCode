@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBlobStore } from "../src/blobs.js";
+import { blobPath, createBlobStore } from "../src/blobs.js";
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "zlcts-blobs-"));
@@ -58,6 +58,26 @@ describe("BlobStore", () => {
     try {
       const bs = createBlobStore(dir);
       expect(bs.get("blob_deadbeefdeadbeef")).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("encrypts at rest and decrypts only with the matching key", () => {
+    const dir = tmp();
+    try {
+      const key = new Uint8Array(32).fill(7);
+      const bs = createBlobStore(dir, { encryptionKey: key });
+      const ref = bs.put("provider-private-context");
+      const raw = readFileSync(blobPath(dir, ref));
+
+      expect(bs.encrypted).toBe(true);
+      expect(raw.toString("utf8")).not.toContain("provider-private-context");
+      expect(Buffer.from(bs.get(ref)!).toString("utf8")).toBe("provider-private-context");
+      expect(createBlobStore(dir).get(ref)).toBeNull();
+      expect(
+        createBlobStore(dir, { encryptionKey: new Uint8Array(32).fill(8) }).get(ref),
+      ).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

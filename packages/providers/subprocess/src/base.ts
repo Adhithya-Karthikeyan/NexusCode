@@ -7,8 +7,8 @@
  *   • honor `ctx.signal` (SIGINT → 2s grace → SIGTERM; reap the child in a
  *     `finally` so no `claude`/`codex` is ever orphaned),
  *   • apply the load-bearing completion/error rules (authoritative terminal
- *     `result` line; parse-error → `error` chunk but keep consuming;
- *     empty-output soft failure).
+ *     `result` line; recoverable parse warnings are traced while a wholly
+ *     malformed response becomes a terminal parse error; empty-output failure).
  *
  * Everything CLI-specific — the argv, the NDJSON event schema, and the declared
  * capabilities — lives in a per-CLI {@link CliSpec}. Adding a new coding CLI is
@@ -17,6 +17,7 @@
  */
 
 import readline from "node:readline";
+import type { Readable } from "node:stream";
 import type {
   CallContext,
   ChatResult,
@@ -34,7 +35,7 @@ import type {
   StreamChunk,
   Usage,
 } from "@nexuscode/shared";
-import { AdapterError } from "@nexuscode/shared";
+import { AdapterError, looksLikeQuotaExhaustion, type AdapterErrorCode } from "@nexuscode/shared";
 import { defaultSpawn, type SpawnedChild, type SpawnFn } from "./spawn.js";
 
 const CLI_TRANSPORT: TransportKind = "cli-subprocess";
@@ -68,6 +69,8 @@ function scrubSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 /** Default wall-clock timeout for the `health()` `--version` probe. */
 const DEFAULT_HEALTH_TIMEOUT_MS = 5_000;
+/** Bound one NDJSON record before parsing so a drifting/malicious CLI cannot exhaust memory. */
+const DEFAULT_MAX_OUTPUT_LINE_CHARS = 1_000_000;
 
 /** Config every subprocess adapter accepts. Per-CLI configs extend this. */
 export interface SubprocessConfig {
@@ -97,6 +100,12 @@ export interface SubprocessConfig {
    * probe must never leak a process or hang the caller. Defaults to 5000.
    */
   healthTimeoutMs?: number;
+  /**
+   * Maximum characters accepted in one stdout NDJSON record. Oversized records
+   * are treated like malformed output and never passed to JSON.parse. Defaults
+   * to one million characters.
+   */
+  maxOutputLineChars?: number;
 }
 
 /**
@@ -140,8 +149,8 @@ export interface CliSpec<Cfg extends SubprocessConfig> {
   listModels?(cfg: Cfg): ModelInfo[] | Promise<ModelInfo[]>;
   /** Resolve the native model id for this request. */
   resolveModel(cfg: Cfg, req: ChatRequest): string;
-  /** Build the child's argv from config + request. */
-  buildArgs(cfg: Cfg, req: ChatRequest): string[];
+  /** Build the child's argv from config + request + durable provider session slot. */
+  buildArgs(cfg: Cfg, req: ChatRequest, ctx?: CallContext): string[];
   /**
    * Translate one parsed NDJSON event into zero or more chunks (via `push`) and
    * record any terminal outcome onto `state`. Never emits the terminal
@@ -157,6 +166,29 @@ export interface CliSpec<Cfg extends SubprocessConfig> {
 
 function truncate(s: string, n = 200): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+/** Drain stderr concurrently (prevents a full pipe from deadlocking the CLI). */
+async function collectDiagnostic(stream: Readable | null, cap = 16_384): Promise<string> {
+  if (!stream) return "";
+  let out = "";
+  for await (const chunk of stream) {
+    if (out.length < cap) out += String(chunk).slice(0, cap - out.length);
+  }
+  return redactDiagnostic(out.trim());
+}
+
+/** Error diagnostics can echo credentials; only a redacted form reaches UI/logs. */
+function redactDiagnostic(message: string): string {
+  return message
+    .replace(/\b(sk|xai|gsk|nvapi|or|AIza)-?[A-Za-z0-9_-]{6,}\b/gi, "***")
+    .replace(/\b(AKIA|ASIA)[A-Z0-9]{8,}\b/g, "***")
+    .replace(/Bearer\s+\S+/gi, "Bearer ***")
+    .replace(/\b(api[_ -]?key|token|secret|password)\s*[=:]\s*\S+/gi, "$1=***");
+}
+
+function cliFailureCode(detail: string, fallback: AdapterErrorCode): AdapterErrorCode {
+  return looksLikeQuotaExhaustion(detail) ? "quota_exhausted" : fallback;
 }
 
 function fullUsage(u: Partial<Usage> | undefined): Usage | undefined {
@@ -211,7 +243,7 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
     let args: string[];
     try {
       env = await resolveChildEnv();
-      args = spec.buildArgs(cfg, req);
+      args = spec.buildArgs(cfg, req, ctx);
     } catch (e) {
       const error = new AdapterError("transport", `failed to prepare launch: ${String((e as Error)?.message ?? e)}`, {
         providerId,
@@ -256,6 +288,9 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
       t.unref();
     };
     ctx.signal.addEventListener("abort", onAbort, { once: true });
+    // Start draining immediately. Waiting until after `child.done` can deadlock
+    // when a verbose CLI fills its stderr pipe before it exits.
+    const stderrDone = collectDiagnostic(child.stderr);
 
     const state: StreamState = {
       runId,
@@ -264,6 +299,7 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
       textBuffer: "",
       toolUses: [],
     };
+    let firstMalformedLine = "";
 
     try {
       if (child.stdout) {
@@ -273,13 +309,36 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
             if (!line.trim()) continue;
 
             let ev: unknown;
+            const maxLineChars = cfg.maxOutputLineChars ?? DEFAULT_MAX_OUTPUT_LINE_CHARS;
+            if (line.length > maxLineChars) {
+              if (!firstMalformedLine) {
+                firstMalformedLine =
+                  `stdout NDJSON record exceeded the ${maxLineChars}-character compatibility limit`;
+              }
+              ctx.emit?.({
+                type: "provider-parse-warning",
+                traceId: ctx.traceId,
+                runId,
+                ts: Date.now(),
+                data: { providerId, line: firstMalformedLine },
+              });
+              continue;
+            }
             try {
               ev = JSON.parse(line);
             } catch {
-              // Rule 5: an unparseable line yields a `parse` error chunk but the
-              // stream keeps consuming — a single bad line must not abort it.
-              const error = new AdapterError("parse", `bad NDJSON: ${truncate(line)}`, { providerId });
-              yield { type: "error", runId, error, retryable: false };
+              // `error` is a terminal chunk, so emitting one here and continuing
+              // would violate the shared contract. Keep consuming (some CLIs
+              // mix a banner/progress line into NDJSON), and surface this as the
+              // terminal diagnosis only if no authoritative result follows.
+              if (!firstMalformedLine) firstMalformedLine = redactDiagnostic(truncate(line, 500));
+              ctx.emit?.({
+                type: "provider-parse-warning",
+                traceId: ctx.traceId,
+                runId,
+                ts: Date.now(),
+                data: { providerId, line: firstMalformedLine },
+              });
               continue;
             }
 
@@ -304,6 +363,7 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
       }
 
       const exit = await child.done;
+      const stderr = await stderrDone;
 
       // Async spawn failure (e.g. ENOENT) surfaces here, not as a throw.
       if (exit.error && !ctx.signal.aborted) {
@@ -321,12 +381,25 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
       if (state.terminal) {
         // Rule 1: the terminal `result` line is authoritative.
         if (!state.terminal.ok) {
-          const error = new AdapterError("cli_exit", state.terminal.subtype ?? "cli error", {
+          const detail = redactDiagnostic(
+            state.terminal.subtype || stderr || firstMalformedLine || "cli error",
+          );
+          const code = cliFailureCode(detail, "cli_exit");
+          const error = new AdapterError(code, detail, {
             providerId,
             exitCode: exit.exitCode,
           });
           yield { type: "error", runId, error, retryable: false };
         } else if (!state.emittedContent) {
+          const diagnostic = stderr || firstMalformedLine;
+          if (diagnostic && looksLikeQuotaExhaustion(diagnostic)) {
+            const error = new AdapterError("quota_exhausted", diagnostic, {
+              providerId,
+              exitCode: exit.exitCode,
+            });
+            yield { type: "error", runId, error, retryable: false };
+            return;
+          }
           // Rule 6: success with zero content is an empty_output soft failure.
           const error = new AdapterError("empty_output", "completed with no content", { providerId });
           yield { type: "error", runId, error, retryable: false };
@@ -339,12 +412,21 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
         yield { type: "error", runId, error, retryable: false };
       } else if (exit.exitCode !== 0) {
         // Rule 3: non-zero (or signalled/null) exit with no `result` line.
-        const error = new AdapterError("cli_exit", `exit ${exit.exitCode}`, {
+        const detail = stderr || firstMalformedLine || `exit ${exit.exitCode}`;
+        const code = cliFailureCode(detail, firstMalformedLine && !stderr ? "parse" : "cli_exit");
+        const error = new AdapterError(code, detail, {
           providerId,
           exitCode: exit.exitCode,
         });
         yield { type: "error", runId, error, retryable: false };
       } else if (!state.emittedContent) {
+        const diagnostic = stderr || firstMalformedLine;
+        if (diagnostic) {
+          const code = cliFailureCode(diagnostic, firstMalformedLine && !stderr ? "parse" : "empty_output");
+          const error = new AdapterError(code, diagnostic, { providerId });
+          yield { type: "error", runId, error, retryable: false };
+          return;
+        }
         // Rule 2 + 6: clean exit, no `result`, no content → empty completion.
         const error = new AdapterError("empty_output", "exited cleanly with no content", { providerId });
         yield { type: "error", runId, error, retryable: false };

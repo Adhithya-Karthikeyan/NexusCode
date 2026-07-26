@@ -18,6 +18,7 @@ import {
   CapabilityProvider,
   ThemeProvider,
   buildSlashCommands,
+  createEventStore,
   type Capabilities,
   type ModelChoice,
 } from "../src/index.js";
@@ -115,6 +116,53 @@ describe("slash-command menu", () => {
 });
 
 describe("interactive pickers over real data", () => {
+  it("/context and /cost read the live store, while /trace exposes the current session", async () => {
+    const store = createEventStore();
+    const { stdin, lastFrame } = render(
+      <App
+        {...(appProps(120, {
+          store,
+          contextMax: 8192,
+          traceTarget: "session-live-123",
+        }) as never)}
+      />,
+    );
+    await tick();
+    // Append after mount to prove the parent slash registry subscribes to the
+    // live projection rather than capturing initial zeroes.
+    store.append({
+      t: "usage",
+      lane: "main",
+      inputTokens: 1400,
+      outputTokens: 136,
+      costUsd: 0.125,
+    });
+    await tick();
+
+    await type(stdin, "/context");
+    stdin.write(ENTER);
+    await tick();
+    expect(strip(lastFrame())).toContain("1.5k / 8.2k tokens");
+    stdin.write(ESC);
+    await tick();
+
+    await type(stdin, "/cost");
+    stdin.write(ENTER);
+    await tick();
+    const cost = strip(lastFrame());
+    expect(cost).toContain("$0.13");
+    stdin.write(ESC);
+    await tick();
+
+    await type(stdin, "/trace");
+    stdin.write(ENTER);
+    await tick();
+    const trace = strip(lastFrame());
+    expect(trace).toContain("session-live-123");
+    expect(trace).toContain("nexus trace session-live-123");
+    expect(trace).not.toContain("unavailable");
+  });
+
   it("opening /model shows ONLY the active provider's models (not the global catalog) and Enter switches live", async () => {
     const onModelChange = vi.fn();
     const { stdin, lastFrame } = render(
@@ -237,6 +285,13 @@ describe("registry construction from real data", () => {
       providers: PROVIDERS,
       onPickProvider: () => {},
       tools: TOOLS,
+      info: {
+        contextUsed: 1536,
+        contextMax: 8192,
+        sessionCost: 0.125,
+        runCost: 0.025,
+        traceTarget: "session-123",
+      },
       onClear: () => {},
       onNewSession: () => {},
       onQuit: () => {},
@@ -253,6 +308,21 @@ describe("registry construction from real data", () => {
     expect(model.pickerFooter).toBe("/provider to switch provider");
     const clear = commands.find((c) => c.name === "/clear")!;
     expect(clear.optionsProvider).toBeUndefined(); // plain command
+
+    expect(await commands.find((c) => c.name === "/context")!.optionsProvider!()).toEqual([
+      expect.objectContaining({ hint: "1.5k / 8.2k tokens" }),
+    ]);
+    expect(await commands.find((c) => c.name === "/cost")!.optionsProvider!()).toEqual([
+      expect.objectContaining({ label: "session", hint: "$0.13" }),
+      expect.objectContaining({ label: "last run", hint: "$0.03" }),
+    ]);
+    expect(await commands.find((c) => c.name === "/trace")!.optionsProvider!()).toEqual([
+      {
+        label: "session-123",
+        value: "session-123",
+        hint: "nexus trace session-123",
+      },
+    ]);
   });
 
   it("/model queries the live provider list when a loader is wired, and falls back to curated on failure", async () => {

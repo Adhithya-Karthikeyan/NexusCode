@@ -144,8 +144,10 @@ describe("runWithFailover — live failover", () => {
   it("classifies which errors are failover-eligible", () => {
     expect(isFailoverEligible(new AdapterError("overloaded", "x"))).toBe(true);
     expect(isFailoverEligible(new AdapterError("rate_limit", "x"))).toBe(true);
+    expect(isFailoverEligible(new AdapterError("quota_exhausted", "x"))).toBe(true);
     expect(isFailoverEligible(new AdapterError("transport", "x"))).toBe(true);
     expect(isFailoverEligible(new AdapterError("cli_exit", "x"))).toBe(true); // retryable:false by default, still eligible
+    expect(isFailoverEligible(new AdapterError("empty_output", "x"))).toBe(true);
     expect(isFailoverEligible(new AdapterError("auth", "x"))).toBe(false);
     expect(isFailoverEligible(new AdapterError("cancelled", "x"))).toBe(false);
   });
@@ -214,6 +216,62 @@ describe("runWithFailover — live failover", () => {
     expect(failoverUi[0]).toMatchObject({ t: "failover", from: "flaky", to: "fast" });
     // The session banner still follows the failover event.
     expect(ui.some((e) => e.t === "session")).toBe(true);
+  });
+
+  it("fails over on an exhausted provider quota before any answer is shown", async () => {
+    const scope = rootScope();
+    const healthy = createMockAdapter({ id: "healthy", models: ["mock-fast"] });
+    const candidates: RouteCandidate[] = [
+      { providerId: "spent", modelId: "m", reason: "explicit" },
+      { providerId: "healthy", modelId: "mock-fast", reason: "fallback" },
+    ];
+    const failovers: FailoverEvent[] = [];
+    const chunks = await drain(
+      runWithFailover(
+        candidates,
+        (candidate) => {
+          if (candidate.providerId === "healthy") {
+            return healthy.stream(
+              { model: candidate.modelId, messages: MSGS },
+              ctxFor("run_healthy", scope.signal),
+            );
+          }
+          return (async function* () {
+            yield {
+              type: "run-start",
+              runId: "run_spent",
+              adapterId: "spent",
+              model: "m",
+              ts: 0,
+            } as const;
+            // An empty request can still report input usage before the error.
+            yield {
+              type: "usage",
+              runId: "run_spent",
+              usage: { inputTokens: 10, outputTokens: 0 },
+            } as const;
+            const error = new AdapterError(
+              "quota_exhausted",
+              "You've hit your usage limit",
+              { providerId: "spent" },
+            );
+            yield { type: "error", runId: "run_spent", error, retryable: false } as const;
+          })();
+        },
+        scope,
+        { onFailover: (event) => failovers.push(event) },
+      ),
+    );
+
+    expect(failovers).toHaveLength(1);
+    expect(failovers[0]).toMatchObject({
+      from: { providerId: "spent" },
+      to: { providerId: "healthy" },
+      error: { code: "quota_exhausted" },
+    });
+    expect(chunks.some((c) => c.type === "error")).toBe(false);
+    expect(chunks.filter((c) => c.type === "run-start")).toHaveLength(1);
+    expect(chunks.at(-1)?.type).toBe("run-end");
   });
 
   it("does NOT fail over once streaming has begun — a mid-stream error is terminal", async () => {

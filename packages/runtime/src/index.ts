@@ -474,6 +474,7 @@ async function registerDefaultCloudProviders(
         : "local — no key needed (start the server to use)";
       try {
         await registry.register(adapter, { skipHealth: true });
+        if (spec.keyEnv && !keyed) registry.setHealth(spec.id, { ok: false, detail });
         statuses.push({ id: spec.id, kind: "openai-compat", available: true, detail, needsKey: !!spec.keyEnv && !keyed });
       } catch (e) {
         statuses.push({ id: spec.id, kind: "openai-compat", available: false, detail: (e as Error).message });
@@ -509,6 +510,7 @@ async function registerDefaultCloudProviders(
         const keyed = await hasCredential(AZURE_KEY_ENV, "azure-openai", secrets);
         const detail = keyed ? `key present (${AZURE_KEY_ENV})` : `needs key: ${AZURE_KEY_ENV} + endpoint`;
         await registry.register(adapter, { skipHealth: true });
+        if (!keyed) registry.setHealth("azure-openai", { ok: false, detail });
         statuses.push({ id: "azure-openai", kind: "azure", available: true, detail, needsKey: !keyed });
       } catch (e) {
         statuses.push({ id: "azure-openai", kind: "azure", available: false, detail: (e as Error).message });
@@ -610,6 +612,7 @@ async function registerDefaultAnthropicProvider(
       },
     );
     await registry.register(adapter, signal ? { signal } : undefined);
+    if (!keyed) registry.setHealth("anthropic", { ok: false, detail });
     statuses.push({ id: "anthropic", kind: "anthropic", available: true, detail, needsKey: !keyed });
   } catch (e) {
     statuses.push({ id: "anthropic", kind: "anthropic", available: false, detail: (e as Error).message });
@@ -654,6 +657,12 @@ async function registerSubprocessProviders(
     const installed = binaryOnPath(bin);
     try {
       await registry.register(adapter, { skipHealth: true });
+      if (!installed) {
+        registry.setHealth(spec.id, {
+          ok: false,
+          detail: `not installed (${bin} not on PATH)`,
+        });
+      }
       statuses.push({
         id: spec.id,
         kind: "subprocess",
@@ -719,6 +728,7 @@ async function registerDefaultNativeProviders(
     const detail = keyed ? spec.readyDetail(config) : spec.needsDetail(config);
     try {
       await registry.register(adapter, { skipHealth: true });
+      if (!keyed) registry.setHealth(spec.id, { ok: false, detail });
       statuses.push({ id: spec.id, kind: spec.kind, available: true, detail, needsKey: !keyed });
     } catch (e) {
       statuses.push({ id: spec.id, kind: spec.kind, available: false, detail: (e as Error).message });

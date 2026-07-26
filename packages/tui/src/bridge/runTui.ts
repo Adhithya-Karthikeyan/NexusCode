@@ -49,6 +49,18 @@ export type TurnDispatcher = (
   mode: UiMode,
 ) => OrchestrationHandle;
 
+/** Atomic provider/model selection returned by the host after preflight. */
+export type ProviderSelectionResult =
+  | {
+      accepted: true;
+      provider: string;
+      model: string;
+      contextMax?: number;
+      reasoningSupported?: boolean;
+      receipt?: string;
+    }
+  | { accepted: false; provider: string; reason: string };
+
 export interface RunTuiOptions {
   /** Provider id for the single-dispatch default (and the lane key). */
   provider: string;
@@ -92,9 +104,9 @@ export interface RunTuiOptions {
    */
   listModelsFor?: (providerId: string) => Promise<readonly { model: string; hint?: string }[]>;
   /** Live `/model` switch — re-point the per-turn dispatch at the picked model. */
-  onModelChange?: (model: string, provider: string) => void;
+  onModelChange?: (model: string, provider: string) => ProviderSelectionResult | void;
   /** Live `/provider` switch. */
-  onProviderChange?: (provider: string) => void;
+  onProviderChange?: (provider: string) => ProviderSelectionResult | void;
   /** Live `/effort` switch — apply the picked reasoning effort to the next turn. */
   onEffortChange?: (effort: string) => void;
   /** Whether the active provider supports reasoning (drives the `/effort` picker). */
@@ -168,7 +180,15 @@ export async function runTurn(
   const handle = opts.dispatchTurn
     ? opts.dispatchTurn(turn.input, ctx, mode)
     : singleDispatch(opts.provider, opts.model, turn.input, ctx, opts.system);
-  return streamTurnIntoStore(handle, store, { adapterIds: [opts.provider], single: true });
+  const outcome = await streamTurnIntoStore(handle, store, {
+    adapterIds: [opts.provider],
+    single: true,
+  });
+  // On failure this also rolls back the unanswered user message from engine
+  // history, so switching providers cannot produce an invalid `user,user`
+  // transcript on the next request.
+  turn.record(outcome);
+  return outcome;
 }
 
 /**
@@ -195,14 +215,28 @@ export async function runTui(engine: Engine, opts: RunTuiOptions): Promise<RunTu
   // the conversation instead of treating each message as an isolated prompt.
   const transcript: Message[] = [];
 
+  // The provider/model in effect RIGHT NOW. `opts.provider`/`opts.model` are only
+  // the launch values; a `/model` or `/provider` switch must move these too, or
+  // the default single-dispatch path keeps calling the model the user switched
+  // away from and the lane keys stay stamped with the old adapter id.
+  let liveProvider = opts.provider;
+  let liveModel = opts.model;
+  const trackSwitch = (selection: ProviderSelectionResult | void): ProviderSelectionResult | void => {
+    if (selection?.accepted === true) {
+      liveProvider = selection.provider;
+      liveModel = selection.model;
+    }
+    return selection;
+  };
+
   let running = false;
   const onSubmit = (text: string, mode: UiMode): void => {
     if (running) return; // one turn at a time; the engine owns concurrency policy
     running = true;
     const userMsgs = userText(text);
     void runTurn(session, store, {
-      provider: opts.provider,
-      model: opts.model,
+      provider: liveProvider,
+      model: liveModel,
       text,
       mode,
       history: transcript,
@@ -214,8 +248,8 @@ export async function runTui(engine: Engine, opts: RunTuiOptions): Promise<RunTu
         // the next turn remembers it. `text` is the model's final answer for the
         // turn (after any tool loop). A failed/empty turn contributes no reply.
         const result = outcome.winner ?? outcome.runs[0];
-        transcript.push(...userMsgs);
-        if (result && result.text.length > 0) {
+        if (result?.status === "ok") transcript.push(...userMsgs);
+        if (result?.status === "ok" && result.text.length > 0) {
           transcript.push({ role: "assistant", content: [{ type: "text", text: result.text }] });
         }
       })
@@ -239,6 +273,7 @@ export async function runTui(engine: Engine, opts: RunTuiOptions): Promise<RunTu
     onSubmit,
     activeModel: opts.model,
     activeProvider: opts.provider,
+    traceTarget: session.id,
     ...(opts.sessionName !== undefined ? { sessionName: opts.sessionName } : {}),
     ...(opts.contextMax !== undefined ? { contextMax: opts.contextMax } : {}),
     ...(opts.themeId !== undefined ? { initialThemeId: opts.themeId } : {}),
@@ -249,8 +284,12 @@ export async function runTui(engine: Engine, opts: RunTuiOptions): Promise<RunTu
     ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
     ...(opts.mcpServers !== undefined ? { mcpServers: opts.mcpServers } : {}),
     ...(opts.listModelsFor !== undefined ? { listModelsFor: opts.listModelsFor } : {}),
-    ...(opts.onModelChange !== undefined ? { onModelChange: opts.onModelChange } : {}),
-    ...(opts.onProviderChange !== undefined ? { onProviderChange: opts.onProviderChange } : {}),
+    ...(opts.onModelChange !== undefined
+      ? { onModelChange: (m: string, p: string) => trackSwitch(opts.onModelChange!(m, p)) }
+      : {}),
+    ...(opts.onProviderChange !== undefined
+      ? { onProviderChange: (p: string) => trackSwitch(opts.onProviderChange!(p)) }
+      : {}),
     ...(opts.onEffortChange !== undefined ? { onEffortChange: opts.onEffortChange } : {}),
     ...(opts.reasoningSupported !== undefined ? { reasoningSupported: opts.reasoningSupported } : {}),
   };

@@ -123,6 +123,11 @@ import { historyList, historyShow, latestStoredSession, openHistory } from "./hi
 import { buildObservability, loadTraceSpans, type ObservabilityRuntime } from "./observability.js";
 import { attachMcpTools, startMcpSession } from "./mcp.js";
 import {
+  continuityEngineOptions,
+  openProviderCircuit,
+  providerCircuitPath,
+} from "./reliability.js";
+import {
   buildRuntime,
   isProviderUsable,
   listModelsForProvider,
@@ -130,6 +135,15 @@ import {
   resolveDefaultProvider,
   type Runtime,
 } from "./runtime.js";
+import {
+  ModelCatalog,
+  contextWindowFor,
+  preflightModelSwitch,
+  preflightProviderSwitch,
+  reasoningSupportedFor,
+  type SwitchContext,
+  type SwitchResult,
+} from "./model-switch.js";
 import {
   authStatusRows,
   buildAuthRegistry,
@@ -163,6 +177,7 @@ import {
   resolvePrincipal,
 } from "./enterprise.js";
 import { actionForToolPermission, parseDowngradeTarget } from "@nexuscode/enterprise";
+import { openTransferRuntime } from "./transfer.js";
 
 export type OutputMode = "text" | "json" | "ndjson";
 
@@ -308,21 +323,56 @@ interface RunOrchestrationOptions {
   input: Message[];
   registry: Runtime["registry"];
   pricing: Runtime["pricing"];
+  secrets: Runtime["secrets"];
   config: NexusConfig;
   output: OutputMode;
   io: Io;
+  /** The caller already assembled project context into input/template params. */
+  contextAlreadyAssembled?: boolean;
 }
 
 async function runOrchestration(opts: RunOrchestrationOptions): Promise<OrchestrationOutcome> {
-  const { kind, templates, input, registry, pricing, config, output, io } = opts;
+  const {
+    kind,
+    templates,
+    input,
+    registry,
+    pricing,
+    secrets,
+    config,
+    output,
+    io,
+    contextAlreadyAssembled,
+  } = opts;
   const single = kind === "single";
   const adapterIds = templates.map((t) => t.adapterId);
 
   const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
-  const store = await openHistory({ enabled: config.history.enabled, dbPath: historyDb });
+  const store = await openHistory({
+    enabled: config.history.enabled,
+    dbPath: historyDb,
+    storePrompts: config.history.storePrompts,
+    encryptPrompts: config.history.encryptPrompts,
+  });
   const obs = buildObservability(config);
+  const transfer = await openTransferRuntime(config, secrets, historyDb);
+  const assembler = contextAlreadyAssembled
+    ? undefined
+    : new EngineContextAssembler(
+        new ContextEngine(),
+        buildPowerSources(config, { cwd: process.cwd() }),
+        config.context.budgetTokens,
+      );
 
-  const engine = createEngine({ registry, pricing, store, ...(obs.emit ? { emit: obs.emit } : {}) });
+  const engine = createEngine({
+    registry,
+    pricing,
+    store,
+    ...(assembler ? { contextAssembler: assembler } : {}),
+    ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+    ...continuityEngineOptions(config, transfer),
+    ...(obs.emit ? { emit: obs.emit } : {}),
+  });
   const session = await engine.openSession();
   const turn = session.newTurn({ messages: input });
 
@@ -388,6 +438,7 @@ async function runOrchestration(opts: RunOrchestrationOptions): Promise<Orchestr
     await obs.flush();
     await session.dispose();
     await engine.dispose();
+    transfer.close();
     store.close();
   }
 }
@@ -495,6 +546,8 @@ function errorHint(code: string): string | undefined {
     case "rate_limit":
     case "rate_limited":
       return "rate-limited — wait a moment, or switch providers with -p";
+    case "quota_exhausted":
+      return "provider usage limit expired or quota exhausted — add credits/raise the limit, or switch providers with -p";
     case "timeout":
     case "deadline_exceeded":
       return "the provider timed out — retry, or try another provider with -p";
@@ -531,8 +584,17 @@ function renderLaneBlocks(runs: readonly RunResult[], io: Io): void {
   for (const r of runs) {
     io.out(`── ${r.adapterId}:${r.model} ──\n`);
     const text = r.text.trim();
-    io.out(text.length > 0 ? `${text}\n` : "(no output)\n");
-    if (r.error) io.out(`${humanErrorLine(r.error.code, r.error.message)}\n`);
+    if (text.length > 0) io.out(`${text}\n`);
+    if (r.status === "cancelled") {
+      io.out(
+        text.length > 0
+          ? "(cancelled after partial output)\n"
+          : "(cancelled after another race lane completed)\n",
+      );
+    } else {
+      if (text.length === 0) io.out("(no output)\n");
+      if (r.error) io.out(`${humanErrorLine(r.error.code, r.error.message)}\n`);
+    }
     io.out("\n");
   }
 }
@@ -630,17 +692,40 @@ export async function cmdAsk(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
   const system = args.flags.get("system") ?? defaultSystemPrompt();
 
-  const template: RunTemplate = { adapterId: providerId, model };
-  if (system !== undefined) template.params = { system };
+  const rawInput = userText(prompt);
+  // Assemble before response-cache lookup so the signature covers the exact
+  // project context sent to the provider. Otherwise an unchanged question could
+  // return an answer cached before AGENTS.md, the repo map, RAG results, memory,
+  // or the working diff changed.
+  let input = rawInput;
+  let assembledSystem: string | undefined = system;
+  try {
+    const assembled = await new EngineContextAssembler(
+      new ContextEngine(),
+      buildPowerSources(config, { cwd: process.cwd() }),
+      config.context.budgetTokens,
+    ).assemble(
+      {
+        messages: rawInput,
+        ...(system !== undefined ? { system } : {}),
+      },
+      new AbortController().signal,
+    );
+    input = assembled.messages;
+    assembledSystem = assembled.system;
+  } catch {
+    // Context enrichment is best-effort; a source failure must not sink `ask`.
+  }
 
-  const input = userText(prompt);
+  const template: RunTemplate = { adapterId: providerId, model };
+  if (assembledSystem !== undefined) template.params = { system: assembledSystem };
 
   // Response cache (CAG): a hit on an IDENTICAL request short-circuits the whole
   // provider dispatch and books the avoided tokens/cost as savings. Opt-in via
   // `cache.enabled` + `cache.responses` so the default path is unchanged.
   const responseCache = openResponseCache(config);
   const req: ChatRequest = { model, messages: input };
-  if (system !== undefined) req.system = system;
+  if (assembledSystem !== undefined) req.system = assembledSystem;
   if (responseCache) {
     const cached = await responseCache.get(req);
     if (cached) {
@@ -660,9 +745,11 @@ export async function cmdAsk(args: ParsedArgs, io: Io = defaultIo): Promise<numb
     input,
     registry: runtime.registry,
     pricing: runtime.pricing,
+    secrets: runtime.secrets,
     config,
     output,
     io,
+    contextAlreadyAssembled: true,
   });
 
   // Store the fresh answer under its request signature for the next identical run.
@@ -940,7 +1027,9 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   // Wave-9 opt-in tool groups (web/browser/db/cloud/containers/ai): registered
   // only when enabled in `config.tools.enabledGroups`. Each keeps its permission
   // class, so the gate treats a network/write tool exactly like any other.
-  registerToolGroups(toolRegistry, config);
+  registerToolGroups(toolRegistry, config, {
+    ai: { provider: runtime.registry.get(providerId), model },
+  });
   // Connect configured MCP servers and register their discovered tools so the
   // native tool loop can call them (gracefully — absent servers are a no-op).
   const mcp = await attachMcpTools(toolRegistry, config, runtime.secrets);
@@ -969,13 +1058,22 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   const maxTurns = maxTurnsRaw ? Math.max(1, Number.parseInt(maxTurnsRaw, 10) || 8) : 8;
 
   const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
-  const store = await openHistory({ enabled: config.history.enabled, dbPath: historyDb });
+  const store = await openHistory({
+    enabled: config.history.enabled,
+    dbPath: historyDb,
+    storePrompts: config.history.storePrompts,
+    encryptPrompts: config.history.encryptPrompts,
+  });
   const obs = buildObservability(config);
+  const transfer = await openTransferRuntime(config, runtime.secrets, historyDb);
+  const continuity = continuityEngineOptions(config, transfer);
   const engine = createEngine({
     registry: runtime.registry,
     pricing: runtime.pricing,
     store,
     contextAssembler: assembler,
+    ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+    ...continuity,
     ...(obs.emit ? { emit: obs.emit } : {}),
   });
   const session = await engine.openSession();
@@ -1136,6 +1234,7 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     await session.dispose();
     await engine.dispose();
     await mcp.close();
+    transfer.close();
     store.close();
   }
 }
@@ -1182,7 +1281,9 @@ async function runAgentOoda(
   const processManager = new ProcessManager({ cwd: args.flags.get("cwd") ?? process.cwd() });
   for (const t of jobTools(processManager)) toolRegistry.register(t);
   // Wave-9 opt-in tool groups, gated by config (fully additive; absent groups are a no-op).
-  registerToolGroups(toolRegistry, config);
+  registerToolGroups(toolRegistry, config, {
+    ai: { provider: runtime.registry.get(providerId), model },
+  });
   const mcp = await attachMcpTools(toolRegistry, config, runtime.secrets);
   // Wave-10 plugins (§9): apply provider/tool contributions into the live
   // registries this OODA run draws from (sandboxed, version-gated, isolated).
@@ -1232,12 +1333,22 @@ async function runAgentOoda(
   };
 
   const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
-  const histStore = await openHistory({ enabled: config.history.enabled, dbPath: historyDb });
+  const histStore = await openHistory({
+    enabled: config.history.enabled,
+    dbPath: historyDb,
+    storePrompts: config.history.storePrompts,
+    encryptPrompts: config.history.encryptPrompts,
+  });
   const obs = buildObservability(config);
+  const transfer = await openTransferRuntime(config, runtime.secrets, historyDb);
+  const continuity = continuityEngineOptions(config, transfer);
   const engine = createEngine({
     registry: runtime.registry,
     pricing: runtime.pricing,
     store: histStore,
+    contextAssembler: assembler,
+    ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+    ...continuity,
     ...(obs.emit ? { emit: obs.emit } : {}),
   });
   const session = await engine.openSession();
@@ -1294,6 +1405,7 @@ async function runAgentOoda(
     await engine.dispose();
     await mcp.close();
     await processManager.killAll();
+    transfer.close();
     histStore.close();
   }
 }
@@ -1446,7 +1558,11 @@ export async function cmdTask(args: ParsedArgs, io: Io = defaultIo): Promise<num
     }
     const status = sub === "done" ? "done" : sub === "start" ? "in_progress" : sub === "block" ? "blocked" : "cancelled";
     const t = store.update(id, { status });
-    io.out(`${t.id}  [${t.status}]  ${t.title}\n`);
+    io.out(
+      output === "json"
+        ? `${JSON.stringify(t)}\n`
+        : `${t.id}  [${t.status}]  ${t.title}\n`,
+    );
     return 0;
   }
 
@@ -1457,7 +1573,8 @@ export async function cmdTask(args: ParsedArgs, io: Io = defaultIo): Promise<num
       return 2;
     }
     const removed = store.delete(id);
-    io.out(removed ? `removed ${id}\n` : `no task "${id}"\n`);
+    if (output === "json") io.out(`${JSON.stringify({ id, removed })}\n`);
+    else io.out(removed ? `removed ${id}\n` : `no task "${id}"\n`);
     return removed ? 0 : 1;
   }
 
@@ -1481,8 +1598,13 @@ export async function cmdTask(args: ParsedArgs, io: Io = defaultIo): Promise<num
   }
 
   if (sub === "clear") {
-    for (const t of store.all()) store.delete(t.id);
-    io.out("cleared all tasks\n");
+    const tasks = store.all();
+    for (const t of tasks) store.delete(t.id);
+    io.out(
+      output === "json"
+        ? `${JSON.stringify({ cleared: tasks.length })}\n`
+        : "cleared all tasks\n",
+    );
     return 0;
   }
 
@@ -1499,7 +1621,7 @@ export async function cmdJobs(args: ParsedArgs, io: Io = defaultIo): Promise<num
   if (sub === "list") {
     // Background jobs are tracked per-process by the ProcessManager; a fresh CLI
     // invocation has none. `jobs run` launches one within a single invocation.
-    io.out("no background jobs\n");
+    io.out(output === "json" ? "[]\n" : "no background jobs\n");
     return 0;
   }
 
@@ -1515,8 +1637,14 @@ export async function cmdJobs(args: ParsedArgs, io: Io = defaultIo): Promise<num
     const manager = new ProcessManager({ cwd });
     const history = new CommandHistory();
     const job = manager.spawn({ command: command as string, args: rest, cwd });
-    // Stream live output; combined stdout+stderr goes to stdout so it is capturable.
-    for await (const chunk of job.stream()) io.out(chunk.data);
+    // Text mode streams live. JSON mode buffers the combined process output into
+    // one field so stdout remains one valid JSON document instead of
+    // `<child output>\n{metadata}`.
+    let combinedOutput = "";
+    for await (const chunk of job.stream()) {
+      if (output === "json") combinedOutput += chunk.data;
+      else io.out(chunk.data);
+    }
     const info = await job.wait();
     history.append({
       command: info.command,
@@ -1525,7 +1653,15 @@ export async function cmdJobs(args: ParsedArgs, io: Io = defaultIo): Promise<num
       exitCode: info.exitCode,
     });
     if (output === "json") {
-      io.out(`${JSON.stringify({ id: info.id, status: info.status, exitCode: info.exitCode, signal: info.signal })}\n`);
+      io.out(
+        `${JSON.stringify({
+          id: info.id,
+          status: info.status,
+          exitCode: info.exitCode,
+          signal: info.signal,
+          output: combinedOutput,
+        })}\n`,
+      );
     } else {
       io.err(`[job] ${info.status} exit=${info.exitCode ?? "null"}${info.signal ? ` signal=${info.signal}` : ""}\n`);
     }
@@ -1552,7 +1688,16 @@ export async function cmdJobs(args: ParsedArgs, io: Io = defaultIo): Promise<num
   if (sub === "pty") {
     // Report the interactive-PTY seam's availability (feature-detected; §13).
     const available = await isNodePtyAvailable();
-    io.out(`pty: ${available ? "node-pty available (interactive shell)" : "child_process fallback (no native pty)"}\n`);
+    if (output === "json") {
+      io.out(
+        `${JSON.stringify({
+          available,
+          implementation: available ? "node-pty" : "child_process",
+        })}\n`,
+      );
+    } else {
+      io.out(`pty: ${available ? "node-pty available (interactive shell)" : "child_process fallback (no native pty)"}\n`);
+    }
     return 0;
   }
 
@@ -1686,6 +1831,15 @@ export async function cmdTools(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     // A registry the run can resolve from: built-ins + every ENABLED group +
     // plugin-contributed tools. A tool from a disabled group is deliberately
     // absent (opt-in per project).
+    const requestedGroup = groupOfTool(toolName);
+    if (requestedGroup && !config.tools.enabledGroups.includes(requestedGroup)) {
+      io.err(
+        `nexus tools run: "${toolName}" is in the "${requestedGroup}" group, which is not enabled. ` +
+          `Add "${requestedGroup}" to config.tools.enabledGroups (e.g. \`nexus config set tools.enabledGroups '["${requestedGroup}"]'\`).\n`,
+      );
+      return 1;
+    }
+
     const registry = new ToolRegistry();
     registerBuiltins(registry);
     registerToolGroups(registry, config);
@@ -1693,18 +1847,10 @@ export async function cmdTools(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     await applyPluginsToRun(runPlugins, { toolRegistry: registry });
 
     if (!registry.has(toolName)) {
-      const group = groupOfTool(toolName);
-      if (group && !config.tools.enabledGroups.includes(group)) {
-        io.err(
-          `nexus tools run: "${toolName}" is in the "${group}" group, which is not enabled. ` +
-            `Add "${group}" to config.tools.enabledGroups (e.g. \`nexus config set tools.enabledGroups '["${group}"]'\`).\n`,
-        );
-        return 1;
-      }
       io.err(`nexus tools run: no registered tool "${toolName}"\n`);
       return 1;
     }
-    const tool = registry.get(toolName);
+    let tool = registry.get(toolName);
 
     // Parse the JSON argument object from --args (or piped stdin). `--args` is a
     // repeatable flag in the shared grammar; for `tools run` the JSON is a single
@@ -1768,6 +1914,40 @@ export async function cmdTools(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       }
     }
 
+    // Vision/OCR need the same active provider adapter as the rest of NexusCode.
+    // Bind it only after permission/RBAC checks so a denied manual tool call
+    // does not initialize provider clients. Image generation and speech retain
+    // their own optional OpenAI backends from @nexuscode/tools-ai.
+    let aiRuntime: Runtime | undefined;
+    if (requestedGroup === "ai") {
+      aiRuntime = await buildAuthedRuntime(config);
+      const explicitProvider = args.flags.get("provider");
+      let providerId: string;
+      if (explicitProvider !== undefined) {
+        if (!isProviderUsable(aiRuntime, explicitProvider)) {
+          io.err(
+            `nexus tools run: provider "${explicitProvider}" is not available ` +
+              `(run \`nexus login ${explicitProvider}\` or try -p mock)\n`,
+          );
+          await aiRuntime.registry.disposeAll();
+          return 1;
+        }
+        providerId = explicitProvider;
+      } else {
+        const resolved = resolveDefaultProviderForRun(aiRuntime, config, io);
+        if (!resolved) {
+          await aiRuntime.registry.disposeAll();
+          return 1;
+        }
+        providerId = resolved;
+      }
+      const model = resolveRunModel(aiRuntime, providerId, config, args.flags.get("model"));
+      tool =
+        buildToolGroup("ai", config, {
+          ai: { provider: aiRuntime.registry.get(providerId), model },
+        }).find((candidate) => candidate.name === toolName) ?? tool;
+    }
+
     const ctrl = new AbortController();
     const onSigint = (): void => ctrl.abort();
     process.once("SIGINT", onSigint);
@@ -1797,6 +1977,7 @@ export async function cmdTools(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       return 1;
     } finally {
       process.removeListener("SIGINT", onSigint);
+      await aiRuntime?.registry.disposeAll();
     }
   }
 
@@ -1884,6 +2065,7 @@ export async function cmdCode(args: ParsedArgs, io: Io = defaultIo): Promise<num
     input: userText(prompt),
     registry: runtime.registry,
     pricing: runtime.pricing,
+    secrets: runtime.secrets,
     config,
     output,
     io,
@@ -1942,7 +2124,11 @@ export async function cmdMemory(args: ParsedArgs, io: Io = defaultIo): Promise<n
       if (parsed.length > 0) put.tags = parsed;
     }
     const item = store.put(put);
-    io.out(`added ${item.id} (${item.tier}/${item.kind})\n`);
+    io.out(
+      output === "json"
+        ? `${JSON.stringify(item)}\n`
+        : `added ${item.id} (${item.tier}/${item.kind})\n`,
+    );
     return 0;
   }
 
@@ -1972,7 +2158,11 @@ export async function cmdMemory(args: ParsedArgs, io: Io = defaultIo): Promise<n
       return 2;
     }
     const removed = store.delete(id);
-    io.out(removed ? `removed ${id}\n` : `no memory item "${id}"\n`);
+    if (output === "json") {
+      io.out(`${JSON.stringify({ id, removed })}\n`);
+    } else {
+      io.out(removed ? `removed ${id}\n` : `no memory item "${id}"\n`);
+    }
     return removed ? 0 : 1;
   }
 
@@ -2041,6 +2231,7 @@ export async function cmdCompare(args: ParsedArgs, io: Io = defaultIo): Promise<
     input: userText(prompt),
     registry: runtime.registry,
     pricing: runtime.pricing,
+    secrets: runtime.secrets,
     config,
     output,
     io,
@@ -2085,8 +2276,15 @@ function renderOrchestrationText(outcome: OrchestrationOutcome, io: Io): void {
     `${outcome.kind}${w ? ` — winner ${w.adapterId}:${w.model}` : " — no winner"}` +
       `${outcome.partial ? " (partial)" : ""}\n`,
   );
-  const answer = outcome.merged?.text ?? w?.text;
-  if (answer) io.out(`\n${answer}\n`);
+  // Every lane was already rendered above. Only print a separate merged answer
+  // when the judge actually created text distinct from every lane; otherwise
+  // race/chain output repeats the winner verbatim and can double an enormous
+  // response.
+  const answer = outcome.merged?.text?.trim();
+  const duplicatesLane = answer
+    ? outcome.runs.some((run) => run.text.trim() === answer)
+    : false;
+  if (answer && !duplicatesLane) io.out(`\n── merged answer ──\n${answer}\n`);
 
   renderLaneSummary(outcome.runs, io, w?.runId);
   io.err(
@@ -2103,6 +2301,7 @@ interface MultiLaneOptions {
   laneLabels: string[];
   registry: Runtime["registry"];
   pricing: Runtime["pricing"];
+  secrets: Runtime["secrets"];
   config: NexusConfig;
   output: OutputMode;
   io: Io;
@@ -2115,11 +2314,30 @@ interface MultiLaneOptions {
  * exercisable with the mock provider.
  */
 async function runMultiLane(opts: MultiLaneOptions): Promise<OrchestrationOutcome> {
-  const { spec, laneLabels, registry, pricing, config, output, io } = opts;
+  const { spec, laneLabels, registry, pricing, secrets, config, output, io } = opts;
   const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
-  const store = await openHistory({ enabled: config.history.enabled, dbPath: historyDb });
+  const store = await openHistory({
+    enabled: config.history.enabled,
+    dbPath: historyDb,
+    storePrompts: config.history.storePrompts,
+    encryptPrompts: config.history.encryptPrompts,
+  });
   const obs = buildObservability(config);
-  const engine = createEngine({ registry, pricing, store, ...(obs.emit ? { emit: obs.emit } : {}) });
+  const transfer = await openTransferRuntime(config, secrets, historyDb);
+  const assembler = new EngineContextAssembler(
+    new ContextEngine(),
+    buildPowerSources(config, { cwd: process.cwd() }),
+    config.context.budgetTokens,
+  );
+  const engine = createEngine({
+    registry,
+    pricing,
+    store,
+    contextAssembler: assembler,
+    ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+    ...continuityEngineOptions(config, transfer),
+    ...(obs.emit ? { emit: obs.emit } : {}),
+  });
   const session = await engine.openSession();
   const turn = session.newTurn({ messages: [] });
 
@@ -2151,6 +2369,7 @@ async function runMultiLane(opts: MultiLaneOptions): Promise<OrchestrationOutcom
     await obs.flush();
     await session.dispose();
     await engine.dispose();
+    transfer.close();
     store.close();
   }
 }
@@ -2212,6 +2431,7 @@ export async function cmdRace(args: ParsedArgs, io: Io = defaultIo): Promise<num
     laneLabels: resolved.laneLabels,
     registry: runtime.registry,
     pricing: runtime.pricing,
+    secrets: runtime.secrets,
     config,
     output,
     io,
@@ -2243,6 +2463,7 @@ export async function cmdConsensus(args: ParsedArgs, io: Io = defaultIo): Promis
     laneLabels: resolved.laneLabels,
     registry: runtime.registry,
     pricing: runtime.pricing,
+    secrets: runtime.secrets,
     config,
     output,
     io,
@@ -2319,6 +2540,7 @@ export async function cmdChain(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     laneLabels,
     registry: runtime.registry,
     pricing: runtime.pricing,
+    secrets: runtime.secrets,
     config,
     output,
     io,
@@ -2370,11 +2592,21 @@ function candidateLabel(c: RouteCandidate): string {
   return `${c.providerId}/${c.modelId}`;
 }
 
+function candidatePriceLabel(
+  candidate: RouteCandidate,
+  pricing: Record<string, { inputPerMTok: number; outputPerMTok: number }>,
+): string | undefined {
+  const price = pricing[candidate.modelId];
+  if (!price) return undefined;
+  return `$${price.inputPerMTok}/$${price.outputPerMTok} per 1M input/output`;
+}
+
 export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const sub = args.positionals[0] ?? "explain";
   const output = parseOutput(args);
   const config = await loadEffectiveConfig();
   const runtime = await buildRuntime(config);
+  const providerCircuit = openProviderCircuit(config);
   const rule = ruleFromArgs(args);
   const meta = routerMetadataFrom(config);
   const capNeeded = capabilityPredicate(args.flags.get("capability"));
@@ -2384,6 +2616,7 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     const candidates = router.select(rule, {
       registry: runtime.registry,
       ...(capNeeded ? { capabilitiesNeeded: capNeeded } : {}),
+      ...(providerCircuit ? { providerCircuit } : {}),
     });
     const chosen = candidates[0];
     if (output === "json") {
@@ -2391,7 +2624,12 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
         `${JSON.stringify({
           optimize: rule.optimize,
           chosen: chosen ? { providerId: chosen.providerId, modelId: chosen.modelId, reason: chosen.reason } : null,
-          candidates: candidates.map((c) => ({ providerId: c.providerId, modelId: c.modelId, reason: c.reason })),
+          candidates: candidates.map((c) => ({
+            providerId: c.providerId,
+            modelId: c.modelId,
+            reason: c.reason,
+            pricing: runtime.pricing[c.modelId] ?? null,
+          })),
         })}\n`,
       );
       return chosen ? 0 : 1;
@@ -2401,9 +2639,13 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       io.out("no candidate matches the rule\n");
       return 1;
     }
-    io.out(`chosen: ${candidateLabel(chosen)} — ${chosen.reason}\n`);
+    const chosenPrice = candidatePriceLabel(chosen, runtime.pricing);
+    io.out(`chosen: ${candidateLabel(chosen)} — ${chosen.reason}${chosenPrice ? ` — ${chosenPrice}` : ""}\n`);
     io.out("candidates:\n");
-    candidates.forEach((c, i) => io.out(`  ${i + 1}. ${candidateLabel(c)} (${c.reason})\n`));
+    candidates.forEach((c, i) => {
+      const price = candidatePriceLabel(c, runtime.pricing);
+      io.out(`  ${i + 1}. ${candidateLabel(c)} (${c.reason})${price ? ` — ${price}` : ""}\n`);
+    });
     return 0;
   }
 
@@ -2421,15 +2663,36 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     const rawCandidates = new Router(meta).select(rule, {
       registry: runtime.registry,
       ...(capNeeded ? { capabilitiesNeeded: capNeeded } : {}),
+      ...(providerCircuit ? { providerCircuit } : {}),
     });
     const affinityKey = `route:${config.defaultProvider}`;
     const previewCandidates = preferAffineProvider(config, affinityKey, rawCandidates);
     if (output !== "json" && output !== "ndjson") {
-      io.err(`[route] candidates: ${previewCandidates.map(candidateLabel).join(" → ") || "(none)"}\n`);
+      io.err(
+        `[route] candidates: ${
+          previewCandidates
+            .map((candidate) => {
+              const price = candidatePriceLabel(candidate, runtime.pricing);
+              return `${candidateLabel(candidate)}${price ? ` [${price}]` : ""}`;
+            })
+            .join(" → ") || "(none)"
+        }\n`,
+      );
     }
 
     const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
-    const store = await openHistory({ enabled: config.history.enabled, dbPath: historyDb });
+    const store = await openHistory({
+      enabled: config.history.enabled,
+      dbPath: historyDb,
+      storePrompts: config.history.storePrompts,
+      encryptPrompts: config.history.encryptPrompts,
+    });
+    const transfer = await openTransferRuntime(config, runtime.secrets, historyDb);
+    const assembler = new EngineContextAssembler(
+      new ContextEngine(),
+      buildPowerSources(config, { cwd: process.cwd() }),
+      config.context.budgetTokens,
+    );
     // Optional retry override (default 3) — `--retries 1` forces cross-provider
     // failover instead of same-provider recovery, useful with mock-flaky.
     const retriesRaw = args.flags.get("retries");
@@ -2437,16 +2700,28 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       retriesRaw !== undefined
         ? { ...DEFAULT_RETRY_POLICY, maxAttempts: Math.max(1, Number.parseInt(retriesRaw, 10) || 1) }
         : undefined;
+    const continuity = continuityEngineOptions(config, transfer, providerCircuit);
+    if (args.bools.has("recover-partial")) {
+      continuity.partialRecovery = {
+        enabled: true,
+        maxPartialContextCodePoints:
+          config.transfer.handoff.partialContinuation.maxContextCodePoints,
+      };
+    }
     const engine = createEngine({
       registry: runtime.registry,
       pricing: runtime.pricing,
       store,
+      contextAssembler: assembler,
+      ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+      ...continuity,
       ...(retryPolicy ? { retryPolicy } : {}),
     });
     const session = await engine.openSession();
     const turn = session.newTurn({ messages: userText(prompt) });
 
     const failovers: string[] = [];
+    const partialRecoveries: NonNullable<FailoverEvent["partialRecovery"]>[] = [];
     const onSigint = (): void => {
       void turn.scope.cancel("user");
     };
@@ -2459,6 +2734,7 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
           input: turn.input,
           idempotencyKey: randomUUID(),
           meta,
+          params: { system: args.flags.get("system") ?? defaultSystemPrompt() },
           ...(capNeeded ? { capabilitiesNeeded: capNeeded } : {}),
         },
         turn.context(),
@@ -2467,6 +2743,16 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
           // is rendered from the projected `failover` UiEvent (run-start trail).
           onFailover: (e: FailoverEvent) => {
             failovers.push(`${e.from.providerId}→${e.to.providerId}`);
+            if (e.partialRecovery) {
+              partialRecoveries.push(e.partialRecovery);
+              if (output === "text") {
+                io.err(
+                  `[route] safely continuing partial response on ${e.to.providerId} ` +
+                    `(recovery ${e.partialRecovery.recoveryId.slice(0, 12)}, ` +
+                    `${e.partialRecovery.doNotRepeatActionIds.length} protected action(s))\n`,
+                );
+              }
+            }
           },
         },
       );
@@ -2488,6 +2774,7 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
           `${JSON.stringify({
             ...(w ? runJson(w) : { status: "error", text: "" }),
             failovers,
+            partialRecoveries,
           })}\n`,
         );
       } else if (output === "text") {
@@ -2501,6 +2788,7 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       process.removeListener("SIGINT", onSigint);
       await session.dispose();
       await engine.dispose();
+      transfer.close();
       store.close();
     }
   }
@@ -2587,8 +2875,23 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
     enabled: config.history.enabled,
     dbPath: historyDb,
     storePrompts: config.history.storePrompts,
+    encryptPrompts: config.history.encryptPrompts,
   });
-  const engine = createEngine({ registry: runtime.registry, pricing: runtime.pricing, store });
+  const transfer = await openTransferRuntime(config, runtime.secrets, historyDb);
+  const assembler = new EngineContextAssembler(
+    new ContextEngine(),
+    buildPowerSources(config, { cwd: process.cwd() }),
+    config.context.budgetTokens,
+  );
+  const engine = createEngine({
+    registry: runtime.registry,
+    pricing: runtime.pricing,
+    store,
+    contextAssembler: assembler,
+    ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+    ...continuityEngineOptions(config, transfer),
+  });
+  const system = args.flags.get("system") ?? defaultSystemPrompt();
 
   // `--resume <id>` / `--continue` rehydrate a previous conversation. Resume is
   // only possible when prompts were stored, which is opt-in — so every failure
@@ -2607,27 +2910,41 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   }
   // Print the id unconditionally: without it there is nothing to pass to --resume.
   io.err(`[session] ${session.id}\n`);
+  let failed = false;
   try {
     for (const line of lines) {
       // One session across every line: `turn.input` already carries the prior
       // turns (engine-owned transcript), so line N+1 remembers line N.
       const turn = session.newTurn({ prompt: line });
+      const run: RunSpec = {
+        adapterId: providerId,
+        model,
+        input: turn.input,
+        idempotencyKey: randomUUID(),
+        params: { system },
+      };
       const handle = dispatch(
-        { kind: "single", run: { adapterId: providerId, model, input: turn.input, idempotencyKey: randomUUID() } },
+        { kind: "single", run },
         turn.context(),
       );
       for await (const labeled of handle.events()) {
         for (const ev of projectLabeled(labeled, [providerId], true)) {
-          if (ev.t === "text") io.out(ev.delta);
+          // Keep stdout as the assistant transcript, but never discard provider
+          // failures/tool diagnostics. `chat` used to select only text events,
+          // which made quota/auth/empty-output failures look like blank replies.
+          if (ev.t !== "done") renderStreaming(ev, "text", io);
         }
       }
-      turn.record(await handle.outcome());
+      const outcome = await handle.outcome();
+      turn.record(outcome);
+      if (!outcome.winner || outcome.winner.status !== "ok") failed = true;
       io.out("\n");
     }
-    return 0;
+    return failed ? 1 : 0;
   } finally {
     await session.dispose();
     await engine.dispose();
+    transfer.close();
     store.close();
   }
 }
@@ -2647,16 +2964,9 @@ function parsePreset(
     : "conversation";
 }
 
-/** Real context window for the provider's model (engine-owned; drives the HUD). */
-function contextWindowFor(registry: ProviderRegistry, providerId: string, model: string): number {
-  try {
-    const caps = registry.capabilitiesOf(providerId);
-    const info = caps.models.find((m) => m.id === model) ?? caps.models[0];
-    return info?.contextWindow ?? 200_000;
-  } catch {
-    return 200_000;
-  }
-}
+// The real context window for a provider/model pair lives in `./model-switch.js`
+// (`contextWindowFor`), which resolves it for the model that was ACTUALLY picked
+// instead of silently falling back to the first curated model's window.
 
 /**
  * Launch the rich Ink TUI over a live engine. On a non-TTY / `TERM=dumb` /
@@ -2698,11 +3008,19 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   const system = args.flags.get("system") ?? defaultSystemPrompt();
   const themeId = args.flags.get("theme");
   const preset = parsePreset(args.flags.get("preset"));
-  const contextMax = contextWindowFor(runtime.registry, providerId, model);
+  // One catalog shared by the `/model` picker and the switch preflight, so a model
+  // the user can SEE in the picker is never rejected as "not advertised".
+  const catalog = new ModelCatalog();
+  const contextMax = contextWindowFor(runtime, providerId, model, catalog);
 
   // Durable run history + context assembly, shared by every turn from the TUI.
   const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
-  const store = await openHistory({ enabled: config.history.enabled, dbPath: historyDb });
+  const store = await openHistory({
+    enabled: config.history.enabled,
+    dbPath: historyDb,
+    storePrompts: config.history.storePrompts,
+    encryptPrompts: config.history.encryptPrompts,
+  });
   const toolRegistry = new ToolRegistry();
   registerBuiltins(toolRegistry);
   // Register configured MCP servers' tools so the TUI's agent loop can call them.
@@ -2714,11 +3032,15 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   );
 
   const obs = buildObservability(config);
+  const transfer = await openTransferRuntime(config, runtime.secrets, historyDb);
+  const continuity = continuityEngineOptions(config, transfer);
   const engine = createEngine({
     registry: runtime.registry,
     pricing: runtime.pricing,
     store,
     contextAssembler: assembler,
+    ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+    ...continuity,
     ...(obs.emit ? { emit: obs.emit } : {}),
   });
 
@@ -2746,7 +3068,21 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
       // A provider that can't report capabilities simply contributes no models.
     }
   }
-  const providerChoices = runtime.registry.ids().map((id) => ({ id }));
+  const providerChoices = runtime.registry.ids().map((id) => {
+    try {
+      const caps = runtime.registry.capabilitiesOf(id);
+      const health = runtime.registry.healthOf(id);
+      const features = [
+        `${caps.models.length} model${caps.models.length === 1 ? "" : "s"}`,
+        caps.reasoning ? "reasoning" : undefined,
+        caps.tools ? "tools" : undefined,
+        health?.ok === false ? "unavailable" : "ready",
+      ].filter((part): part is string => Boolean(part));
+      return { id, hint: features.join(" · ") };
+    } catch {
+      return { id, hint: "capabilities unavailable" };
+    }
+  });
   const toolChoices = toolRegistry.list().map((t) => ({ name: t.name, description: t.description }));
 
   // Per-turn dispatch. AGENT/AUTOPILOT run the full tool loop. Plain CHAT ALSO
@@ -2766,12 +3102,29 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   // Reasoning-effort state for the `/effort` picker; only meaningful when the
   // active provider advertises reasoning (the picker reflects that).
   let activeEffort: "off" | "low" | "medium" | "high" = "off";
-  let reasoningSupported = false;
-  try {
-    reasoningSupported = runtime.registry.capabilitiesOf(providerId).reasoning === true;
-  } catch {
-    reasoningSupported = false;
-  }
+  const reasoningSupported = reasoningSupportedFor(runtime, providerId);
+  // The preflight is pure (see `./model-switch.js`); these two adapters bind it to
+  // the live dispatch state and commit an accepted switch exactly once, so the
+  // `/model` and `/provider` paths can no longer drift apart.
+  const switchContext = (): SwitchContext => ({
+    runtime,
+    config,
+    catalog,
+    ...(continuity.providerCircuit ? { circuit: continuity.providerCircuit } : {}),
+    ...(continuity.circuitTargetFor ? { circuitTargetFor: continuity.circuitTargetFor } : {}),
+    from: { provider: activeProvider, model: activeModel },
+  });
+  const applySwitch = (result: SwitchResult): SwitchResult => {
+    if (result.accepted) {
+      activeProvider = result.provider;
+      activeModel = result.model;
+      // A provider with no reasoning mode must not keep a stale `/effort` level
+      // silently attached to its requests.
+      if (!result.reasoningSupported) activeEffort = "off";
+    }
+    return result;
+  };
+
   const dispatchTurn: TurnDispatcher = (input, ctx, mode) => {
     const run: RunSpec = { adapterId: activeProvider, model: activeModel, input, idempotencyKey: randomUUID() };
     if (system !== undefined) run.params = { system };
@@ -2823,17 +3176,25 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
       models: modelChoices,
       providers: providerChoices,
       tools: toolChoices,
+      // The `/mcp` list was never given this, so it reported "no MCP servers
+      // configured" even with servers connected and their tools registered above.
+      mcpServers: mcp.reports.map((r) => ({
+        name: r.name,
+        hint: r.connected
+          ? `${r.transport} · ${r.toolCount} tool${r.toolCount === 1 ? "" : "s"}`
+          : `${r.transport} · unavailable${r.error ? `: ${r.error}` : ""}`,
+      })),
       // Live, provider-scoped model discovery for the `/model` picker: query the
       // ACTIVE provider's real model list (adapter.listModels) with a curated
-      // fallback — never the global catalog.
-      listModelsFor: (pid: string) => listModelsForProvider(runtime, pid),
-      onModelChange: (m, p) => {
-        activeModel = m;
-        if (p) activeProvider = p;
+      // fallback — never the global catalog. Every row shown is recorded in the
+      // shared catalog so the switch preflight accepts exactly what it offered.
+      listModelsFor: async (pid: string) => {
+        const rows = await listModelsForProvider(runtime, pid);
+        catalog.record(pid, rows);
+        return rows;
       },
-      onProviderChange: (p) => {
-        activeProvider = p;
-      },
+      onModelChange: (m, p) => applySwitch(preflightModelSwitch(switchContext(), m, p)),
+      onProviderChange: (p) => applySwitch(preflightProviderSwitch(switchContext(), p)),
       // `/effort` picker: apply the chosen reasoning effort to the next turn, and
       // tell the TUI whether the active provider supports reasoning at all.
       onEffortChange: (e: string) => {
@@ -2850,6 +3211,7 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
     await obs.flush();
     await engine.dispose();
     await mcp.close();
+    transfer.close();
     store.close();
   }
 }
@@ -2858,18 +3220,100 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
 
 export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const sub = args.positionals[0] ?? "list";
+  const output = parseOutput(args);
   const config = await loadEffectiveConfig();
 
-  if (sub === "list") {
+  if (sub === "list" || sub === "status") {
     const runtime = await buildRuntime(config);
-    const output = parseOutput(args);
+    const circuit = openProviderCircuit(config);
+    const circuitStatuses = circuit?.listStatuses({ includeClosed: true }) ?? [];
     if (output === "json") {
-      io.out(`${JSON.stringify(runtime.statuses)}\n`);
+      // Keep the long-standing `providers list -o json` array contract intact.
+      // `status` is the richer operational view with circuit and pricing data.
+      if (sub === "list") {
+        io.out(`${JSON.stringify(runtime.statuses)}\n`);
+      } else {
+        io.out(
+          `${JSON.stringify({
+            providers: runtime.statuses,
+            circuits: circuitStatuses,
+            circuitStore: config.providerCircuit.enabled ? providerCircuitPath(config) : null,
+            pricing: runtime.registry.ids().map((providerId) => {
+              const models = runtime.registry.capabilitiesOf(providerId).models;
+              return {
+                providerId,
+                models: models.map((model) => ({
+                  modelId: model.id,
+                  pricing: runtime.pricing[model.id] ?? null,
+                })),
+              };
+            }),
+          })}\n`,
+        );
+      }
     } else {
       for (const s of runtime.statuses) {
-        const mark = !s.available ? "-- " : s.needsKey ? "key" : "ok ";
-        io.out(`${mark} ${s.id} (${s.kind})${s.detail ? ` — ${s.detail}` : ""}\n`);
+        const scopedCircuits = circuitStatuses.filter(
+          (status) => status.target.providerId === s.id && status.state !== "closed",
+        );
+        const blocked = scopedCircuits.find(
+          (status) => status.availability === "blocked" || status.availability === "probing",
+        );
+        const mark = blocked?.reason === "quota"
+          ? "limit"
+          : blocked
+            ? "hold "
+            : !s.available
+              ? "--   "
+              : s.needsKey
+                ? "key  "
+                : "ok   ";
+        let detail = s.detail ? ` — ${s.detail}` : "";
+        if (blocked) {
+          const until = blocked.blockedUntil
+            ? ` until ${new Date(blocked.blockedUntil).toLocaleString()}`
+            : " until credentials or status change";
+          detail += ` — ${blocked.reason ?? "unavailable"}${until}`;
+        }
+        let models: { id: string }[] = [];
+        try {
+          models = runtime.registry.capabilitiesOf(s.id).models;
+        } catch {
+          // Unavailable adapters legitimately have no capabilities.
+        }
+        const totals = models
+          .map((model) => runtime.pricing[model.id])
+          .filter((price): price is NonNullable<typeof price> => price !== undefined)
+          .map((price) => price.inputPerMTok + price.outputPerMTok);
+        if (totals.length > 0) {
+          const low = Math.min(...totals);
+          const high = Math.max(...totals);
+          detail += ` — price ${low === high ? `$${low}` : `$${low}–$${high}`}/1M input+output tokens`;
+        }
+        io.out(`${mark} ${s.id} (${s.kind})${detail}\n`);
       }
+      if (circuit?.loadIssue) io.out(`warn provider circuit state ignored: ${circuit.loadIssue.message}\n`);
+      if (config.providerCircuit.enabled) io.out(`circuit state: ${providerCircuitPath(config)}\n`);
+    }
+    return 0;
+  }
+
+  if (sub === "reset") {
+    const circuit = openProviderCircuit(config);
+    if (!circuit) {
+      io.err("nexus providers reset: provider circuit breaker is disabled\n");
+      return 1;
+    }
+    const providerId = args.positionals[1];
+    const cleared = circuit.reset(providerId ? { providerId } : undefined);
+    if (output === "json") {
+      io.out(`${JSON.stringify({ providerId: providerId ?? null, cleared })}\n`);
+    } else {
+      io.out(
+        providerId
+          ? `reset ${cleared} circuit record(s) for provider "${providerId}"\n`
+          : `reset ${cleared} provider circuit record(s)\n`,
+      );
     }
     return 0;
   }
@@ -2882,9 +3326,17 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
       io.err("nexus providers add <id> --kind <kind> --adapter <pkg> [--base-url ..] [--api-key-ref ..]\n");
       return 2;
     }
+    const normalizedKind =
+      kind === "openai" || kind === "openai-compatible"
+        ? "openai-compat"
+        : kind;
     const current = readUserConfig() as Record<string, unknown>;
     const providers = Array.isArray(current.providers) ? [...(current.providers as unknown[])] : [];
-    const entry: Record<string, unknown> = { id, kind, adapter };
+    if (providers.some((provider) => (provider as { id?: string }).id === id)) {
+      io.err(`nexus providers add: provider "${id}" already exists\n`);
+      return 1;
+    }
+    const entry: Record<string, unknown> = { id, kind: normalizedKind, adapter };
     const baseUrl = args.flags.get("base-url");
     if (baseUrl) entry.baseUrl = baseUrl;
     const apiKeyRef = args.flags.get("api-key-ref");
@@ -2893,8 +3345,17 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
     if (apiKeyEnv) entry.apiKeyEnv = apiKeyEnv;
     providers.push(entry);
     const next = { ...current, providers };
+    const validation = validateUserConfig(next);
+    if (!validation.ok) {
+      io.err(`nexus providers add: ${validation.message}\n`);
+      return 2;
+    }
     const file = writeUserConfig(next);
-    io.out(`added provider "${id}" → ${file}\n`);
+    io.out(
+      output === "json"
+        ? `${JSON.stringify({ provider: entry, file })}\n`
+        : `added provider "${id}" → ${file}\n`,
+    );
     return 0;
   }
 
@@ -3073,9 +3534,13 @@ export async function cmdMcp(args: ParsedArgs, io: Io = defaultIo): Promise<numb
       io.err(`nexus mcp add: server "${name}" already exists (rm it first)\n`);
       return 2;
     }
-    servers.push(candidate);
+    servers.push(parsed.data);
     const file = writeUserConfig({ ...current, mcp: servers });
-    io.out(`added mcp server "${name}" (${transport}) → ${file}\n`);
+    io.out(
+      output === "json"
+        ? `${JSON.stringify({ server: parsed.data, file })}\n`
+        : `added mcp server "${name}" (${transport}) → ${file}\n`,
+    );
     return 0;
   }
 
@@ -3110,7 +3575,11 @@ export async function cmdMcp(args: ParsedArgs, io: Io = defaultIo): Promise<numb
       return 1;
     }
     const file = writeUserConfig({ ...current, mcp: next });
-    io.out(`removed mcp server "${name}" → ${file}\n`);
+    io.out(
+      output === "json"
+        ? `${JSON.stringify({ name, removed: true, file })}\n`
+        : `removed mcp server "${name}" → ${file}\n`,
+    );
     return 0;
   }
 
@@ -3346,7 +3815,11 @@ export async function cmdPlugin(args: ParsedArgs, io: Io = defaultIo): Promise<n
     }
     dirs.push(abs);
     const file = writeUserConfig({ ...current, plugins: { ...pluginsBlock, dirs } });
-    io.out(`added plugin search dir "${abs}" → ${file}\n`);
+    io.out(
+      output === "json"
+        ? `${JSON.stringify({ dir: abs, added: true, file })}\n`
+        : `added plugin search dir "${abs}" → ${file}\n`,
+    );
     return 0;
   }
 
@@ -3366,7 +3839,11 @@ export async function cmdPlugin(args: ParsedArgs, io: Io = defaultIo): Promise<n
       return 1;
     }
     const file = writeUserConfig({ ...current, plugins: { ...pluginsBlock, dirs: next } });
-    io.out(`removed plugin search dir "${abs}" → ${file}\n`);
+    io.out(
+      output === "json"
+        ? `${JSON.stringify({ dir: abs, removed: true, file })}\n`
+        : `removed plugin search dir "${abs}" → ${file}\n`,
+    );
     return 0;
   }
 
@@ -3490,6 +3967,15 @@ export async function cmdKeys(
       return 2;
     }
     await secrets.set(ref, value);
+    const circuit = openProviderCircuit(config);
+    if (circuit) {
+      const providerIds = new Set<string>();
+      for (const provider of config.providers) {
+        if (provider.id === ref || provider.apiKeyRef === ref) providerIds.add(provider.id);
+      }
+      if (config.defaultProvider === ref) providerIds.add(ref);
+      for (const providerId of providerIds) circuit.reset({ providerId });
+    }
     const src = await secrets.source(ref);
     io.out(`saved key for ${ref} (${src ?? "file"}) — ${redactSecret(value)}\n`);
     return 0;
@@ -3835,6 +4321,12 @@ export async function cmdLogin(
 
   try {
     const status = await strategy.login(loginOpts);
+    if (
+      status.loggedIn &&
+      (deps.config === undefined || ctx.config.providerCircuit.filePath !== undefined)
+    ) {
+      openProviderCircuit(ctx.config)?.reset({ providerId: status.providerId });
+    }
     const expiresIn = formatExpiry(status.expiresAt, ctx.now());
     if (output === "json") {
       io.out(
@@ -4023,7 +4515,34 @@ export async function cmdDoctor(_args: ParsedArgs, io: Io = defaultIo): Promise<
 
   io.out("nexus doctor\n");
   io.out(`config dir: ${userConfigDir()}\n`);
-  io.out(`history db: ${config.history.dbPath ?? nexusPaths().historyDb} (enabled=${config.history.enabled})\n`);
+  const historyDb = config.history.dbPath ?? nexusPaths().historyDb;
+  io.out(`history db: ${historyDb} (enabled=${config.history.enabled})\n`);
+  const transfer = await openTransferRuntime(config, runtime.secrets, historyDb);
+  io.out(`transfer: ${transfer.factory ? "[ok]" : "[--]"} ${transfer.detail}\n`);
+  transfer.close();
+  const circuit = openProviderCircuit(config);
+  if (circuit) {
+    const blocked = circuit
+      .listStatuses()
+      .filter(
+        (status) =>
+          status.availability === "blocked" || status.availability === "probing",
+      );
+    io.out(
+      `circuit: [${circuit.loadIssue ? "!!" : "ok"}] ${blocked.length} blocked target(s) · ` +
+        `${providerCircuitPath(config)}\n`,
+    );
+    for (const status of blocked) {
+      io.out(
+        `  [hold] ${status.target.providerId}` +
+          `${status.target.modelId ? `/${status.target.modelId}` : ""} — ` +
+          `${status.reason ?? "unavailable"}` +
+          `${status.blockedUntil ? ` until ${new Date(status.blockedUntil).toLocaleString()}` : ""}\n`,
+      );
+    }
+  } else {
+    io.out("circuit: [--] disabled\n");
+  }
   io.out("providers:\n");
 
   let anyHealthyFailure = false;
@@ -4697,7 +5216,24 @@ export async function cmdHistory(args: ParsedArgs, io: Io = defaultIo): Promise<
   if (sub === "list") {
     const rows = await historyList(dbPath, 20);
     if (output === "json") {
-      io.out(`${JSON.stringify(rows)}\n`);
+      io.out(
+        `${JSON.stringify(
+          rows.map((r) => ({
+            runId: r.run_id,
+            sessionId: r.session_id,
+            turnId: r.turn_id,
+            provider: r.adapter_id,
+            model: r.model,
+            status: r.status,
+            finishReason: r.finish_reason,
+            text: r.text,
+            inputTokens: r.input_tokens,
+            outputTokens: r.output_tokens,
+            costUsd: r.cost_usd,
+            createdAt: r.created_at,
+          })),
+        )}\n`,
+      );
       return 0;
     }
     if (rows.length === 0) {
@@ -4727,7 +5263,28 @@ export async function cmdHistory(args: ParsedArgs, io: Io = defaultIo): Promise<
       return 1;
     }
     if (output === "json") {
-      io.out(`${JSON.stringify(events.map((e) => ({ ...e, payload: JSON.parse(e.payload) as unknown })))}\n`);
+      io.out(
+        `${JSON.stringify(
+          events.map((e) => {
+            let payload: unknown = e.payload;
+            try {
+              payload = JSON.parse(e.payload) as unknown;
+            } catch {
+              // Preserve malformed historical data instead of crashing the
+              // entire inspection command.
+            }
+            return {
+              sessionId: e.session_id,
+              turnId: e.turn_id,
+              runId: e.run_id,
+              seq: e.seq,
+              type: e.type,
+              ts: e.ts,
+              payload,
+            };
+          }),
+        )}\n`,
+      );
       return 0;
     }
     for (const e of events) {

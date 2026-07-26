@@ -2,8 +2,9 @@
  * VerbatimSink — unredacted chunk copy (`zlcts_verbatim`).
  *
  * The runner calls this BEFORE the existing redacting SessionStore.append so the
- * raw, unredacted chunk survives to the audit log. Encryption-at-rest is deferred
- * to a later phase (encrypted=0 for now).
+ * raw, unredacted chunk survives to the audit log. The production runtime uses
+ * an encrypted BlobStore; plaintext stores remain available only for isolated
+ * tests/backward-compatible embedding.
  */
 
 import { createHash } from "node:crypto";
@@ -22,7 +23,7 @@ export function createVerbatimSink(db: DbLike, blobs: BlobStore): VerbatimSink {
   const ins = db.prepare(
     `INSERT INTO zlcts_verbatim
        (session_id, lamport_ts, chunk_type, payload_ref, checksum, encrypted, written_at)
-     VALUES (?, ?, ?, ?, ?, 0, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
   const getRow = db.prepare(
     `SELECT chunk_type, payload_ref, encrypted FROM zlcts_verbatim WHERE seq = ?`,
@@ -34,13 +35,13 @@ export function createVerbatimSink(db: DbLike, blobs: BlobStore): VerbatimSink {
       const bytes = Buffer.from(json, "utf8");
       const checksum = createHash("sha256").update(bytes).digest("hex");
       const payloadRef = blobs.put(json);
-      // TODO(Phase 2): encrypt payload at rest; set encrypted=1 and store key id.
       ins.run(
         ctx.sessionId,
         ctx.lamportTs,
         chunk.type,
         payloadRef,
         checksum,
+        blobs.encrypted ? 1 : 0,
         new Date().toISOString(),
       );
     },

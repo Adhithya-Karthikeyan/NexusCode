@@ -21,6 +21,12 @@ describe("ContextTransferConfig defaults", () => {
     expect(cfg.handoff.mode).toBe("full");
     expect(cfg.handoff.inflightWaitMs).toBe(30000);
     expect(cfg.handoff.preventRetryWindow).toBe(5);
+    expect(cfg.handoff.maxCapsuleTokens).toBe(24000);
+    expect(cfg.handoff.maxCapsuleBytes).toBe(128 * 1024);
+    expect(cfg.handoff.partialContinuation).toEqual({
+      enabled: false,
+      maxContextCodePoints: 32768,
+    });
   });
 
   it("dbPath is optional (resolved to history.db at runtime)", () => {

@@ -1,8 +1,8 @@
 /**
  * TransferHandle — the concrete capture handle the agent runner attaches to a
  * RunContext. Bundles the EventProjector, DeltaSyncBus, VerbatimSink, and
- * ToolProgress over a shared db + blob store, and owns a monotonic lamport
- * clock for the run.
+ * ToolProgress over a shared db + blob store, and consumes a monotonic lamport
+ * clock for the session.
  *
  * Structural: this satisfies `@nexuscode/core`'s `TransferHandle` interface
  * (same shape) WITHOUT this package build-coupling to core — core defines the
@@ -36,6 +36,12 @@ export interface TransferHandleOptions {
   sessionId: string;
   runId: string;
   turnId: string;
+  /**
+   * Session-scoped Lamport allocator. Production factories must share one
+   * allocator across every run in a session so concurrent lanes and provider
+   * switches cannot restart the clock at one.
+   */
+  nextLamport?: () => number;
 }
 
 /**
@@ -67,8 +73,13 @@ export function createTransferHandle(opts: TransferHandleOptions): TransferHandl
   // durability barrier (flushSync). The DeltaSyncBus owns the append path;
   // both operate on the same table so the barrier reaches every folded row.
   const wal = createDeltaWAL(opts.db, opts.blobs);
-  let lamport = 0;
-  const nextLamport = (): number => ++lamport;
+  let localLamport = 0;
+  let highWaterLamport = 0;
+  const allocateLamport = opts.nextLamport ?? (() => ++localLamport);
+  const nextLamport = (): number => {
+    highWaterLamport = allocateLamport();
+    return highWaterLamport;
+  };
 
   return {
     sessionId: opts.sessionId,
@@ -126,7 +137,7 @@ export function createTransferHandle(opts: TransferHandleOptions): TransferHandl
     },
 
     flush() {
-      wal.flushSync(opts.sessionId, lamport);
+      wal.flushSync(opts.sessionId, highWaterLamport);
     },
   };
 }

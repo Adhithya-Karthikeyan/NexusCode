@@ -106,6 +106,27 @@ describe("nexus race (mock lanes)", () => {
     expect(obj.partial).toBe(false);
   }, 20_000);
 
+  it("--mode first presents expected loser cancellation without an error or duplicate winner", async () => {
+    const r = await runCli([
+      "race",
+      "--mode",
+      "first",
+      "-b",
+      "mock:mock-fast",
+      "-b",
+      "mock:mock-smart",
+      "-o",
+      "text",
+      "unique-race-answer",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("(cancelled after another race lane completed)");
+    expect(r.stdout).not.toContain("error: aborted");
+    // Either lane may win a real race; the winning answer must still appear
+    // exactly once rather than being repeated by a redundant winner block.
+    expect(r.stdout.match(/unique-race-answer/g)).toHaveLength(1);
+  }, 20_000);
+
   it("--mode best runs both lanes and picks a judged winner", async () => {
     const r = await runCli(["race", "--mode", "best", "-b", "mock", "-b", "mock:mock-smart", "-o", "json", "hi"]);
     expect(r.code).toBe(0);

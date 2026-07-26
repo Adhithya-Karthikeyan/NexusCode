@@ -12,6 +12,8 @@ export * from "@nexuscode/shared";
 export * from "./adapter.js";
 export * from "./cancel.js";
 export * from "./resilience.js";
+export * from "./stream-contract.js";
+export * from "./switching.js";
 export * from "./bus.js";
 export * from "./registry.js";
 export * from "./types.js";
@@ -31,5 +33,7 @@ export {
 } from "./orchestrate/orchestrator.js";
 export * from "./orchestrate/judge.js";
 export * from "./router.js";
+export * from "./provider-circuit.js";
 export * from "./projection.js";
 export * from "./trace.js";
+export * from "./partial-recovery.js";

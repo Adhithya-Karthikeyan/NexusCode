@@ -104,6 +104,8 @@ export interface SlashCommandDeps {
     contextMax?: number;
     sessionCost?: number;
     runCost?: number;
+    /** Current session/trace identifier accepted by `nexus trace <id>`. */
+    traceTarget?: string;
     mcpServers?: { name: string; hint?: string }[];
   };
 
@@ -275,9 +277,18 @@ export function buildSlashCommands(deps: SlashCommandDeps): SlashCommandSpec[] {
     },
     {
       name: "/trace",
-      description: "open the run trace",
+      description: "show the current trace command",
       pickerTitle: "Trace",
-      optionsProvider: () => [{ label: "trace unavailable in this build", value: "" }],
+      optionsProvider: () =>
+        info.traceTarget
+          ? [
+              {
+                label: info.traceTarget,
+                value: info.traceTarget,
+                hint: `nexus trace ${info.traceTarget}`,
+              },
+            ]
+          : [{ label: "trace is available after a session starts", value: "" }],
     },
     {
       name: "/help",

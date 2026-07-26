@@ -42,7 +42,7 @@ import type {
   ToolDef,
   Usage,
 } from "@nexuscode/shared";
-import { AdapterError, createModelListCache } from "@nexuscode/shared";
+import { AdapterError, createModelListCache, looksLikeQuotaExhaustion } from "@nexuscode/shared";
 
 const PROVIDER_ID = "gemini";
 
@@ -301,7 +301,7 @@ function redactSecrets(msg: string): string {
 
 interface HttpishError {
   status?: number;
-  code?: number;
+  code?: number | string;
   message?: string;
 }
 
@@ -309,9 +309,17 @@ interface HttpishError {
 export function mapError(e: unknown): AdapterError {
   if (e instanceof AdapterError) return e; // already normalized (e.g. missing key)
   const err = e as HttpishError;
-  const status = typeof err?.status === "number" ? err.status : err?.code;
+  const status = typeof err?.status === "number" ? err.status : typeof err?.code === "number" ? err.code : undefined;
+  const providerCode = typeof err?.code === "string" ? err.code : undefined;
   const rawMsg = e instanceof Error ? e.message : typeof err?.message === "string" ? err.message : "unknown Gemini transport error";
   const msg = redactSecrets(rawMsg);
+  if (looksLikeQuotaExhaustion(rawMsg, providerCode)) {
+    return new AdapterError("quota_exhausted", msg, {
+      ...(status !== undefined ? { httpStatus: status } : {}),
+      providerId: PROVIDER_ID,
+      cause: e,
+    });
+  }
   if (status === 401 || status === 403) {
     return new AdapterError("auth", msg, { httpStatus: status, providerId: PROVIDER_ID, cause: e });
   }

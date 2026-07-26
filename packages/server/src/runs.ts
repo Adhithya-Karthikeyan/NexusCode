@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { Nexus, NexusRun } from "@nexuscode/sdk";
+import type { Nexus, NexusRun, OrchestrationOutcome } from "@nexuscode/sdk";
 import type { Backend, ChainStageSpec, NexusSession } from "@nexuscode/sdk";
 
 /** The orchestration primitives a run may target. */
@@ -57,6 +57,7 @@ export interface RunRecord {
   sessionId: string;
   state: RunState;
   createdAt: number;
+  errorCode?: string;
   error?: string;
   run: NexusRun;
 }
@@ -267,8 +268,17 @@ export class RunManager {
     // replayable event stream the SSE endpoint needs.
     void run
       .outcome()
-      .then(() => {
-        if (record.state === "running") record.state = "done";
+      .then((outcome: OrchestrationOutcome) => {
+        if (record.state !== "running") return;
+        const succeeded = outcome.runs.some((result) => result.status === "ok");
+        if (succeeded) {
+          record.state = "done";
+          return;
+        }
+        const failed = outcome.runs.find((result) => result.error !== undefined);
+        record.state = "error";
+        record.errorCode = failed?.error?.code ?? "unknown";
+        record.error = failed?.error?.message ?? "run completed without a successful provider result";
       })
       .catch((err: unknown) => {
         record.state = "error";

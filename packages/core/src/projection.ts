@@ -90,7 +90,17 @@ export function chunkToUiEvents(chunk: StreamChunk, lane: string): UiEvent[] {
       return out;
     }
     case "session-init":
-      return [];
+      // Agent loops suppress duplicate provider run-start chunks on later
+      // turns. A synthetic session-init carries only the failover trail so the
+      // switch receipt remains visible without violating the stream contract.
+      return failoverTrailOf(chunk.raw).map((step) => ({
+        t: "failover",
+        lane,
+        from: step.from,
+        to: step.to,
+        code: step.code,
+        message: step.message,
+      }));
     case "text-delta":
       return chunk.channel === "reasoning"
         ? [{ t: "reasoning", lane, delta: chunk.text }]

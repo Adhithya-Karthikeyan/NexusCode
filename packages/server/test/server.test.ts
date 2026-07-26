@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import type { SecretSource, SecretStore } from "@nexuscode/config";
+import { AdapterError, type ProviderAdapter } from "@nexuscode/core";
 import { createMockAdapter } from "@nexuscode/provider-mock";
 import { createNexusServer, NexusServer, redactConfig, REDACTED } from "../src/index.js";
 
@@ -49,6 +50,46 @@ async function boot(
 
 function auth(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
+}
+
+function quotaProvider(): ProviderAdapter {
+  const error = new AdapterError("quota_exhausted", "You've hit your usage limit", {
+    providerId: "quota-test",
+  });
+  return {
+    id: "quota-test",
+    label: "Quota test",
+    transport: "http-sdk",
+    capabilities: async () => ({
+      models: [{ id: "m" }],
+      streaming: true,
+      tools: false,
+      parallelToolCalls: false,
+      vision: false,
+      structuredOutput: false,
+      reasoning: false,
+      systemPrompt: true,
+      fileEdit: false,
+      shellExec: false,
+      git: false,
+      approvalGate: false,
+      mcp: false,
+      cancel: "abort-signal",
+    }),
+    chat: async () => {
+      throw error;
+    },
+    stream: async function* (_req, ctx) {
+      yield {
+        type: "run-start",
+        runId: ctx.runId,
+        adapterId: "quota-test",
+        model: "m",
+        ts: 0,
+      };
+      yield { type: "error", runId: ctx.runId, error, retryable: false };
+    },
+  };
 }
 
 /** Consume an SSE response body into a list of `{ event, data }` frames. */
@@ -237,6 +278,49 @@ describe("runs + SSE", () => {
     expect(frames.some((f) => f.event === "end")).toBe(true);
   });
 
+  it("streams quota failures and records the run as error with its normalized code", async () => {
+    const { base, token } = await boot({
+      nexusOptions: {
+        config: { defaultProvider: "mock", defaultModel: "mock-fast" },
+        providers: [quotaProvider()],
+      },
+    });
+    const start = await fetch(`${base}/v1/runs`, {
+      method: "POST",
+      headers: { ...auth(token), "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "single",
+        prompt: "hello",
+        opts: { provider: "quota-test", model: "m" },
+      }),
+    });
+    expect(start.status).toBe(202);
+    const started = (await start.json()) as { runId: string; events: string };
+
+    const frames = await readSse(
+      await fetch(`${base}${started.events}`, { headers: auth(token) }),
+    );
+    const providerError = frames.find((frame) => frame.event === "error");
+    expect(providerError?.data).toMatchObject({
+      code: "quota_exhausted",
+      message: "You've hit your usage limit",
+    });
+
+    let record: { state: string; errorCode?: string; error?: string } | undefined;
+    await waitFor(async () => {
+      const response = await fetch(`${base}/v1/runs/${started.runId}`, {
+        headers: auth(token),
+      });
+      record = ((await response.json()) as { run: typeof record }).run;
+      return record?.state !== "running";
+    });
+    expect(record).toMatchObject({
+      state: "error",
+      errorCode: "quota_exhausted",
+      error: "You've hit your usage limit",
+    });
+  });
+
   it("exposes the run in GET /v1/runs and GET /v1/runs/:id", async () => {
     const { base, token } = await boot();
     const start = await fetch(`${base}/v1/runs`, {
@@ -301,9 +385,13 @@ describe("security defaults", () => {
 });
 
 /** Poll `predicate` until it's true, or throw once `timeoutMs` elapses. */
-async function waitFor(predicate: () => boolean, timeoutMs = 2000, stepMs = 20): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2000,
+  stepMs = 20,
+): Promise<void> {
   const start = Date.now();
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() - start > timeoutMs) throw new Error("waitFor: timed out");
     await new Promise((r) => setTimeout(r, stepMs));
   }

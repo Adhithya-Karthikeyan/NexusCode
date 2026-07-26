@@ -61,6 +61,24 @@ describe("claude-code adapter — argv", () => {
     expect(args.join(" ")).toContain("--append-system-prompt be terse");
     expect(args.join(" ")).toContain("--resume sess-9");
   });
+
+  it("uses the provider-native session slot when no explicit resume override is configured", () => {
+    const ac = new AbortController();
+    const args = buildClaudeCodeArgs(
+      {},
+      req("continue"),
+      { ...ctx(ac.signal), providerSessionId: "sess-restored" },
+    );
+    expect(args.join(" ")).toContain("--resume sess-restored");
+
+    const overridden = buildClaudeCodeArgs(
+      { resume: "sess-configured" },
+      req("continue"),
+      { ...ctx(ac.signal), providerSessionId: "sess-restored" },
+    );
+    expect(overridden.join(" ")).toContain("--resume sess-configured");
+    expect(overridden).not.toContain("sess-restored");
+  });
 });
 
 describe("claude-code adapter — full stream mapping", () => {
@@ -155,12 +173,13 @@ describe("claude-code adapter — completion / error rules", () => {
     expect(last.retryable).toBe(false);
   });
 
-  it("a malformed line emits a parse error but the stream keeps going (rule 5)", async () => {
+  it("recovers after one malformed line without emitting a non-terminal error chunk", async () => {
     const ac = new AbortController();
     const chunks = await collect(adapterFor("malformed").stream(req(), ctx(ac.signal)));
-    const parseErr = chunks.find((c) => c.type === "error");
-    expect(parseErr?.type === "error" && parseErr.error.code).toBe("parse");
-    // The stream still completes with a terminal run-end after recovery.
+    // `StreamChunk.error` is terminal by contract. A recovered warning is
+    // traced by the base, not emitted ahead of a later run-end.
+    expect(chunks.some((c) => c.type === "error")).toBe(false);
+    expect(chunks.filter((c) => c.type === "run-end" || c.type === "error")).toHaveLength(1);
     const last = chunks[chunks.length - 1];
     expect(last?.type).toBe("run-end");
     const text = chunks.filter((c) => c.type === "text-delta").map((c) => (c.type === "text-delta" ? c.text : "")).join("");

@@ -1,7 +1,7 @@
 /**
  * The durable transcript table — the only place in the history db that holds the
  * user's own words. Two properties matter more than round-tripping: it is written
- * ONLY on an explicit opt-in, and what is written is redacted first.
+ * only when enabled, is redacted first, and is encrypted at rest by default.
  */
 
 import { describe, it, expect } from "vitest";
@@ -79,6 +79,34 @@ describe("history — durable transcript (storePrompts)", () => {
     } finally {
       store.close();
     }
+  });
+
+  it("stores transcript rows as authenticated ciphertext by default", async () => {
+    const dbPath = tmpDbPath();
+    const store = await openHistory({ enabled: true, dbPath, storePrompts: true });
+    store.appendTranscript!({
+      sessionId: "s1",
+      turnId: "t1",
+      seq: 0,
+      messages: [user("project codename blueberry")],
+    });
+    store.close();
+
+    const { default: Database } = (await import("better-sqlite3")) as unknown as {
+      default: new (path: string) => {
+        prepare(sql: string): { get(): { content: string } };
+        close(): void;
+      };
+    };
+    const db = new Database(dbPath);
+    const row = db.prepare("SELECT content FROM turn_message LIMIT 1").get();
+    db.close();
+    expect(row.content).toMatch(/^enc:v1:/);
+    expect(row.content).not.toContain("blueberry");
+
+    const reopened = await openHistory({ enabled: true, dbPath, storePrompts: true });
+    expect(JSON.stringify(await reopened.loadTranscript!("s1"))).toContain("blueberry");
+    reopened.close();
   });
 
   it("re-recording a turn REPLACES its reply instead of appending a second one", async () => {

@@ -13,7 +13,12 @@ import {
   APIConnectionTimeoutError,
   APIUserAbortError,
 } from "openai";
-import { AdapterError, type AdapterErrorCode, type AdapterErrorOptions } from "@nexuscode/core";
+import {
+  AdapterError,
+  looksLikeQuotaExhaustion,
+  type AdapterErrorCode,
+  type AdapterErrorOptions,
+} from "@nexuscode/core";
 
 /** Read a header value from a web `Headers` instance or a plain record. */
 function headerValue(headers: unknown, name: string): string | undefined {
@@ -56,18 +61,19 @@ export function parseRetryAfterMs(headers: unknown): number | undefined {
  * those fields at the top level. Handle both, then fall back to the Error's own
  * message (which the SDK builds from the response for real transport errors).
  */
-function bodyDetail(err: APIError): { message?: string; code?: string } {
-  const out: { message?: string; code?: string } = {};
+function bodyDetail(err: APIError): { message?: string; code?: string; type?: string } {
+  const out: { message?: string; code?: string; type?: string } = {};
   if (typeof err.code === "string") out.code = err.code;
 
   const readFields = (obj: unknown): void => {
     if (!obj || typeof obj !== "object") return;
-    const rec = obj as { message?: unknown; code?: unknown };
+    const rec = obj as { message?: unknown; code?: unknown; type?: unknown };
     if (out.message == null && typeof rec.message === "string") out.message = rec.message;
     if (out.code == null && typeof rec.code === "string") out.code = rec.code;
+    if (out.type == null && typeof rec.type === "string") out.type = rec.type;
   };
 
-  const body = err.error as { error?: unknown; message?: unknown; code?: unknown } | undefined;
+  const body = err.error as { error?: unknown; message?: unknown; code?: unknown; type?: unknown } | undefined;
   if (body && typeof body === "object") {
     readFields(body.error); // nested `{ error: { … } }`
     readFields(body); // or top-level `{ message, code }`
@@ -119,7 +125,7 @@ export function mapOpenAIError(err: unknown, providerId: string): AdapterError {
 
   if (err instanceof APIError) {
     const status = err.status;
-    const { message, code } = bodyDetail(err);
+    const { message, code, type } = bodyDetail(err);
     const opts: AdapterErrorOptions = { ...base };
     if (typeof status === "number") opts.httpStatus = status;
     const retryAfter = parseRetryAfterMs(err.headers);
@@ -127,6 +133,13 @@ export function mapOpenAIError(err: unknown, providerId: string): AdapterError {
     const msg = message ?? err.message ?? "request failed";
 
     let adapterCode: AdapterErrorCode;
+    if (
+      looksLikeQuotaExhaustion(message, code ?? type) &&
+      (status === 400 || status === 402 || status === 403 || status === 429)
+    ) {
+      adapterCode = "quota_exhausted";
+      return new AdapterError(adapterCode, redactSecrets(msg), opts);
+    }
     switch (true) {
       case status === 401 || status === 403:
         adapterCode = "auth";

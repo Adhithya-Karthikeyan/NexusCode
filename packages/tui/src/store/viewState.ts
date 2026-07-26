@@ -39,6 +39,13 @@ export interface TurnDiff {
   patch: string;
 }
 
+/** Terminal provider failure attached to the turn that triggered it. */
+export interface TurnError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
 /** One assistant-side turn on a lane: text + reasoning + tools, delimited by `done`. */
 export interface Turn {
   id: string;
@@ -57,6 +64,12 @@ export interface Turn {
   diffs: TurnDiff[];
   finished: boolean;
   finishReason?: string;
+  /**
+   * Present when the turn ended in an error. Kept on the turn—not only in the
+   * notification rail—so a collapsed side pane can never make a failure look
+   * like an empty assistant response.
+   */
+  error?: TurnError;
   startedTs: number;
 }
 
@@ -363,10 +376,24 @@ export function reduceEvent(state: ViewState, ev: UiEvent, ts: number): ViewStat
         retryable: ev.retryable,
       };
       const status: ProviderStatus = ev.retryable ? "degraded" : "down";
-      // Finalize the failed turn (if one is live) so it commits to scrollback as
-      // an interrupted turn and the next prompt never merges into it. A no-op
-      // when the error arrived before any streaming (nothing to clear).
-      const cleared = finalizeLive(state, ev.lane, `error:${ev.code}`);
+      // Attach the failure to the conversation turn before committing it. The
+      // notification panel is optional/collapsible; the transcript is not.
+      let withInlineError = state;
+      if (hasLiveTurn(state, ev.lane)) {
+        const { lanes, laneOrder } = ensureLane(state, ev.lane);
+        const current = lanes[ev.lane]!;
+        lanes[ev.lane] = {
+          ...current,
+          live: {
+            ...current.live!,
+            error: { code: ev.code, message: ev.message, retryable: ev.retryable },
+          },
+        };
+        withInlineError = { ...state, lanes, laneOrder };
+      }
+      // Finalize the failed turn so the next prompt never merges into it. A
+      // no-op when a legacy error arrives without a prompt/live turn.
+      const cleared = finalizeLive(withInlineError, ev.lane, `error:${ev.code}`);
       return recomputeStreaming({
         ...cleared,
         notifications: [...cleared.notifications, item],

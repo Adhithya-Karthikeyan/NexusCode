@@ -559,6 +559,7 @@ live failover.
 | `--fallback <id>` | repeatable | none | Last-resort candidate chain |
 | `--cap, --capability <c>` | enum | none | Require a capability: `chat`, `vision`, `code-edit`, `shell`, `tools` |
 | `--retries <n>` | number | `3` | `test`: cap same-provider retries before failing over |
+| `--recover-partial` | bool | off | `test`: opt in to safety-checked continuation after useful output |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
 
 **Examples**
@@ -567,6 +568,7 @@ live failover.
 nexus route explain --optimize cost
 nexus route test --optimize local hi
 nexus route test --optimize explicit --allow mock-flaky/mock-fast --allow mock/mock-fast --retries 1 hi
+nexus route test --recover-partial --allow primary --fallback secondary hi
 ```
 
 **Notes:** `route test` prints the candidate order on stderr before dispatching,
@@ -574,6 +576,10 @@ and reports which provider actually answered plus any failover hops. When cache
 affinity is enabled, the session re-pins to whichever provider answered so its
 prompt cache stays warm. `--retries 1` is the way to force cross-provider
 failover instead of same-provider recovery.
+
+Every provider change receives a signed reconstructed handoff capsule. Partial
+recovery is allowed only when tracked action state is safe; otherwise the
+original terminal error is preserved.
 
 ---
 
@@ -887,6 +893,8 @@ List every registered tool, or run one directly under the permission gate.
 | `--approve` | bool | off | Workspace-write mode |
 | `--yolo` | bool | off | Full access |
 | `--cwd <dir>` | string | current dir | Working directory for the tool |
+| `-p, --provider <id>` | string | configured/fallback | Provider for AI vision/OCR tools |
+| `-m, --model <id>` | string | provider default | Model for AI vision/OCR tools |
 | `--principal <id>` | string | config default | Acting principal for enterprise RBAC checks |
 | `-o, --output <mode>` | enum | `text` | `text` or `json` |
 
@@ -905,7 +913,8 @@ enabled is not runnable — `tools run` says so and prints the exact
 connection from `tools.db.connections` by string instead of inlining the whole
 object. A manual `tools run` is stricter than the agent loop: read-only mode
 denies the network tier outright. Plugin-contributed tools appear in `list`
-alongside the built-ins.
+alongside the built-ins. AI vision/OCR tools receive the selected Nexus
+provider/model, so `-p`/`-m` use the same adapter registry as ordinary runs.
 
 ---
 
@@ -1451,30 +1460,33 @@ nexus config set defaultProvider mock
 nexus config set tools.enabledGroups '["web","db"]'
 ```
 
-**Notes:** `get` always prints JSON. `set` validates the resulting configuration
-against the real schema before writing, so a bad key or value fails loudly
-(exit 2) instead of bricking later commands.
+**Notes:** `get` always prints JSON. `set` coerces booleans, numbers, `null`, and
+valid JSON array/object literals before validating the resulting configuration
+against the real schema, so a bad key or value fails loudly (exit 2) instead of
+bricking later commands.
 
 ---
 
 ### `nexus providers`
 
-List or add providers.
+List, inspect, reset, or add providers.
 
-**Usage:** `nexus providers list` · `nexus providers add <id> --kind <kind> --adapter <pkg> [flags]`
+**Usage:** `nexus providers list` · `nexus providers status` · `nexus providers reset [provider]` · `nexus providers add <id> --kind <kind> --adapter <pkg> [flags]`
 
 **Subcommands**
 
 | Subcommand | Usage | Description |
 | --- | --- | --- |
 | `list` | `nexus providers list` | Show every provider with availability and key state (default) |
+| `status` | `nexus providers status` | Show providers plus persistent circuit limits, reset times, and pricing |
+| `reset` | `nexus providers reset [provider]` | Clear all circuit records or only one provider's records |
 | `add` | `nexus providers add <id> --kind <k> --adapter <pkg>` | Declare a provider in user config |
 
 **Flags**
 
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--kind <kind>` | string | — | Provider kind (required for `add`) |
+| `--kind <kind>` | string | — | Provider kind (required for `add`); `openai` and `openai-compatible` normalize to `openai-compat` |
 | `--adapter <pkg>` | string | — | Adapter package (required for `add`) |
 | `--base-url <url>` | string | none | Custom API base URL |
 | `--api-key-ref <ref>` | string | none | Secret store ref holding the key |
@@ -1486,11 +1498,16 @@ List or add providers.
 ```bash
 nexus providers list
 nexus providers list -o json
+nexus providers status
+nexus providers status -o json
+nexus providers reset openai
 nexus providers add acme --kind openai --adapter @nexuscode/provider-openai --base-url https://api.acme.test/v1 --api-key-env ACME_API_KEY
 ```
 
-**Notes:** In `list`, each row is marked `ok` (ready), `key` (configured but
-needs a key), or `--` (unavailable).
+**Notes:** In `list`/`status`, each row is marked `ok` (ready), `key` (needs a
+key), `limit` (quota cooldown), `hold` (another circuit block), or `--`
+(unavailable). `list -o json` retains the original provider-array contract;
+`status -o json` adds circuit, store-path, and pricing objects.
 
 ---
 

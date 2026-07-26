@@ -61,6 +61,7 @@ import {
   cmdSession,
   cmdTrace,
 } from "./wave6.js";
+import { NEXUS_VERSION } from "./version.js";
 
 /** Flag grammar shared by every command (parsed from each command's proxied argv). */
 const FLAG_SPEC: FlagSpec = {
@@ -157,6 +158,8 @@ const FLAG_SPEC: FlagSpec = {
     open: [],
     // `chat --continue` (-c): resume the most recent stored conversation.
     continue: ["c"],
+    /** Explicitly allow safe text-only continuation after a routed partial failure. */
+    "recover-partial": [],
   },
 };
 
@@ -186,7 +189,7 @@ Commands:
   cache stats|clear     inspect or clear the response/embedding caches
   memory list|add|get|rm|ingest   inspect and edit durable memory
   mcp add|list|rm|tools|call  inspect MCP servers, discover + call tools
-  providers list|add    inspect or add providers
+  providers list|status|reset|add  inspect quota/cost state or manage providers
   models [provider]     list ONE provider's models (positional/-p/active default)
   login [provider]      sign in to a provider (browser OAuth / device / guided key)
   logout [provider]     sign out (clear tokens); --all for every provider
@@ -222,6 +225,7 @@ Options:
       --fallback <id>     route: last-resort candidate chain (repeatable)
       --cap <capability>  route: require chat | vision | code-edit | shell | tools
       --retries <n>       route test: cap same-provider retries before failover
+      --recover-partial   route test: opt in to safety-gated mid-response continuation
   -s, --system <text>     system prompt
   -a, --agent <id>        code: subprocess coding CLI (claude-code | codex)
       --transport <t>     mcp add: stdio | http | sse
@@ -496,7 +500,13 @@ class RouteCommand extends HandlerCommand {
 
 class ProvidersCommand extends HandlerCommand {
   static override paths = [["providers"]];
-  static override usage = Command.Usage({ description: "List or add providers." });
+  static override usage = Command.Usage({
+    description: "List/status/add providers, including quota cooldown and configured pricing; reset circuit state.",
+    examples: [
+      ["Availability, quota, and price status", "nexus providers status"],
+      ["Reset one provider after fixing quota/auth", "nexus providers reset anthropic"],
+    ],
+  });
   protected handler(): Handler {
     return cmdProviders;
   }
@@ -925,7 +935,7 @@ class DefaultCommand extends Command {
 const cli = new Cli({
   binaryLabel: "NexusCode",
   binaryName: "nexus",
-  binaryVersion: "0.0.0",
+  binaryVersion: NEXUS_VERSION,
 });
 
 cli.register(Builtins.HelpCommand);

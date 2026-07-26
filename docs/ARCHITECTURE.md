@@ -58,6 +58,7 @@ graph TB
     end
 
     STORE["History store<br/>append-only event log + run summaries"]
+    XFER["Transfer store<br/>encrypted verbatim blobs · WAL · projected state"]
 
     TUI --> CLI
     CLI --> RT
@@ -80,6 +81,7 @@ graph TB
     TOOLS --> MCP
     CTX --> MEM
     BUS --> STORE
+    DISP --> XFER
 ```
 
 **What each layer owns**
@@ -167,8 +169,10 @@ sequenceDiagram
     participant Cfg as config
     participant RT as runtime
     participant Eng as engine (core)
+    participant Ctx as context assembler
     participant Bus as event bus
     participant Ad as ProviderAdapter
+    participant Xfer as encrypted transfer store
     participant DB as history store
 
     User->>CLI: nexus ask "explain this repo"
@@ -184,10 +188,14 @@ sequenceDiagram
     CLI->>Eng: openSession then newTurn(messages)
     Eng-->>CLI: Turn with its own CancelScope
     CLI->>Eng: dispatch single run, turn.context()
+    Eng->>Ctx: assemble transcript + project sources under token budget
+    Ctx-->>Eng: provider-neutral messages + system context
     Eng->>Ad: stream(ChatRequest, CallContext with signal + idempotencyKey)
 
     loop until a terminal chunk
-        Ad-->>Bus: StreamChunk
+        Ad-->>Eng: normalized StreamChunk
+        Eng->>Xfer: encrypt verbatim chunk + project WAL delta
+        Eng->>Bus: StreamChunk
         Bus-->>CLI: Labeled chunk with monotonic seq
         Bus-->>DB: append to the event log
         CLI->>User: project to UiEvent and render
@@ -206,7 +214,15 @@ sequenceDiagram
 - **Cancellation is hierarchical.** `rootScope → session scope → turn scope → per-lane scope`. `Ctrl+C` cancels the turn scope, which propagates the `AbortSignal` into `fetch`, SDK calls, and `child.kill()` alike.
 - **Cost is config-driven.** `computeCost` prices each token bucket (input, output, cache read, cache write, reasoning) from the `PricingTable` built from config — no price is hardcoded. When a wrapped CLI reports its own cost, that number is trusted instead.
 - **Persistence never sinks a run.** Both the append and the summarize path are best-effort: a store failure becomes a trace event, not a crashed run.
-- **Context assembly is on the agentic path.** A plain `ask` sends the turn's messages straight to the adapter. `nexus agent` and the TUI wire a `ContextAssembler` into the engine, which runs once before the first provider dispatch (see [section 7](#7-context-and-memory-pipeline)).
+- **Context assembly is kernel-wide.** `ask`, `chat`, coding subprocesses,
+  agents, every multi-provider primitive, routed failover, and the TUI all pass
+  through the same `ContextAssembler` before provider dispatch. A provider
+  change therefore retains the engine transcript and receives freshly assembled
+  project context (see [section 7](#7-context-and-memory-pipeline)).
+- **Transfer capture precedes redacted history.** When enabled, each normalized
+  chunk is written to an AES-256-GCM content-addressed blob and projected through
+  the transfer WAL before the bus hands it to the redacting history store.
+  Capture failures are isolated and cannot sink the model run.
 
 ---
 
@@ -374,7 +390,36 @@ graph TB
 
 `nexus route` exercises a separate, orthogonal mechanism. A declarative `RouteRule` (`optimize: cost | latency | quality | local | explicit`, plus `allow` / `deny` / `fallback` lists) is turned into an *ordered candidate list*: known-unhealthy providers are dropped up front, survivors are ordered along the chosen axis, and `fallback` entries are appended last.
 
-Then `runWithFailover` streams the first candidate and — **only before the first real output chunk has been emitted** — transparently falls over to the next candidate on a retryable provider error (rate limit, overloaded, transport, CLI exit). A partially-emitted stream is never replayed. The hand-off is visible: the winning candidate's `run-start` carries a failover trail, which the UI renders as "failed over A → B".
+Then `runWithFailover` streams the first candidate and transparently falls over
+before useful output on a provider failure another backend can solve (temporary
+rate limit, exhausted account quota, overload, transport/CLI failure, or empty
+response). Hard quota/empty output is not retried on the same provider; it can
+still fail over to a different one. Every switch receives the same assembled
+request plus a bounded, redacted, HMAC-SHA-256-authenticated provider-neutral
+handoff capsule. The same planner now wraps explicit single runs and native
+agent turns, not only declarative routes.
+
+After useful output, the default remains terminal rather than guessing how to
+splice answers. Operators may explicitly enable partial continuation. A stream
+tracker then checkpoints answer text, reasoning, and tool/file actions; only
+safe text/read-only work continues automatically, completed mutations need
+exact approval, and uncertain mutations are rejected. The target is instructed
+to return only the missing suffix, and an overlap deduplicator prevents repeated
+text. The hand-off and recovery decision remain visible in the failover audit.
+
+A persistent circuit breaker sits in front of direct, agent, and routed dispatch. Quota
+and auth failures open at provider/account scope, unavailable models at model
+scope, and transient failures after a threshold. Cooldowns survive restarts,
+blocked candidates rank last, and a file transaction admits only one half-open
+probe across processes. Stable credential-reference fingerprints isolate
+accounts without storing key values.
+
+Switching is target-aware: capability blockers are checked before dispatch,
+older history is compacted to the target context window, and the current turn
+and system/tool state are pinned. Claude Code and Codex session IDs live in
+separate provider slots, while the provider-neutral capsule remains the
+portable source of truth. The first target mutation validates the capsule and
+workspace fingerprint and passes through a durable do-not-repeat action gate.
 
 ---
 
@@ -424,13 +469,13 @@ Static lanes always precede volatile lanes; static content is serialized without
 
 ## 8. Package map
 
-44 workspace packages, layered so the arrow always points down.
+45 workspace packages, layered so the arrow always points down.
 
 ```mermaid
 graph TB
     L0["CONTRACTS<br/>shared"]
     L1["FOUNDATIONS<br/>config · prompt · tools · cache · lsp · theme"]
-    L2["DOMAIN SUBSYSTEMS<br/>auth · memory · tasks · mcp · observability · hooks<br/>context · fileintel · enterprise<br/>tools-web · tools-db · tools-browser · tools-containers · tools-cloud"]
+    L2["DOMAIN SUBSYSTEMS<br/>auth · memory · tasks · mcp · observability · hooks<br/>context · fileintel · transfer · enterprise<br/>tools-web · tools-db · tools-browser · tools-containers · tools-cloud"]
     L3["KERNEL<br/>core"]
     L4["PROVIDERS<br/>mock · openai · anthropic · gemini · bedrock · vertex<br/>azure · ollama · subprocess · claude-code · codex"]
     L5["RUNTIME BOOTSTRAP<br/>runtime"]
@@ -458,7 +503,7 @@ Three edges are worth calling out because they encode the architecture:
 - **`runtime` is the only package that maps a config `kind` to a provider implementation.** Everything else goes through `ProviderRegistry`.
 - **`server` depends on `sdk`, which depends on `runtime`.** The daemon is a client of the SDK, which is a client of the kernel. No surface re-implements the engine.
 
-### All 44 packages
+### All 45 packages
 
 **Contracts**
 
@@ -475,7 +520,7 @@ Three edges are worth calling out because they encode the architecture:
 | `tools` | Tool registry, execution surface, permission gate, redaction, SSRF guard |
 | `cache` | Unified cache abstraction: memory/disk backends, prompt/response/embedding/file caches, prefix-cache helpers, cache-affinity routing, savings accounting |
 | `lsp` | Language Server Protocol client over JSON-RPC/stdio: definitions, references, rename, formatting, diagnostics, hover, symbols, code actions — degrades gracefully when no server is installed |
-| `theme` | Pure token data and resolver for the six signature palettes |
+| `theme` | Pure token data and resolver for the 16 signature palettes |
 
 **Domain subsystems**
 
@@ -489,6 +534,7 @@ Three edges are worth calling out because they encode the architecture:
 | `hooks` | Ordered, error-isolated lifecycle hook bus (in-process and command hooks) plus an HMAC-signed, SSRF-guarded webhook dispatcher |
 | `context` | The context engine: sources, lanes, budgeting, compression, cache-stable rendering |
 | `fileintel` | Language detection, ignore-aware tree walking, a parser seam, symbol/dependency/cross-reference indexing, PageRank repo map |
+| `transfer` | Provider-neutral encrypted verbatim capture, projected knowledge items, WAL folding, snapshots, integrity checks, crash recovery, and tool-progress state |
 | `enterprise` | Tamper-evident hash-chained audit log and usage/cost analytics per principal/role/provider/model — offline, no external identity provider |
 | `tools-web` | `web_search` (pluggable search seam with a deterministic mock), `web_fetch` (HTML-to-text, size/timeout caps, SSRF guard), `web_crawl` (bounded same-origin BFS) |
 | `tools-db` | `db_query` / `db_schema` over a driver seam — SQLite always available, Postgres/MySQL/Snowflake/BigQuery optional and lazily loaded |
@@ -585,11 +631,14 @@ Three edges are worth calling out because they encode the architecture:
 
 **Why:** when you fan out to four providers and one rate-limits, you want the other three answers and an honest note about the fourth — not an exception. It also keeps cost accounting correct: tokens spent on a lane that failed still happened.
 
-### Retry and failover only before the first output chunk
+### Retry before output; opt-in failover recovery after output
 
 **Decision:** a run may be retried or failed over only while nothing has been emitted to the consumer.
 
-**Why:** replaying a partially streamed answer would duplicate text the user already read. Drawing the line at the first real chunk is the only place where a transparent retry is genuinely invisible.
+**Why:** same-provider replay after visible output would duplicate text the user
+already read. Cross-provider continuation is therefore a separate, explicit
+protocol with action-state checks and overlap deduplication, never an ordinary
+retry.
 
 ---
 

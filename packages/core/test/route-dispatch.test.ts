@@ -60,18 +60,24 @@ describe("dispatchRoute — live failover", () => {
     await reg.register(
       createFlakyMockAdapter({
         id: "down",
-        models: ["mock-fast"],
+        models: ["down-model"],
         failCount: Number.POSITIVE_INFINITY,
         failCode: "transport",
         retryable: false,
       }),
     );
-    await reg.register(createMockAdapter({ id: "up", models: ["mock-fast"] }));
-    const engine = createEngine({ registry: reg });
+    await reg.register(createMockAdapter({ id: "up", models: ["up-model"] }));
+    const engine = createEngine({
+      registry: reg,
+      pricing: {
+        "down-model": { inputPerMTok: 0, outputPerMTok: 0 },
+        "up-model": { inputPerMTok: 1_000_000, outputPerMTok: 1_000_000 },
+      },
+    });
     const { ctx, input } = await newCtx(engine);
 
     const failovers: FailoverEvent[] = [];
-    const rule = { optimize: "explicit" as const, allow: ["down/mock-fast", "up/mock-fast"] };
+    const rule = { optimize: "explicit" as const, allow: ["down/down-model", "up/up-model"] };
     const handle = dispatchRoute(
       { rule, input, idempotencyKey: "f" },
       ctx,
@@ -85,6 +91,10 @@ describe("dispatchRoute — live failover", () => {
     // The healthy provider answered; the failed one never wins.
     expect(outcome.winner?.status).toBe("ok");
     expect(outcome.winner?.adapterId).toBe("up");
+    expect(outcome.winner?.model).toBe("up-model");
+    // Cost is based on the provider/model that actually answered, not the
+    // abandoned zero-cost candidate.
+    expect(outcome.winner?.usage.costUsd).toBeGreaterThan(0);
 
     // The hand-off fired and is recorded on the winning run-start's raw trail.
     expect(failovers).toHaveLength(1);

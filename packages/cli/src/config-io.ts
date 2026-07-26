@@ -230,7 +230,22 @@ export function getPath(obj: unknown, path: string): unknown {
 function coerce(value: string): unknown {
   if (value === "true") return true;
   if (value === "false") return false;
+  if (value === "null") return null;
   if (value !== "" && !Number.isNaN(Number(value))) return Number(value);
+  // `config set` is also the documented way to update structured settings such
+  // as tools.enabledGroups. Shell quoting preserves the JSON token itself, so
+  // accept valid array/object literals instead of storing them as strings.
+  if (
+    (value.startsWith("[") && value.endsWith("]")) ||
+    (value.startsWith("{") && value.endsWith("}"))
+  ) {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      // Keep it as a string. The real schema validation that follows produces
+      // the path-aware error appropriate for the selected config key.
+    }
+  }
   return value;
 }
 

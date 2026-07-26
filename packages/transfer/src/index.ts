@@ -3,10 +3,10 @@
  *
  * The harness — not the LLM — owns project knowledge in a provider-neutral
  * knowledge core (PNKC). A provider is a disposable execution engine that emits
- * validated deltas; the harness folds them back. Switching providers (auto on
- * rate-limit/failover, or `--resume` into a different provider) loses virtually
- * no understanding because everything important is externalized here, not in
- * conversation history.
+ * normalized events; the harness captures and folds them back. Live provider
+ * continuity is owned by core's transcript + context assembler. This package
+ * supplies its durable capture/recovery foundation; it does not claim access to
+ * vendor-private hidden state or automatic continuation of a partial answer.
  *
  * Phase 0: schema migration, SessionDb write mutex, structural db interface.
  * Phase 1: capture path — items, blobs, WAL, KG, FTS5, projector, verbatim,
@@ -55,7 +55,7 @@ export {
 } from "./items.js";
 
 // Phase 1 — blobs
-export type { BlobStore } from "./blobs.js";
+export type { BlobStore, BlobStoreOptions } from "./blobs.js";
 export { createBlobStore } from "./blobs.js";
 
 // Phase 1 — WAL
@@ -102,3 +102,49 @@ export { createToolProgress } from "./tool-progress.js";
 // TransferHandle without this package build-coupling to @nexuscode/core)
 export type { TransferHandle, TransferHandleOptions } from "./handle.js";
 export { createTransferHandle } from "./handle.js";
+
+// Provider-neutral provider-switch handoff capsule. This is deliberately a
+// package-level API; core/CLI decide when and where a capsule is transported.
+export type {
+  HandoffMode,
+  CapsuleValidationStrictness,
+  CapsuleCompressionPolicy,
+  WorkStatus,
+  OutcomeStatus,
+  CapsuleGoal,
+  CapsuleTask,
+  CapsuleDecision,
+  CapsuleAssumption,
+  CapsuleConstraint,
+  CapsuleQuestion,
+  CapsuleModifiedFile,
+  CapsuleCommand,
+  CapsuleTestRun,
+  CapsuleToolOutcome,
+  CapsulePendingApproval,
+  CapsuleContextEntry,
+  CapsuleCheckpoint,
+  CapsulePartialResponse,
+  HandoffCapsulePayload,
+  HandoffCapsule,
+  HandoffCapsuleInput,
+  HandoffCapsuleOptions,
+  CapsuleValidationResult,
+  ActionRetryDecision,
+  RenderHandoffCapsuleOptions,
+} from "./handoff-capsule.js";
+export {
+  HANDOFF_CAPSULE_SCHEMA,
+  HandoffCapsuleValidationError,
+  HandoffCapsuleIntegrityError,
+  HandoffCapsuleBudgetError,
+  createHandoffCapsule,
+  serializeHandoffCapsule,
+  renderHandoffCapsuleText,
+  renderHandoffCapsuleMessage,
+  deserializeHandoffCapsule,
+  validateHandoffCapsule,
+  verifyHandoffCapsuleIntegrity,
+  actionRetryDecision,
+  canonicalizeHandoffValue,
+} from "./handoff-capsule.js";

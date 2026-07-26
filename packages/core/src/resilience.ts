@@ -8,6 +8,7 @@
  */
 
 import { AdapterError, type StreamChunk } from "@nexuscode/shared";
+import { enforceStreamContract } from "./stream-contract.js";
 
 export interface RetryPolicy {
   maxAttempts: number;
@@ -75,31 +76,100 @@ export async function* withRetry(
       return;
     }
 
-    let started = false;
+    // Do not publish an attempt's run/session preamble until that attempt
+    // commits. Otherwise a retry-before-first-output leaks duplicate run-starts
+    // into the TUI/history and makes one user turn look like multiple sessions.
+    const preamble: StreamChunk[] = [];
+    const flushPreamble = function* (): Generator<StreamChunk> {
+      yield* preamble;
+      preamble.length = 0;
+    };
+
+    let committed = false;
     let willRetry = false;
+    let providerId: string | undefined;
+    let sawAnswer = false;
+    let sawReasoning = false;
+    const startedTools = new Set<string>();
+    const endedTools = new Set<string>();
 
     try {
-      for await (const chunk of make(attempt)) {
-        // "started" means real output has streamed. Preamble (run-start /
-        // session-init) and a terminal `error` are NOT content — so a retryable
-        // error that arrives before any content can still be retried.
+      for await (const chunk of enforceStreamContract(make(attempt))) {
+        if (chunk.type === "run-start") providerId = chunk.adapterId;
+
+        // Usage can arrive before an error/empty terminal. Buffer it with the
+        // preamble so a failed, retried attempt does not publish duplicate
+        // accounting or prevent cross-provider failover.
         if (
-          chunk.type !== "run-start" &&
-          chunk.type !== "session-init" &&
-          chunk.type !== "error"
+          !committed &&
+          (chunk.type === "run-start" || chunk.type === "session-init" || chunk.type === "usage")
         ) {
-          started = true;
+          preamble.push(chunk);
+          continue;
         }
 
         // A retryable error before any real output → back off and retry.
-        if (chunk.type === "error" && !started && chunk.error.retryable && attempt < policy.maxAttempts) {
-          willRetry = true;
-          await backoff(attempt, policy, chunk.error, signal);
-          break;
+        if (chunk.type === "error") {
+          if (!committed && chunk.error.retryable && attempt < policy.maxAttempts) {
+            willRetry = true;
+            await backoff(attempt, policy, chunk.error, signal);
+            break;
+          }
+          yield* flushPreamble();
+          yield chunk;
+          return;
         }
 
+        if (chunk.type === "run-end") {
+          const terminalError = errorForRunEnd(chunk, providerId);
+          if (terminalError) {
+            yield* flushPreamble();
+            yield {
+              type: "error",
+              runId: chunk.runId,
+              error: terminalError,
+              retryable: terminalError.retryable,
+              ...(chunk.raw !== undefined ? { raw: chunk.raw } : {}),
+            };
+            return;
+          }
+
+          // Some SDK/proxy streams send only a final message and no deltas.
+          // Recover those blocks into canonical chunks so live consumers and
+          // the result builder see exactly the same answer/tool activity.
+          for (const recovered of recoverTerminalContent(
+            chunk,
+            sawAnswer,
+            sawReasoning,
+            startedTools,
+            endedTools,
+          )) {
+            yield* flushPreamble();
+            committed = true;
+            yield recovered;
+          }
+          yield* flushPreamble();
+          yield chunk;
+          return;
+        }
+
+        if (chunk.type === "text-delta" && chunk.channel !== "reasoning" && chunk.text.trim().length > 0) {
+          sawAnswer = true;
+        } else if (
+          (chunk.type === "reasoning-delta" ||
+            (chunk.type === "text-delta" && chunk.channel === "reasoning")) &&
+          chunk.text.trim().length > 0
+        ) {
+          sawReasoning = true;
+        } else if (chunk.type === "tool-call-start") {
+          startedTools.add(chunk.id);
+        } else if (chunk.type === "tool-call-end") {
+          endedTools.add(chunk.id);
+        }
+
+        yield* flushPreamble();
+        committed = true;
         yield chunk;
-        if (chunk.type === "run-end" || chunk.type === "error") return;
       }
     } catch (e) {
       if (signal.aborted) {
@@ -107,16 +177,118 @@ export async function* withRetry(
         return;
       }
       const err = e instanceof AdapterError ? e : new AdapterError("transport", String(e), { cause: e });
-      if (!started && err.retryable && attempt < policy.maxAttempts) {
+      if (!committed && err.retryable && attempt < policy.maxAttempts) {
         await backoff(attempt, policy, err, signal);
         continue;
       }
+      yield* flushPreamble();
       yield { type: "error", runId: "", error: err, retryable: err.retryable };
       return;
     }
 
     if (willRetry) continue;
-    // Stream ended without a terminal chunk and without a retry request → done.
+    // Enforce the shared stream contract at the kernel boundary. Previously the
+    // result builder noticed this only after live consumers had already seen an
+    // empty stream, which is the user-visible "Nexus returned nothing" failure.
+    const err = new AdapterError("empty_output", "provider stream ended without a terminal response", {
+      ...(providerId !== undefined ? { providerId } : {}),
+    });
+    yield* flushPreamble();
+    yield { type: "error", runId: "", error: err, retryable: false };
     return;
+  }
+}
+
+/** Convert terminal finish states that cannot be presented as a successful turn. */
+function errorForRunEnd(
+  chunk: Extract<StreamChunk, { type: "run-end" }>,
+  providerId: string | undefined,
+): AdapterError | undefined {
+  const opts = providerId !== undefined ? { providerId } : {};
+  const terminalText = chunk.message.content
+    .filter((b): b is Extract<(typeof chunk.message.content)[number], { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+
+  if (chunk.finishReason === "content_filter") {
+    const detail = terminalText ? `: ${terminalText}` : "";
+    return new AdapterError(
+      "content_filter",
+      `provider blocked the response because of its content or safety policy${detail}`,
+      opts,
+    );
+  }
+  if (chunk.finishReason === "cancelled") {
+    return new AdapterError("cancelled", "provider cancelled the response", opts);
+  }
+  if (chunk.finishReason === "error") {
+    return new AdapterError(
+      "unknown",
+      terminalText || "provider ended the response with an unspecified error",
+      opts,
+    );
+  }
+
+  const hasRenderableContent = chunk.message.content.some((b) => {
+    if (b.type === "text" || b.type === "thinking") return b.text.trim().length > 0;
+    return b.type === "tool_use";
+  });
+  if (!hasRenderableContent) {
+    const suffix =
+      chunk.finishReason === "length" ? " before producing content (output limit reached)" : "";
+    return new AdapterError("empty_output", `provider completed with no response content${suffix}`, opts);
+  }
+  return undefined;
+}
+
+/**
+ * Recover final-only provider responses into ordinary deltas/tool chunks.
+ * Adapters should normally stream these already; this is the provider-neutral
+ * safety net for SDK/proxy edge cases.
+ */
+function* recoverTerminalContent(
+  chunk: Extract<StreamChunk, { type: "run-end" }>,
+  sawAnswer: boolean,
+  sawReasoning: boolean,
+  startedTools: ReadonlySet<string>,
+  endedTools: ReadonlySet<string>,
+): Generator<StreamChunk> {
+  for (const block of chunk.message.content) {
+    if (block.type === "text" && !sawAnswer && block.text.length > 0) {
+      sawAnswer = true;
+      yield {
+        type: "text-delta",
+        runId: chunk.runId,
+        text: block.text,
+        channel: "answer",
+        ...(chunk.raw !== undefined ? { raw: chunk.raw } : {}),
+      };
+    } else if (block.type === "thinking" && !sawReasoning && block.text.length > 0) {
+      sawReasoning = true;
+      yield {
+        type: "reasoning-delta",
+        runId: chunk.runId,
+        text: block.text,
+        ...(chunk.raw !== undefined ? { raw: chunk.raw } : {}),
+      };
+    } else if (block.type === "tool_use" && !endedTools.has(block.id)) {
+      if (!startedTools.has(block.id)) {
+        yield {
+          type: "tool-call-start",
+          runId: chunk.runId,
+          id: block.id,
+          name: block.name,
+          ...(chunk.raw !== undefined ? { raw: chunk.raw } : {}),
+        };
+      }
+      yield {
+        type: "tool-call-end",
+        runId: chunk.runId,
+        id: block.id,
+        input: block.input,
+        ...(chunk.raw !== undefined ? { raw: chunk.raw } : {}),
+      };
+    }
   }
 }

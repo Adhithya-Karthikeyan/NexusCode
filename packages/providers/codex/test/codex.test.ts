@@ -44,6 +44,16 @@ describe("codex adapter — argv", () => {
     expect(args).toContain("--skip-git-repo-check");
     expect(args[args.length - 1]).toBe("do it");
   });
+
+  it("resumes the provider-native thread slot before the trailing prompt", () => {
+    const ac = new AbortController();
+    const args = buildCodexArgs(
+      {},
+      req("continue"),
+      { ...ctx(ac.signal), providerSessionId: "thread-42" },
+    );
+    expect(args.slice(-3)).toEqual(["resume", "thread-42", "continue"]);
+  });
 });
 
 describe("codex adapter — stream mapping", () => {
@@ -85,9 +95,10 @@ describe("codex adapter — stream mapping", () => {
     expect(last?.type === "error" && last.error.message).toContain("overloaded");
   });
 
-  it("a malformed line emits a parse error but the stream continues", async () => {
+  it("recovers after one malformed line without violating the one-terminal contract", async () => {
     const chunks = await collect(adapterFor("malformed").stream(req(), ctx(new AbortController().signal)));
-    expect(chunks.some((c) => c.type === "error" && c.error.code === "parse")).toBe(true);
+    expect(chunks.some((c) => c.type === "error")).toBe(false);
+    expect(chunks.filter((c) => c.type === "run-end" || c.type === "error")).toHaveLength(1);
     expect(chunks[chunks.length - 1]?.type).toBe("run-end");
   });
 

@@ -172,7 +172,11 @@ export async function cmdSession(args: ParsedArgs, io: Io = defaultIo): Promise<
         return 1;
       }
       store.rename(id, name);
-      io.out(`renamed ${id} → "${name}"\n`);
+      io.out(
+        output === "json"
+          ? `${JSON.stringify({ sessionId: id, name })}\n`
+          : `renamed ${id} → "${name}"\n`,
+      );
       return 0;
     }
 
@@ -188,7 +192,15 @@ export async function cmdSession(args: ParsedArgs, io: Io = defaultIo): Promise<
       }
       const name = args.flags.get("name") ?? args.positionals.slice(2).join(" ").trim();
       const newId = store.branch(id, name ? { name } : {});
-      io.out(`branched ${id} → ${newId}${name ? ` ("${name}")` : ""}\n`);
+      io.out(
+        output === "json"
+          ? `${JSON.stringify({
+              sessionId: newId,
+              parentSessionId: id,
+              name: name || null,
+            })}\n`
+          : `branched ${id} → ${newId}${name ? ` ("${name}")` : ""}\n`,
+      );
       return 0;
     }
 
@@ -203,7 +215,11 @@ export async function cmdSession(args: ParsedArgs, io: Io = defaultIo): Promise<
         return 1;
       }
       store.delete(id);
-      io.out(`deleted ${id}\n`);
+      io.out(
+        output === "json"
+          ? `${JSON.stringify({ sessionId: id, deleted: true })}\n`
+          : `deleted ${id}\n`,
+      );
       return 0;
     }
 

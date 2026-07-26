@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
+  AdapterError,
   ProviderRegistry,
   createEngine,
   dispatch,
@@ -18,6 +19,7 @@ import {
   type EventStore,
   type ProviderAdapter,
   type Session,
+  type RunResult,
 } from "@nexuscode/core";
 import type { ChatRequest, Message } from "@nexuscode/shared";
 import { createMockAdapter } from "@nexuscode/provider-mock";
@@ -97,6 +99,39 @@ function textOf(m: Message): string {
 }
 
 describe("engine — session resume", () => {
+  it("clears a failed unanswered turn from durable history before later successful turns", async () => {
+    const store = fakeStore();
+    const first = await makeEngine(store);
+    const session = await first.engine.openSession();
+    const sessionId = session.id;
+
+    const failed = session.newTurn({ prompt: "failed quota request" });
+    const result: RunResult = {
+      runId: "failed",
+      adapterId: "spy",
+      model: "mock-fast",
+      status: "error",
+      text: "",
+      toolCalls: [],
+      diffs: [],
+      usage: { inputTokens: 0, outputTokens: 0 },
+      finishReason: "error",
+      error: new AdapterError("quota_exhausted", "usage limit reached"),
+    };
+    failed.record(result);
+    await ask(session, "successful retry");
+    await session.dispose();
+    await first.engine.dispose();
+
+    const second = await makeEngine(store);
+    const resumed = await second.engine.openSession({ resume: sessionId });
+    expect(resumed.transcript.map(textOf).join("\n")).not.toContain("failed quota request");
+    expect(resumed.transcript.map((message) => message.role)).toEqual(["user", "assistant"]);
+
+    await resumed.dispose();
+    await second.engine.dispose();
+  });
+
   it("rehydrates a stored conversation and threads it into the next turn", async () => {
     const store = fakeStore();
 
@@ -156,6 +191,37 @@ describe("engine — session resume", () => {
     await ask(session, "hello");
     expect(requests[0]!.messages).toHaveLength(1);
 
+    await session.dispose();
+    await engine.dispose();
+  });
+
+  it("restores the provider-native session slot independently of the transcript", async () => {
+    const base = createMockAdapter({ id: "spy" });
+    const seenSlots: Array<string | undefined> = [];
+    const adapter: ProviderAdapter = {
+      ...base,
+      stream(request, context) {
+        seenSlots.push(context.providerSessionId);
+        return base.stream(request, context);
+      },
+    };
+    const registry = new ProviderRegistry();
+    await registry.register(adapter, { skipHealth: true });
+    const store: EventStore = {
+      append() {},
+      summarize() {},
+      loadTranscript: () => [],
+      loadProviderSessions: () => ({ spy: "native-session-42" }),
+    };
+    const engine = createEngine({
+      registry,
+      store,
+      switching: { policy: "strict", nativeSessionSlots: true },
+    });
+    const session = await engine.openSession({ resume: "s_native" });
+    await ask(session, "continue");
+
+    expect(seenSlots).toEqual(["native-session-42"]);
     await session.dispose();
     await engine.dispose();
   });

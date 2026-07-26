@@ -102,6 +102,50 @@ describe("TransferHandle — end-to-end capture", () => {
     }
   });
 
+  it("shares a session-scoped Lamport clock across provider/run handles", async () => {
+    const { db, blobs, dir } = await setup();
+    try {
+      const mutex = createMutex();
+      let clock = 40;
+      const nextLamport = () => ++clock;
+      const first = createTransferHandle({
+        db,
+        blobs,
+        mutex,
+        sessionId: "switched-session",
+        runId: "run-alpha",
+        turnId: "turn-1",
+        nextLamport,
+      });
+      const second = createTransferHandle({
+        db,
+        blobs,
+        mutex,
+        sessionId: "switched-session",
+        runId: "run-beta",
+        turnId: "turn-2",
+        nextLamport,
+      });
+
+      await first.turnBoundary("start", 1);
+      await second.turnBoundary("start", 2);
+      first.flush();
+      second.flush();
+
+      const rows = db
+        .prepare(
+          "SELECT lamport_ts, durably_written FROM zlcts_wal WHERE session_id=? ORDER BY lamport_ts",
+        )
+        .all("switched-session") as { lamport_ts: number; durably_written: number }[];
+      expect(rows).toEqual([
+        { lamport_ts: 41, durably_written: 1 },
+        { lamport_ts: 42, durably_written: 1 },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("never throws into the runner when the db is fine (isolation contract holds)", async () => {
     const { handle, dir } = await setup();
     try {

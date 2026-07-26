@@ -8,7 +8,14 @@
  * missing build) we degrade to a no-op store rather than crash the CLI.
  */
 
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import type { EventStore, RunResult, StreamChunk } from "@nexuscode/core";
 import { redactArgs } from "@nexuscode/tools";
@@ -55,7 +62,25 @@ export interface EventRow {
 }
 
 export interface HistoryStore extends EventStore {
+  loadLastProvider?(sessionId: string):
+    | { providerId: string; modelId: string }
+    | Promise<{ providerId: string; modelId: string } | undefined>
+    | undefined;
+  loadProviderSessions?(sessionId: string):
+    | Record<string, string>
+    | Promise<Record<string, string>>;
   close(): void;
+}
+
+function safeParsePayload(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -140,6 +165,8 @@ export async function openHistory(opts: {
    * only written on an explicit opt-in.
    */
   storePrompts?: boolean;
+  /** Encrypt transcript content with AES-256-GCM. Defaults to true. */
+  encryptPrompts?: boolean;
 }): Promise<HistoryStore> {
   if (!opts.enabled) return NOOP_STORE;
 
@@ -160,6 +187,66 @@ export async function openHistory(opts: {
       return NOOP_STORE;
     }
   }
+
+  const encryptPrompts = opts.encryptPrompts !== false;
+  let transcriptKey: Buffer | undefined;
+  if (opts.storePrompts && encryptPrompts) {
+    if (opts.dbPath === ":memory:") {
+      transcriptKey = randomBytes(32);
+    } else {
+      const keyPath = `${opts.dbPath}.transcript-key`;
+      try {
+        if (existsSync(keyPath)) {
+          const decoded = Buffer.from(readFileSync(keyPath, "utf8").trim(), "base64");
+          if (decoded.byteLength !== 32) throw new Error("invalid transcript key");
+          transcriptKey = decoded;
+        } else {
+          const created = randomBytes(32);
+          try {
+            writeFileSync(keyPath, created.toString("base64"), { mode: 0o600, flag: "wx" });
+            transcriptKey = created;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+            const decoded = Buffer.from(readFileSync(keyPath, "utf8").trim(), "base64");
+            if (decoded.byteLength !== 32) throw new Error("invalid transcript key");
+            transcriptKey = decoded;
+          }
+          chmodSync(keyPath, 0o600);
+        }
+      } catch {
+        // Never silently downgrade an encryption-requested transcript to plaintext.
+        return NOOP_STORE;
+      }
+    }
+  }
+
+  const encodeTranscript = (plaintext: string): string => {
+    if (!transcriptKey) return plaintext;
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", transcriptKey, iv);
+    const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+    return `enc:v1:${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${encrypted.toString("base64")}`;
+  };
+  const decodeTranscript = (stored: string): string | undefined => {
+    if (!stored.startsWith("enc:v1:")) return stored;
+    if (!transcriptKey) return undefined;
+    const [, , ivValue, tagValue, encryptedValue] = stored.split(":");
+    if (!ivValue || !tagValue || !encryptedValue) return undefined;
+    try {
+      const decipher = createDecipheriv(
+        "aes-256-gcm",
+        transcriptKey,
+        Buffer.from(ivValue, "base64"),
+      );
+      decipher.setAuthTag(Buffer.from(tagValue, "base64"));
+      return Buffer.concat([
+        decipher.update(Buffer.from(encryptedValue, "base64")),
+        decipher.final(),
+      ]).toString("utf8");
+    } catch {
+      return undefined;
+    }
+  };
 
   let db: SqliteDb;
   try {
@@ -211,6 +298,16 @@ export async function openHistory(opts: {
   );
   const selectTranscript = db.prepare(
     `SELECT role, content FROM turn_message WHERE session_id = ? ORDER BY seq ASC, idx ASC`,
+  );
+  const selectLastProvider = db.prepare(
+    `SELECT adapter_id, model FROM run_summary
+      WHERE session_id = ? AND status = 'ok'
+      ORDER BY created_at DESC LIMIT 1`,
+  );
+  const selectProviderSessionEvents = db.prepare(
+    `SELECT run_id, type, payload FROM event_log
+      WHERE session_id = ? AND type IN ('run-start','session-init')
+      ORDER BY id ASC`,
   );
 
   return {
@@ -282,7 +379,7 @@ export async function openHistory(opts: {
           entry.seq,
           idx,
           message.role,
-          JSON.stringify(content),
+          encodeTranscript(JSON.stringify(content)),
           now,
         );
       }
@@ -294,7 +391,12 @@ export async function openHistory(opts: {
         const out: Message[] = [];
         for (const row of rows) {
           try {
-            out.push({ role: row.role as Message["role"], content: JSON.parse(row.content) as ContentBlock[] });
+            const decoded = decodeTranscript(row.content);
+            if (!decoded) continue;
+            out.push({
+              role: row.role as Message["role"],
+              content: JSON.parse(decoded) as ContentBlock[],
+            });
           } catch {
             /* skip an unparseable row rather than fail the whole resume */
           }
@@ -302,6 +404,44 @@ export async function openHistory(opts: {
         return out;
       } catch {
         return [];
+      }
+    },
+    loadLastProvider(sessionId: string): { providerId: string; modelId: string } | undefined {
+      try {
+        const row = selectLastProvider.get(sessionId) as
+          | { adapter_id: string; model: string }
+          | undefined;
+        return row ? { providerId: row.adapter_id, modelId: row.model } : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    loadProviderSessions(sessionId: string): Record<string, string> {
+      try {
+        const rows = selectProviderSessionEvents.all(sessionId) as Array<{
+          run_id: string;
+          type: "run-start" | "session-init";
+          payload: string;
+        }>;
+        const providersByRun = new Map<string, string>();
+        const slots: Record<string, string> = {};
+        for (const row of rows) {
+          const payload = safeParsePayload(row.payload);
+          if (row.type === "run-start" && typeof payload["adapterId"] === "string") {
+            providersByRun.set(row.run_id, payload["adapterId"]);
+          } else if (row.type === "session-init") {
+            if (typeof payload["providerId"] === "string") {
+              providersByRun.set(row.run_id, payload["providerId"]);
+            }
+            if (typeof payload["providerSessionId"] === "string") {
+              const providerId = providersByRun.get(row.run_id);
+              if (providerId) slots[providerId] = payload["providerSessionId"];
+            }
+          }
+        }
+        return slots;
+      } catch {
+        return {};
       }
     },
     close(): void {

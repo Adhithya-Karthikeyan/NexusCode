@@ -10,6 +10,7 @@
 export type AdapterErrorCode =
   | "auth"
   | "rate_limit"
+  | "quota_exhausted"
   | "overloaded"
   | "invalid_request"
   | "context_length"
@@ -38,6 +39,55 @@ export interface AdapterErrorOptions {
 
 /** Codes that retry by default (transient / server-side). */
 const DEFAULT_RETRYABLE: readonly AdapterErrorCode[] = ["rate_limit", "overloaded", "transport"];
+
+/**
+ * Detect a provider/account usage ceiling, as opposed to a short-lived request
+ * rate limit. Providers use different wire codes and prose for the same
+ * condition; keeping this matcher in the shared contract prevents the native
+ * SDK adapters and wrapped CLIs from drifting apart.
+ *
+ * Deliberately does not match a generic "rate limit exceeded": that condition
+ * is transient and belongs to `rate_limit`, which the kernel may retry on the
+ * same provider. `quota_exhausted` is non-retryable on the same provider but is
+ * eligible for cross-provider failover.
+ */
+export function looksLikeQuotaExhaustion(message?: string, providerCode?: string): boolean {
+  const code = (providerCode ?? "")
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (
+    [
+      "insufficient_quota",
+      "billing_hard_limit_reached",
+      "usage_limit_reached",
+      "usage_limit_exceeded",
+      "quota_exceeded",
+      "quota_exhausted",
+      "service_quota_exceeded_exception",
+    ].includes(code)
+  ) {
+    return true;
+  }
+
+  const text = (message ?? "").toLowerCase();
+  if (!text) return false;
+  return (
+    /\binsufficient[_\s-]+quota\b/.test(text) ||
+    /\bquota (?:has been |is )?(?:exceeded|exhausted)\b/.test(text) ||
+    /\bexceeded (?:your|the) (?:current )?quota\b/.test(text) ||
+    /\b(?:usage|spending|billing|monthly|daily) limit (?:has been )?(?:reached|exceeded|expired)\b/.test(text) ||
+    /\b(?:reached|hit|exceeded) (?:your|the) (?:usage|spending|billing|monthly|daily) limit\b/.test(text) ||
+    /\bbilling hard limit\b/.test(text) ||
+    /\bcredit balance (?:is )?(?:too low|depleted|exhausted)\b/.test(text) ||
+    /\b(?:no|not enough|insufficient) (?:api )?credits?\b/.test(text) ||
+    /\bpurchase (?:more )?credits?\b/.test(text) ||
+    /\badd (?:more )?credits?\b/.test(text) ||
+    /\byou(?:'ve| have) hit your limit\b/.test(text) ||
+    /\blimit resets?\b/.test(text)
+  );
+}
 
 /** Shape safe to persist to the event log (no `cause`, no secrets). */
 export interface SerializedAdapterError {

@@ -5,7 +5,7 @@
  * records what it actually receives, so "it remembered" is asserted on the wire
  * rather than inferred from output.
  *
- * The opt-out path is pinned too: with `history.storePrompts` off (the default),
+ * The opt-out path is pinned too: with `history.storePrompts` explicitly off,
  * resume must SAY so rather than silently starting a fresh conversation.
  */
 
@@ -57,17 +57,17 @@ function writeConfig(dir: string, port: number, storePrompts: boolean): void {
       history: {
         enabled: true,
         dbPath: join(dir, "history.db"),
-        ...(storePrompts ? { storePrompts: true } : {}),
+        storePrompts,
       },
       providers: [
-        {
-          id: "spy",
+        ...["spy", "spy-a", "spy-b"].map((id) => ({
+          id,
           kind: "openai-compat",
           adapter: "@nexuscode/provider-openai",
           baseUrl: `http://127.0.0.1:${port}/v1`,
           apiKeyEnv: "SPY_API_KEY",
           models: ["spy-1"],
-        },
+        })),
       ],
     }),
   );
@@ -78,6 +78,7 @@ beforeAll(async () => {
     throw new Error(`CLI not built at ${BIN} — run \`npm run build\` before the test suite (CI builds first)`);
   }
   mkdirSync(WORK_DIR, { recursive: true });
+  writeFileSync(join(WORK_DIR, "AGENTS.md"), "Project continuity marker: NX-CROSS-PROVIDER.\n");
 
   let reply = "noted";
   server = createServer((req, res) => {
@@ -119,9 +120,10 @@ function runChat(
   args: string[],
   input: string,
   configDir = CONFIG_DIR,
+  provider = "spy",
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, "chat", "-p", "spy", "-m", "spy-1", ...args], {
+    const child = spawn(process.execPath, [BIN, "chat", "-p", provider, "-m", "spy-1", ...args], {
       cwd: WORK_DIR,
       env: {
         ...process.env,
@@ -170,7 +172,7 @@ describe("nexus chat --resume (across two processes)", () => {
 
     expect(received).toHaveLength(3);
     const resumed = received[2]!;
-    expect(resumed.messages.map((m) => m.role)).toEqual([
+    expect(resumed.messages.filter((m) => m.role !== "system").map((m) => m.role)).toEqual([
       "user",
       "assistant",
       "user",
@@ -181,6 +183,35 @@ describe("nexus chat --resume (across two processes)", () => {
     expect(bodies).toContain("My name is Zebra.");
     expect(bodies).toContain("I work on NexusCode.");
     expect(bodies.filter((t) => t === "My name is Zebra.")).toHaveLength(1);
+  }, 60_000);
+
+  it("switches providers across processes without losing transcript or project context", async () => {
+    received.length = 0;
+
+    const first = await runChat([], "The migration codename is Aurora.\n", CONFIG_DIR, "spy-a");
+    expect(first.code).toBe(0);
+    const sessionId = sessionIdOf(first.stderr);
+
+    const second = await runChat(
+      ["--resume", sessionId],
+      "Which migration codename are we using?\n",
+      CONFIG_DIR,
+      "spy-b",
+    );
+    expect(second.code).toBe(0);
+    expect(second.stderr).toContain("[resume]");
+
+    const switched = received[received.length - 1]!;
+    const nonSystem = switched.messages.filter((m) => m.role !== "system");
+    expect(nonSystem.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    expect(nonSystem.map(textOf)).toContain("The migration codename is Aurora.");
+    const systemText = switched.messages
+      .filter((m) => m.role === "system")
+      .map(textOf)
+      .join("\n");
+    expect(systemText).toContain("NexusCode");
+    expect(systemText).toContain("# Project Conventions");
+    expect(systemText).toContain("NX-CROSS-PROVIDER");
   }, 60_000);
 
   it("--continue picks up the most recent stored conversation", async () => {
@@ -196,7 +227,7 @@ describe("nexus chat --resume (across two processes)", () => {
     expect(last.messages.map(textOf)).toContain("Remember the number 7.");
   }, 60_000);
 
-  it("says plainly that it cannot resume when storePrompts is off (the default)", async () => {
+  it("says plainly that it cannot resume when storePrompts is explicitly off", async () => {
     received.length = 0;
     const first = await runChat([], "My name is Zebra.\n", NO_PROMPTS_CONFIG_DIR);
     expect(first.code).toBe(0);
@@ -211,8 +242,9 @@ describe("nexus chat --resume (across two processes)", () => {
     // And it genuinely did NOT resume — no half-conversation was presented.
     expect(second.stderr).not.toContain("[resume]");
     const last = received[received.length - 1]!;
-    expect(last.messages).toHaveLength(1);
-    expect(textOf(last.messages[0]!)).toBe("What is my name?");
+    const nonSystem = last.messages.filter((m) => m.role !== "system");
+    expect(nonSystem).toHaveLength(1);
+    expect(textOf(nonSystem[0]!)).toBe("What is my name?");
   }, 60_000);
 
   it("starts fresh, without error, on an unknown session id", async () => {
@@ -220,6 +252,6 @@ describe("nexus chat --resume (across two processes)", () => {
     const r = await runChat(["--resume", "s_does_not_exist"], "hello\n");
     expect(r.code).toBe(0);
     expect(r.stderr).toContain("no stored transcript");
-    expect(received[received.length - 1]!.messages).toHaveLength(1);
+    expect(received[received.length - 1]!.messages.filter((m) => m.role !== "system")).toHaveLength(1);
   }, 60_000);
 });

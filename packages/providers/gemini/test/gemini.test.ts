@@ -169,6 +169,8 @@ describe("gemini adapter — error mapping + no-cred posture", () => {
   it("maps HTTP-ish statuses to the taxonomy", () => {
     expect(mapError({ status: 401, message: "bad key" }).code).toBe("auth");
     expect(mapError({ status: 429, message: "slow down" }).code).toBe("rate_limit");
+    expect(mapError({ status: 429, message: "You exceeded your current quota; check billing" }).code).toBe("quota_exhausted");
+    expect(mapError({ code: "QUOTA_EXCEEDED", message: "quota exhausted" }).code).toBe("quota_exhausted");
     expect(mapError({ status: 503, message: "overloaded" }).code).toBe("overloaded");
     expect(mapError({ status: 400, message: "too many tokens, maximum exceeded" }).code).toBe("context_length");
     expect(mapError({ status: 500, message: "boom" }).code).toBe("transport");

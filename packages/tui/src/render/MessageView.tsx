@@ -45,6 +45,7 @@ export function MessageView({ turn, provider, streaming = false, width = 80 }: M
   const caps = useCaps();
   const providerStyle = useTextStyle(providerToken(provider));
   const thinkStyle = useTextStyle("stream.thinking");
+  const errorStyle = useTextStyle("error.fg");
   // Content hangs to the right of the marker column; wrap to what is left so
   // long lines and code blocks never overflow past the right edge.
   const bodyWidth = Math.max(20, width - GUTTER);
@@ -91,6 +92,14 @@ export function MessageView({ turn, provider, streaming = false, width = 80 }: M
           </Box>
         ) : null}
 
+        {turn.error ? (
+          <Box width={bodyWidth}>
+            <Text {...errorStyle} bold>
+              {glyph(caps, "error")} {inlineErrorText(turn.error)}
+            </Text>
+          </Box>
+        ) : null}
+
         {/* Inline, compact tool activity + collapsed file-edit summaries. Both
             sit in the content column, so they line up with the prose above
             instead of carrying their own private indent. */}
@@ -103,4 +112,24 @@ export function MessageView({ turn, provider, streaming = false, width = 80 }: M
       </Box>
     </Box>
   );
+}
+
+function inlineErrorText(error: NonNullable<Turn["error"]>): string {
+  const detail = error.message.trim();
+  switch (error.code) {
+    case "quota_exhausted":
+      return `Provider usage limit expired or quota exhausted. Add credits, raise the limit, or switch providers.${detail ? ` (${detail})` : ""}`;
+    case "rate_limit":
+      return `Provider is temporarily rate-limited. Retry shortly or switch providers.${detail ? ` (${detail})` : ""}`;
+    case "auth":
+      return `Provider authentication failed. Sign in again or update its API key.${detail ? ` (${detail})` : ""}`;
+    case "empty_output":
+      return `Provider returned no usable response. Retry or switch providers.${detail ? ` (${detail})` : ""}`;
+    case "content_filter":
+      return detail || "Provider blocked the response because of its content or safety policy.";
+    case "context_length":
+      return `This conversation exceeds the model's context window. Compact it or choose a larger-context model.${detail ? ` (${detail})` : ""}`;
+    default:
+      return detail || `Provider request failed (${error.code}).`;
+  }
 }

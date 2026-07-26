@@ -424,7 +424,11 @@ export async function cmdBudget(args: ParsedArgs, io: Io = defaultIo): Promise<n
       io.err(`nexus budget set: ${(err as Error).message}\n`);
       return 1;
     }
-    io.out(`budget "${id}" set: $${Number(limitRaw)}/${window} for ${scope}:${key} → ${file}\n`);
+    if (isJson(args)) {
+      io.out(`${JSON.stringify({ budget, file })}\n`);
+    } else {
+      io.out(`budget "${id}" set: $${Number(limitRaw)}/${window} for ${scope}:${key} → ${file}\n`);
+    }
     return 0;
   }
 

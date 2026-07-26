@@ -137,9 +137,12 @@ describe("nexus chat — remembers the conversation across piped lines", () => {
     const chats = received.filter((x) => Array.isArray(x.messages) && x.messages.length > 0);
     expect(chats).toHaveLength(3);
 
-    // Turn 1 is a bare prompt; turn 3 carries the whole conversation.
-    expect(chats[0]!.messages.map((m) => m.role)).toEqual(["user"]);
-    expect(chats[2]!.messages.map((m) => m.role)).toEqual([
+    // Turn 1 is a prompt plus the shared system/project context; turn 3 carries
+    // the whole conversation underneath that stable context.
+    expect(chats[0]!.messages.filter((m) => m.role !== "system").map((m) => m.role)).toEqual([
+      "user",
+    ]);
+    expect(chats[2]!.messages.filter((m) => m.role !== "system").map((m) => m.role)).toEqual([
       "user",
       "assistant",
       "user",

@@ -45,6 +45,12 @@ export interface StatusBarProps {
   fallbackModel?: string;
   /** Provider shown before the first session event. */
   fallbackProvider?: string;
+  /**
+   * Active interaction role, shown only when it is not plain CHAT. An elevated
+   * role changes what a turn may DO (AUTOPILOT can write files), so it ranks with
+   * brand + model in the drop order rather than with the optional segments.
+   */
+  role?: string;
 }
 
 /** Hard cap on the visible model id so a long id can never dominate the bar. */
@@ -95,6 +101,7 @@ export function StatusBar({
   providerOverride,
   fallbackModel,
   fallbackProvider,
+  role,
 }: StatusBarProps): React.JSX.Element {
   const caps = useCaps();
   const node = useTextStyle("accent.default");
@@ -104,6 +111,7 @@ export function StatusBar({
   const ctxStyle = useTextStyle("accent.default");
   const costStyle = useTextStyle("cost.ok");
   const streamStyle = useTextStyle("stream.cursor");
+  const warnStyle = useTextStyle("warning.fg");
 
   const selected = selectModel(view);
   // Precedence: a live `/model` override → the session model (once known) → the
@@ -126,7 +134,9 @@ export function StatusBar({
   // Plain-text lengths for the fixed segments, used only to decide which
   // optional segments fit — never to size what Ink actually renders (that's
   // still a real flex layout, computed below).
-  const fixedLeftLen = nodeGlyph.length + 1 + "NexusCode".length + sep.length + providerLabel.length;
+  const roleLabel = role && role !== "CHAT" ? `${sep}${role}` : "";
+  const fixedLeftLen =
+    nodeGlyph.length + 1 + "NexusCode".length + sep.length + providerLabel.length + roleLabel.length;
   const contextSegLen = sep.length + ctxLabel.length;
   const costSegLen = sep.length + costLabel.length;
   const healthSegLen = 1 + healthLabel.length;
@@ -189,6 +199,13 @@ export function StatusBar({
             {shownModel}
           </Text>
         </Box>
+        {roleLabel ? (
+          <Box flexShrink={0}>
+            <Text {...warnStyle} wrap="truncate-end">
+              {roleLabel}
+            </Text>
+          </Box>
+        ) : null}
         {showContext ? (
           <Box flexShrink={0}>
             <Text {...muted} wrap="truncate-end">

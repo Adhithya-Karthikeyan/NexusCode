@@ -38,6 +38,16 @@ describe("setPath — prototype pollution guard", () => {
     expect(getPath(obj, "tui.theme")).toBe("light");
     expect(getPath(obj, "tui.fontSize")).toBe(14);
   });
+
+  it("coerces JSON arrays, objects, and null for structured config values", () => {
+    const obj: Record<string, unknown> = {};
+    setPath(obj, "tools.enabledGroups", '["web","db"]');
+    setPath(obj, "routing.rules", '{"default":"mock"}');
+    setPath(obj, "optional", "null");
+    expect(getPath(obj, "tools.enabledGroups")).toEqual(["web", "db"]);
+    expect(getPath(obj, "routing.rules")).toEqual({ default: "mock" });
+    expect(getPath(obj, "optional")).toBeNull();
+  });
 });
 
 describe("validateUserConfig — pre-write schema gate", () => {

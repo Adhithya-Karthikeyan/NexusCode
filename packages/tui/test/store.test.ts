@@ -95,6 +95,32 @@ describe("event-log reducer", () => {
     expect(selectProviderHealth(down)).toHaveLength(1);
   });
 
+  it("attaches provider failures to the finalized conversation turn", () => {
+    const v = reduceEvents([
+      session,
+      { t: "prompt", lane: "main", text: "hello" },
+      {
+        t: "error",
+        lane: "main",
+        code: "quota_exhausted",
+        message: "You've hit your usage limit",
+        retryable: false,
+      },
+    ]);
+
+    expect(selectLiveTurn(v)).toBeNull();
+    expect(selectFinalizedTurns(v)).toHaveLength(1);
+    expect(selectFinalizedTurns(v)[0]).toMatchObject({
+      prompt: "hello",
+      finishReason: "error:quota_exhausted",
+      error: {
+        code: "quota_exhausted",
+        message: "You've hit your usage limit",
+        retryable: false,
+      },
+    });
+  });
+
   it("reports the served model and no failover for a healthy single provider", () => {
     const v = reduceEvents([session, { t: "done", lane: "main", finishReason: "stop" }]);
     expect(selectModel(v)).toEqual({ model: "Opus 4.8", provider: "anthropic" });

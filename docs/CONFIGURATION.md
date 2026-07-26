@@ -165,7 +165,7 @@ config, where you are the author.
 | `quality` | `string[]` | `[]` | Quality ranking, best first, of model / provider / `"provider/model"` ids. Used by `optimize: "quality"`. |
 
 The remaining top-level keys are objects, each documented in its own section below:
-`tui`, `history`, `observability`, `rag`, `cache`, `fileintel`, `agent`, `tasks`,
+`tui`, `history`, `transfer`, `observability`, `rag`, `cache`, `fileintel`, `agent`, `tasks`,
 `terminal`, `gemini`, `bedrock`, `vertex`, `lsp`, `tools`, `hooks`, `webhooks`,
 `plugins`, `enterprise`, `performance`, `auth`.
 
@@ -219,6 +219,90 @@ Objects are strict: an unrecognized field is stripped with a warning.
 | --- | --- | --- | --- |
 | `enabled` | boolean | `true` | Record runs to the SQLite event log. |
 | `dbPath` | string | *(data dir)* `history.db` | Database location. |
+| `storePrompts` | boolean | `true` | Persist secret-redacted user prompts so provider switching, `chat --resume`, and `--continue` restore the complete conversation. Set `false` for a non-resumable transcript. |
+| `encryptPrompts` | boolean | `true` | AES-256-GCM encrypt durable transcript rows. Nexus fails closed rather than silently writing plaintext if the key cannot be loaded. |
+
+### `transfer`
+
+Provider-neutral transfer capture is independent of provider choice. It stores
+normalized provider chunks, projected execution state, tool progress, and turn
+boundaries in additive ZLCTS tables. Production verbatim/payload blobs are
+AES-256-GCM encrypted with a key held by the SecretStore (or a private `0600`
+fallback key file on a headless machine).
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | Capture provider-neutral run state. If history is disabled, a separate `dbPath` is required before capture is enabled. |
+| `dbPath` | string | `history.db` | Optional dedicated SQLite database; otherwise transfer tables share the history database. |
+| `embedder` | string | `"hashing"` | Transfer item embedder metadata. Capture remains provider-neutral and can fall back to lexical projection. |
+| `compressionPolicy` | `"semantic"` \| `"truncateMiddle"` | `"semantic"` | Compression policy for a reconstructed, bounded handoff capsule. Essential goal/action state is never silently discarded. |
+| `validationStrictness` | `"strict"` \| `"relaxed"` | `"strict"` | Validation policy applied before a handoff capsule is signed and sent. |
+| `handoff.mode` | `"full"` \| `"consult"` | `"full"` | Whether the target owns execution or receives consultation-only context. |
+| `handoff.inflightWaitMs` | positive int | `30000` | Wait budget recorded for in-flight transfer coordination. |
+| `handoff.preventRetryWindow` | positive int | `5` | Turns for which completed/partial action ids remain on the do-not-repeat gate. |
+| `handoff.maxCapsuleTokens` | positive int | `24000` | Maximum estimated tokens in the signed capsule. |
+| `handoff.maxCapsuleBytes` | positive int | `131072` | Maximum UTF-8 size of the signed capsule. |
+| `handoff.partialContinuation.enabled` | boolean | `false` | Opt in to safe continuation after useful output. |
+| `handoff.partialContinuation.maxContextCodePoints` | positive int | `32768` | Maximum partial answer/reasoning suffix placed in the continuation envelope. |
+
+Every explicit live provider change and routed failover receives a canonical,
+secret-redacted, HMAC-SHA-256-authenticated handoff capsule containing the harness-owned
+goal, context manifest, constraints, provider transition, and do-not-repeat
+state. The receiving provider also receives the ordinary transcript and freshly
+assembled project context. NexusCode does not claim to migrate private hidden
+reasoning or a vendor-owned process snapshot.
+
+Before the replacement provider's first mutation, Nexus verifies the handoff
+integrity and the captured git workspace fingerprint. Completed, partial, and
+in-flight action fingerprints remain blocked for the configured retry window.
+These guards are reconstructed from the encrypted handoff after a process
+restart.
+
+Partial continuation is deliberately off by default. When enabled, the runtime
+tracks rendered text and action lifecycle, refuses unknown, ambiguous, aborted,
+or in-flight mutations, requires exact approval for completed mutations, and
+deduplicates overlap from the replacement provider.
+
+### `switching`
+
+The same capability-aware policy applies to ordinary single runs, native agent
+tool loops, routed runs, the SDK, server, and TUI. The target must preserve the
+request's modalities, tools, structured output, reasoning, and execution
+requirements. Nexus compacts only older history when the target has a smaller
+context window; the current user turn, system instructions, and tool state are
+retained.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `policy` | `"strict"` \| `"fallback"` \| `"ask"` | `"fallback"` | Never switch, switch automatically to a compatible backend, or require a host approval callback. |
+| `maxFallbacks` | int 0–32 | `3` | Maximum distinct fallback providers attempted after same-provider retry. |
+| `preferredProviders` | string[] | `[]` | Provider ordering preference for compatible targets. |
+| `allowProviders` | string[] | `[]` | Optional automatic-switch allowlist. |
+| `denyProviders` | string[] | `[]` | Automatic-switch denylist. |
+| `maxCostMultiplier` | positive number | `4` | Reject an automatic target whose known token price exceeds this source-price multiple. |
+| `contextSafetyMarginTokens` | positive int | `1024` | Extra target context reserved for framing/tokenizer variance. |
+| `showReceipts` | boolean | `true` | Show explicit/automatic switch receipts in interactive surfaces. |
+| `nativeSessionSlots` | boolean | `true` | Keep independent Claude Code/Codex native session IDs and resume the correct one when returning to that provider. |
+
+### `providerCircuit`
+
+Persistent availability state prevents a provider whose account quota or
+credentials are known to be unusable from being called repeatedly after a
+restart. State is stored transactionally in a private `0600` JSON file. A
+cross-process lock prevents lost updates and guarantees only one half-open
+probe across simultaneous Nexus windows.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | Enable persistent provider/account/model circuit protection. |
+| `filePath` | string | *(data dir)* `provider-circuits.json` | Override the state file. |
+| `transientFailureThreshold` | positive int | `3` | Consecutive transient failures before opening the circuit. |
+| `baseCooldownMs` | positive int | `30000` | Initial transient cooldown. |
+| `maxCooldownMs` | positive int | `900000` | Maximum exponential transient cooldown. |
+| `quotaCooldownMs` | positive int | `3600000` | Default hard-quota cooldown when the provider supplies no reset time. |
+| `modelUnavailableCooldownMs` | positive int | `300000` | Cooldown for a removed/unavailable model. |
+| `maxClockSkewMs` | positive int | `5000` | Tolerated wall-clock rollback before persisted timing is treated conservatively. |
+| `maxEntries` | positive int | `512` | Maximum persisted circuit records. |
 
 ### `observability`
 

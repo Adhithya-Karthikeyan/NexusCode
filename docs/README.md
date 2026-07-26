@@ -13,6 +13,8 @@ Start with the project [README](../README.md) for what NexusCode is and how to i
 | [Configuration](CONFIGURATION.md) | The config file, its schema, credential storage, and every tunable option |
 | [Providers](PROVIDERS.md) | Supported model backends, how each one authenticates, and their capabilities |
 | [Architecture](ARCHITECTURE.md) | How the system is built: layered diagrams, the request lifecycle, the tool and agent loops, orchestration, and extension points |
+| [Feature audit](FEATURE-AUDIT.md) | Complete feature inventory, provider-switch continuity contract, test matrix, fixes, and external-validation limits |
+| [Edge-case audit](EDGE-CASE-AUDIT.md) | Provider quota, transport, stream, subprocess, failover, transcript, and UI failure matrix |
 
 ## Where to go for a specific question
 
@@ -20,6 +22,8 @@ Start with the project [README](../README.md) for what NexusCode is and how to i
 - **"What does this command do?"** → [Commands](COMMANDS.md), or `nexus <command> --help`.
 - **"Where do my API keys live?"** → [Configuration](CONFIGURATION.md). Credentials resolve through an ordered chain: environment variable, OS keychain, then an encrypted local file.
 - **"Which providers are supported and what can each one do?"** → [Providers](PROVIDERS.md).
+- **"What was actually audited and tested?"** → [Feature audit](FEATURE-AUDIT.md).
+- **"What happens when a provider quota, stream, CLI, or failover breaks?"** → [Edge-case audit](EDGE-CASE-AUDIT.md).
 - **"How does a request actually flow through the system?"** → [Request lifecycle](ARCHITECTURE.md#3-request-lifecycle-one-nexus-ask), a step-by-step sequence diagram of one `nexus ask`.
 - **"How do I add a provider, a tool, an MCP server, a plugin, or a hook?"** → [Extension points](ARCHITECTURE.md#10-extension-points).
 - **"How does the agent decide to call a tool, and what stops it?"** → [The agentic tool loop](ARCHITECTURE.md#4-the-agentic-tool-loop) and the permission gate table beneath it.
@@ -35,4 +39,4 @@ The architecture guide is diagram-first. Every diagram is a Mermaid block that G
 4. [OODA agent loop](ARCHITECTURE.md#5-the-ooda-agent-loop) — observe, plan, act, evaluate, replan
 5. [Multi-provider orchestration](ARCHITECTURE.md#6-multi-provider-orchestration) — compare, race, consensus, chain
 6. [Context and memory pipeline](ARCHITECTURE.md#7-context-and-memory-pipeline) — sources to a budgeted, cache-stable prompt
-7. [Package map](ARCHITECTURE.md#8-package-map) — how the 44 workspace packages layer
+7. [Package map](ARCHITECTURE.md#8-package-map) — how the 45 workspace packages layer

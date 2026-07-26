@@ -12,6 +12,7 @@
 import { Box, Text } from "ink";
 import type { InterruptMode } from "../interrupt/interrupt.js";
 import { useCaps } from "../caps/CapabilityProvider.js";
+import { glyph } from "../caps/glyphs.js";
 import { useTextStyle } from "../theme/ThemeProvider.js";
 import { ConversationInput } from "../chrome/ConversationInput.js";
 import type { SlashCommandSpec } from "../chrome/commands.js";
@@ -55,6 +56,34 @@ export interface ConversationProps {
   /** Launch model/provider shown before the first session event. */
   fallbackModel?: string;
   fallbackProvider?: string;
+  /**
+   * One-line outcome of the last `/model` / `/provider` / `/effort` switch, shown
+   * directly above the status bar. Without it a rejected switch was completely
+   * silent on this surface — the picker closed and nothing changed.
+   */
+  notice?: { kind: "info" | "error"; text: string };
+  /** Active interaction role, shown on the status bar when it is not plain CHAT. */
+  role?: string;
+}
+
+/** The one-line switch receipt / rejection shown above the status bar. */
+function Notice({
+  notice,
+  width,
+}: {
+  notice: { kind: "info" | "error"; text: string };
+  width: number;
+}): React.JSX.Element {
+  const caps = useCaps();
+  const style = useTextStyle(notice.kind === "error" ? "error.fg" : "text.muted");
+  const mark = notice.kind === "error" ? glyph(caps, "warn") : glyph(caps, "ok");
+  return (
+    <Box width={width}>
+      <Text {...style} wrap="truncate-end">
+        {mark} {notice.text}
+      </Text>
+    </Box>
+  );
 }
 
 export function Conversation({
@@ -73,6 +102,8 @@ export function Conversation({
   providerOverride,
   fallbackModel,
   fallbackProvider,
+  notice,
+  role,
 }: ConversationProps): React.JSX.Element {
   // The real terminal width, live across resizes. This surface used to hard-code
   // 80 columns and never listen for `resize`, so on any terminal that was not
@@ -88,6 +119,7 @@ export function Conversation({
         {...(fallbackNotice ? { fallbackNotice } : {})}
       />
       <Divider width={cols} />
+      {notice ? <Notice notice={notice} width={cols} /> : null}
       <StatusBar
         view={view}
         width={cols}
@@ -96,6 +128,7 @@ export function Conversation({
         {...(providerOverride !== undefined ? { providerOverride } : {})}
         {...(fallbackModel !== undefined ? { fallbackModel } : {})}
         {...(fallbackProvider !== undefined ? { fallbackProvider } : {})}
+        {...(role !== undefined ? { role } : {})}
       />
       <ConversationInput
         isActive={inputActive}

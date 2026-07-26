@@ -196,6 +196,7 @@ describe("bedrock adapter — error mapping", () => {
   it("maps AWS exception names and statuses to the taxonomy", () => {
     expect(mapError({ name: "AccessDeniedException", message: "no", $metadata: { httpStatusCode: 403 } }).code).toBe("auth");
     expect(mapError({ name: "ThrottlingException", $metadata: { httpStatusCode: 429 } }).code).toBe("rate_limit");
+    expect(mapError({ name: "ServiceQuotaExceededException", message: "quota exhausted", $metadata: { httpStatusCode: 400 } }).code).toBe("quota_exhausted");
     expect(mapError({ name: "ServiceUnavailableException", $metadata: { httpStatusCode: 503 } }).code).toBe("overloaded");
     expect(mapError({ name: "ValidationException", message: "input is too long, maximum tokens", $metadata: { httpStatusCode: 400 } }).code).toBe("context_length");
     expect(mapError({ name: "ValidationException", message: "bad field", $metadata: { httpStatusCode: 400 } }).code).toBe("invalid_request");

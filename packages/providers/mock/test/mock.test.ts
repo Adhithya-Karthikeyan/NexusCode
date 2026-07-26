@@ -74,6 +74,40 @@ describe("mock adapter — streaming contract", () => {
     expect(JSON.stringify(a.message)).toBe(JSON.stringify(b.message));
   });
 
+  it("echoes the user prompt instead of an assembler-injected context block", async () => {
+    const adapter = createMockAdapter();
+    const request: ChatRequest = {
+      model: "mock-fast",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "# Working Changes\nM hundreds-of-files.ts" },
+            { type: "text", text: "hello nexus" },
+          ],
+        },
+      ],
+    };
+    const result = await adapter.chat(request, ctx(new AbortController().signal));
+    const text = result.message.content
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("");
+    expect(text).toBe("[mock-fast] Echo: hello nexus");
+    expect(text).not.toContain("Working Changes");
+  });
+
+  it("bounds echoes for very large code and git prompts", async () => {
+    const adapter = createMockAdapter();
+    const result = await adapter.chat(req(`prefix-${"x".repeat(4_000)}-suffix`), ctx(new AbortController().signal));
+    const text = result.message.content
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("");
+    expect(text.length).toBeLessThan(2_200);
+    expect(text).toContain("characters omitted");
+    expect(text).toContain("prefix-");
+    expect(text).toContain("-suffix");
+  });
+
   it("advertises streaming + abort-signal cancellation in capabilities", async () => {
     const adapter = createMockAdapter();
     const caps = await adapter.capabilities();

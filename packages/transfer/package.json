@@ -1,7 +1,7 @@
 {
   "name": "@nexuscode/transfer",
   "version": "0.1.0",
-  "description": "NexusCode Zero-Loss Context Transfer System (ZLCTS) — a harness-owned, provider-neutral knowledge core so switching LLM providers loses virtually no understanding.",
+  "description": "NexusCode provider-neutral transfer capture — encrypted verbatim events, projected knowledge state, WAL, snapshots, integrity, and recovery.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

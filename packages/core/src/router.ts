@@ -9,15 +9,15 @@
  *      survivors by the rule's `optimize` axis (cost / latency / quality / local
  *      / explicit). Known-unhealthy providers are dropped up front.
  *
- *   2. `runWithFailover(candidates, makeRun, scope)` is the differentiator: it
- *      streams the first candidate and, **only before the first real output
- *      chunk is emitted**, transparently fails over to the next candidate on a
- *      retryable/terminal provider error (rate_limit / overloaded / transport /
- *      cli_exit). It never replays a partially-emitted stream — the same
- *      "retry-only-before-first-chunk" invariant `resilience.ts` enforces. The
- *      hand-off is *visible*: the winning candidate's `run-start` carries a
- *      `raw.failover` trail and an `onFailover` hook fires, so the UI can render
- *      "failed over A → B".
+ *   2. `runWithFailover(candidates, makeRun, scope)` streams the first candidate
+ *      and transparently fails over before useful output on a provider error
+ *      another backend can solve (rate_limit / quota_exhausted / overloaded /
+ *      transport / cli_exit / empty_output). After useful output, continuation
+ *      is disabled by default; an explicit partial-recovery policy may authorize
+ *      a provider-neutral continuation only when the tracked action state is
+ *      safe. The hand-off is *visible*: the winning candidate's `run-start`
+ *      carries a `raw.failover` trail and an `onFailover` hook fires, so the UI
+ *      can render "failed over A → B".
  *
  * Everything here is offline-verifiable with the mock providers — no network,
  * no keys, no wall-clock dependence.
@@ -29,6 +29,21 @@ import type { CancelScope } from "./cancel.js";
 import type { ProviderRegistry } from "./registry.js";
 import { DEFAULT_RETRY_POLICY, withRetry, type RetryPolicy } from "./resilience.js";
 import type { PricingTable } from "./types.js";
+import {
+  ContinuationOverlapDeduplicator,
+  PartialRecoveryTracker,
+  type PartialRecoveryAudit,
+  type PartialRecoveryPlan,
+  type PartialRecoveryRequest,
+  type PartialRecoveryTrackerOptions,
+  type MutationRecoveryApproval,
+} from "./partial-recovery.js";
+import {
+  ProviderCircuitBreaker,
+  type ProviderCircuitLease,
+  type ProviderCircuitStatus,
+  type ProviderCircuitTarget,
+} from "./provider-circuit.js";
 
 // ── Route rule + candidates ───────────────────────────────────────────────────
 
@@ -84,6 +99,10 @@ export interface SelectOptions {
   registry: ProviderRegistry;
   /** Only keep providers whose capabilities satisfy this predicate (e.g. `c => c.fileEdit`). */
   capabilitiesNeeded?: (caps: Capabilities) => boolean;
+  /** Rank persistently blocked targets last, retaining them for diagnosis if all are blocked. */
+  providerCircuit?: ProviderCircuitBreaker;
+  /** Add account identity or customize circuit scope for one candidate. */
+  circuitTargetFor?: (candidate: RouteCandidate) => ProviderCircuitTarget;
 }
 
 /** Provider ids (or id-substrings) treated as local model runtimes by default. */
@@ -108,6 +127,8 @@ interface RawCandidate {
   aliases: string[];
   /** Insertion order from the registry, the stable tiebreaker. */
   order: number;
+  /** Persistently blocked candidates remain as last-resort diagnostics only. */
+  circuitBlocked?: boolean;
 }
 
 /** Does `entry` name this candidate (by provider, model, alias, or provider/model)? */
@@ -161,7 +182,22 @@ export class Router {
       const caps = registry.capabilitiesOf(providerId);
       if (capabilitiesNeeded && !capabilitiesNeeded(caps)) continue;
       for (const m of caps.models) {
-        raw.push({ providerId, modelId: m.id, aliases: m.aliases ?? [], order: order++ });
+        const candidate: RouteCandidate = { providerId, modelId: m.id, reason: "explicit" };
+        let circuitBlocked = false;
+        if (opts.providerCircuit) {
+          const status = opts.providerCircuit.status(
+            opts.circuitTargetFor?.(candidate) ?? { providerId, modelId: m.id },
+          );
+          circuitBlocked =
+            status.availability === "blocked" || status.availability === "probing";
+        }
+        raw.push({
+          providerId,
+          modelId: m.id,
+          aliases: m.aliases ?? [],
+          order: order++,
+          ...(circuitBlocked ? { circuitBlocked: true } : {}),
+        });
       }
     }
 
@@ -175,7 +211,14 @@ export class Router {
     }
 
     // 3. Order the optimized set.
-    const ordered = this.order(rule, pool, localExtra);
+    const scored = this.order(rule, pool, localExtra);
+    // Keep blocked targets only as a last-resort diagnostic. This means a
+    // healthy fallback is chosen immediately, while an all-blocked route still
+    // reaches the circuit guard and returns the real quota/auth diagnosis.
+    const ordered = [
+      ...scored.filter((candidate) => !candidate.circuitBlocked),
+      ...scored.filter((candidate) => candidate.circuitBlocked),
+    ];
     const reason: RouteReason = rule.optimize;
     const out: RouteCandidate[] = ordered.map((c) => ({
       providerId: c.providerId,
@@ -270,7 +313,14 @@ export class Router {
 // ── Live failover ─────────────────────────────────────────────────────────────
 
 /** Adapter error codes that make failover worthwhile even if `retryable` is unset. */
-const FAILOVER_CODES: ReadonlySet<string> = new Set(["rate_limit", "overloaded", "transport", "cli_exit"]);
+const FAILOVER_CODES: ReadonlySet<string> = new Set([
+  "rate_limit",
+  "quota_exhausted",
+  "overloaded",
+  "transport",
+  "cli_exit",
+  "empty_output",
+]);
 
 /** True when `err` warrants failing over to the next candidate (never for user cancel). */
 export function isFailoverEligible(err: AdapterError): boolean {
@@ -288,6 +338,8 @@ export interface FailoverEvent {
   error: AdapterError;
   /** 1-based ordinal of this hand-off within the run. */
   attempt: number;
+  /** Present when a post-output switch used the opt-in recovery protocol. */
+  partialRecovery?: PartialRecoveryAudit;
 }
 
 /** One compact entry in the `run-start.raw.failover` trail (audit-log-safe). */
@@ -307,6 +359,12 @@ export interface FailoverRaw {
 export interface FailoverOptions {
   /** Fires the moment a hand-off happens (UI "failed over A → B", trace log). */
   onFailover?: (e: FailoverEvent) => void;
+  /**
+   * Transaction gate immediately before a provider switch. `false` fails
+   * closed with the original provider error; useful for an interactive `ask`
+   * policy or an external authorization check.
+   */
+  beforeFailover?: (e: FailoverEvent) => boolean | Promise<boolean>;
   /** Override which errors trigger failover (default {@link isFailoverEligible}). */
   isEligible?: (err: AdapterError) => boolean;
   /**
@@ -314,11 +372,101 @@ export interface FailoverOptions {
    * Returning `false` drops it without an attempt.
    */
   isHealthy?: (candidate: RouteCandidate) => boolean;
+  /**
+   * Disabled by default. When enabled, a late eligible error may switch only
+   * when the recovery tracker proves continuation safe.
+   */
+  partialRecovery?: PartialRecoveryTrackerOptions & {
+    originalGoal: string;
+    mutationApproval?: MutationRecoveryApproval;
+    onPlan?: (plan: PartialRecoveryPlan) => void;
+  };
+}
+
+/** Optional persistent availability guard used by direct and routed runs. */
+export interface ProviderRunGuardOptions {
+  providerCircuit?: ProviderCircuitBreaker;
+  circuitTargetFor?: (candidate: RouteCandidate) => ProviderCircuitTarget;
+}
+
+function blockedCircuitError(
+  candidate: RouteCandidate,
+  status: ProviderCircuitStatus,
+): AdapterError {
+  const code =
+    status.lastError?.code ??
+    (status.reason === "quota"
+      ? "quota_exhausted"
+      : status.reason === "auth"
+        ? "auth"
+        : status.reason === "model_unavailable"
+          ? "invalid_request"
+          : "overloaded");
+  const until =
+    status.blockedUntil === undefined
+      ? ""
+      : ` until ${new Date(status.blockedUntil).toISOString()}`;
+  const reason = status.reason?.replaceAll("_", " ") ?? "provider failure";
+  return new AdapterError(
+    code,
+    `${candidate.providerId}/${candidate.modelId} is temporarily unavailable: ${reason}${until}`,
+    {
+      providerId: candidate.providerId,
+      ...(status.blockedUntil !== undefined
+        ? { retryAfterMs: Math.max(0, status.blockedUntil - Date.now()) }
+        : {}),
+    },
+  );
+}
+
+/**
+ * Apply one persistent circuit lease around a fully retried provider stream.
+ * Only the final outcome reaches the breaker, so same-provider retries do not
+ * prematurely trip it.
+ */
+export async function* withProviderCircuit(
+  candidate: RouteCandidate,
+  makeRun: () => AsyncIterable<StreamChunk>,
+  options: ProviderRunGuardOptions = {},
+): AsyncIterable<StreamChunk> {
+  const breaker = options.providerCircuit;
+  if (!breaker) {
+    yield* makeRun();
+    return;
+  }
+
+  const target =
+    options.circuitTargetFor?.(candidate) ?? {
+      providerId: candidate.providerId,
+      modelId: candidate.modelId,
+    };
+  const decision = breaker.tryAcquire(target);
+  if (!decision.allowed) {
+    const error = blockedCircuitError(candidate, decision.status);
+    yield { type: "error", runId: "", error, retryable: false };
+    return;
+  }
+
+  const lease: ProviderCircuitLease | undefined = decision.lease;
+  try {
+    for await (const chunk of makeRun()) {
+      if (chunk.type === "error") breaker.recordFailure(target, chunk.error, { ...(lease ? { lease } : {}) });
+      else if (chunk.type === "run-end") breaker.recordSuccess(target, lease);
+      yield chunk;
+      if (chunk.type === "error" || chunk.type === "run-end") return;
+    }
+  } catch (error) {
+    breaker.recordFailure(target, error, { ...(lease ? { lease } : {}) });
+    throw error;
+  }
 }
 
 /** Non-content preamble chunks — their arrival does NOT count as "streaming began". */
 function isPreambleChunk(chunk: StreamChunk): boolean {
-  return chunk.type === "run-start" || chunk.type === "session-init";
+  // Usage-only chunks do not commit a provider: an empty completion commonly
+  // reports input usage immediately before its terminal. Buffering it keeps
+  // quota/empty-output failover available until real content appears.
+  return chunk.type === "run-start" || chunk.type === "session-init" || chunk.type === "usage";
 }
 
 /** Stamp the accumulated failover trail onto a `run-start` chunk's `raw`. */
@@ -333,17 +481,18 @@ function stampFailover(chunk: StreamChunk, trail: FailoverTrailEntry[]): StreamC
  * Stream a candidate list with transparent live failover.
  *
  * Tries each candidate in order via `makeRun(candidate)`. If a candidate reaches
- * a terminal `error` (or throws) that is failover-eligible **before it has
- * emitted any real output**, and another candidate remains, the failure is
- * swallowed and the next candidate is tried — its `run-start` carrying the
- * `raw.failover` trail and `onFailover` firing. Once real content has streamed,
- * failover is disabled: the terminal is forwarded verbatim (never replay a
- * partial stream). When every candidate is exhausted, the last terminal error is
- * yielded so the stream always ends on exactly one terminal chunk.
+ * a failover-eligible terminal before real output, another candidate is tried.
+ * After real output, a switch requires an explicitly enabled, safety-approved
+ * partial recovery plan; otherwise the terminal is forwarded. When every
+ * candidate is exhausted, the last terminal error is yielded so the stream
+ * always ends on exactly one terminal chunk.
  */
 export async function* runWithFailover(
   candidates: readonly RouteCandidate[],
-  makeRun: (candidate: RouteCandidate) => AsyncIterable<StreamChunk>,
+  makeRun: (
+    candidate: RouteCandidate,
+    recovery?: PartialRecoveryRequest,
+  ) => AsyncIterable<StreamChunk>,
   scope: CancelScope,
   opts: FailoverOptions = {},
 ): AsyncIterable<StreamChunk> {
@@ -352,6 +501,7 @@ export async function* runWithFailover(
   let attempt = 0;
   let lastError: AdapterError | undefined;
   let lastCandidate: RouteCandidate | undefined;
+  let pendingRecovery: PartialRecoveryPlan | undefined;
 
   // Filter out candidates known-unhealthy at dispatch time (health may have
   // flipped since `select`). Keeps the failover chain from wasting an attempt.
@@ -369,8 +519,11 @@ export async function* runWithFailover(
 
   for (let i = 0; i < chain.length; i++) {
     const candidate = chain[i]!;
+    const recovery = pendingRecovery;
+    pendingRecovery = undefined;
     lastCandidate = candidate;
     const hasNext = i < chain.length - 1;
+    const nextCandidate = hasNext ? chain[i + 1]! : undefined;
 
     if (scope.signal.aborted) {
       yield { type: "error", runId: "", error: new AdapterError("cancelled", "aborted"), retryable: false };
@@ -385,20 +538,107 @@ export async function* runWithFailover(
     const preamble: StreamChunk[] = [];
     let committed = false; // real output committed → failover is now disabled
     let failoverErr: AdapterError | undefined; // set → break to next candidate
+    let failoverRecovery: PartialRecoveryPlan | undefined;
+    const recoveryOptions = opts.partialRecovery;
+    const tracker = new PartialRecoveryTracker({
+      enabled: recoveryOptions?.enabled === true,
+      ...(recoveryOptions?.classifyAction
+        ? { classifyAction: recoveryOptions.classifyAction }
+        : {}),
+      ...(recoveryOptions?.maxPartialContextCodePoints !== undefined
+        ? { maxPartialContextCodePoints: recoveryOptions.maxPartialContextCodePoints }
+        : {}),
+    });
+    if (recovery) {
+      if (recovery.checkpoint.assistantText) {
+        tracker.observe({
+          type: "text-delta",
+          runId: "",
+          text: recovery.checkpoint.assistantText,
+          channel: "answer",
+        });
+      }
+      if (recovery.checkpoint.reasoning) {
+        tracker.observe({
+          type: "reasoning-delta",
+          runId: "",
+          text: recovery.checkpoint.reasoning,
+        });
+      }
+      for (const action of recovery.checkpoint.actions) tracker.recordAction(action);
+    }
+    const overlap = recovery
+      ? new ContinuationOverlapDeduplicator(recovery.checkpoint.assistantText)
+      : undefined;
+    let overlapFinished = false;
 
     const flushPreamble = function* (): Generator<StreamChunk> {
       const snapshot = [...trail];
-      for (const p of preamble) yield stampFailover(p, snapshot);
+      for (const p of preamble) {
+        // A recovered switch is one logical public run. The original provider's
+        // start was already rendered, so suppress the replacement provider's
+        // duplicate start/session preamble while preserving its usage.
+        if (recovery && (p.type === "run-start" || p.type === "session-init")) continue;
+        yield stampFailover(p, snapshot);
+      }
       preamble.length = 0;
     };
 
+    const finishOverlap = function* (runId: string): Generator<StreamChunk> {
+      if (!overlap || overlapFinished) return;
+      overlapFinished = true;
+      const text = overlap.finish();
+      if (!text) return;
+      const recoveredChunk: StreamChunk = {
+        type: "text-delta",
+        runId,
+        text,
+        channel: "answer",
+        raw: { partialRecovery: recovery?.audit },
+      };
+      tracker.observe(recoveredChunk);
+      yield recoveredChunk;
+    };
+
+    const createRecoveryPlan = (): PartialRecoveryPlan | undefined => {
+      if (!recoveryOptions?.enabled || !nextCandidate) return undefined;
+      const plan = tracker.createPlan({
+        originalGoal: recoveryOptions.originalGoal,
+        sourceProviderId: candidate.providerId,
+        targetProviderId: nextCandidate.providerId,
+        ...(recoveryOptions.mutationApproval
+          ? { mutationApproval: recoveryOptions.mutationApproval }
+          : {}),
+      });
+      recoveryOptions.onPlan?.(plan);
+      return plan.decision === "safe" && plan.request ? plan : undefined;
+    };
+
     try {
-      for await (const chunk of makeRun(candidate)) {
+      for await (const sourceChunk of makeRun(candidate, recovery?.request)) {
+        let chunk = sourceChunk;
+        if (chunk.type === "text-delta" && chunk.channel !== "reasoning" && overlap) {
+          const text = overlap.push(chunk.text);
+          if (!text) continue;
+          chunk = {
+            ...chunk,
+            text,
+            raw: { partialRecovery: recovery?.audit, providerRaw: chunk.raw },
+          };
+        }
+        if (chunk.type === "run-end" || chunk.type === "error") {
+          yield* finishOverlap(chunk.runId);
+        }
+        tracker.observe(chunk);
+
         if (!committed) {
           if (chunk.type === "error") {
             // Terminal failure before any real output → the failover point.
             if (hasNext && eligible(chunk.error)) {
               failoverErr = chunk.error;
+              // A recovery provider can fail before extending the answer. Carry
+              // the prior checkpoint safely to the next candidate.
+              if (recovery) failoverRecovery = createRecoveryPlan();
               break; // discard the buffered preamble; hand off to the next candidate
             }
             // Not eligible / last candidate → this is the real terminal.
@@ -418,8 +658,20 @@ export async function* runWithFailover(
           continue;
         }
 
+        if (chunk.type === "error") {
+          if (hasNext && eligible(chunk.error)) {
+            const plan = createRecoveryPlan();
+            if (plan) {
+              failoverErr = chunk.error;
+              failoverRecovery = plan;
+              break;
+            }
+          }
+          yield chunk;
+          return;
+        }
         yield chunk;
-        if (chunk.type === "run-end" || chunk.type === "error") return; // clean terminal
+        if (chunk.type === "run-end") return; // clean terminal
       }
     } catch (e) {
       // A thrown error (adapter that didn't fold to an error chunk). If nothing
@@ -431,6 +683,21 @@ export async function* runWithFailover(
       const err = e instanceof AdapterError ? e : new AdapterError("transport", String(e), { cause: e });
       if (!committed && hasNext && eligible(err)) {
         failoverErr = err;
+        if (recovery) {
+          tracker.abortOpenActions();
+          failoverRecovery = createRecoveryPlan();
+        }
+      } else if (committed && hasNext && eligible(err)) {
+        tracker.abortOpenActions();
+        const plan = createRecoveryPlan();
+        if (plan) {
+          failoverErr = err;
+          failoverRecovery = plan;
+        } else {
+          yield* flushPreamble();
+          yield { type: "error", runId: "", error: err, retryable: err.retryable };
+          return;
+        }
       } else {
         yield* flushPreamble();
         yield { type: "error", runId: "", error: err, retryable: err.retryable };
@@ -441,10 +708,29 @@ export async function* runWithFailover(
     if (failoverErr) {
       // Record the hand-off and continue to the next candidate.
       const next = chain[i + 1]!;
-      attempt += 1;
+      const nextAttempt = attempt + 1;
+      const event: FailoverEvent = {
+        from: candidate,
+        to: next,
+        error: failoverErr,
+        attempt: nextAttempt,
+        ...(failoverRecovery ? { partialRecovery: failoverRecovery.audit } : {}),
+      };
+      if (opts.beforeFailover && !(await opts.beforeFailover(event))) {
+        yield {
+          type: "error",
+          runId: "",
+          error: failoverErr,
+          retryable: failoverErr.retryable,
+          raw: { switchDeclined: true, target: next },
+        };
+        return;
+      }
+      attempt = nextAttempt;
       lastError = failoverErr;
+      pendingRecovery = failoverRecovery;
       trail.push({ from: candidate.providerId, to: next.providerId, code: failoverErr.code, message: failoverErr.message });
-      opts.onFailover?.({ from: candidate, to: next, error: failoverErr, attempt });
+      opts.onFailover?.(event);
       continue;
     }
 
@@ -474,15 +760,27 @@ export async function* runWithFailover(
  */
 export function registryRunFactory(
   registry: ProviderRegistry,
-  streamFor: (candidate: RouteCandidate, adapter: ReturnType<ProviderRegistry["get"]>) => AsyncIterable<StreamChunk>,
+  streamFor: (
+    candidate: RouteCandidate,
+    adapter: ReturnType<ProviderRegistry["get"]>,
+    recovery?: PartialRecoveryRequest,
+  ) => AsyncIterable<StreamChunk>,
   scope: CancelScope,
   policy: RetryPolicy = DEFAULT_RETRY_POLICY,
-): (candidate: RouteCandidate) => AsyncIterable<StreamChunk> {
-  return (candidate: RouteCandidate): AsyncIterable<StreamChunk> => {
+  guard: ProviderRunGuardOptions = {},
+): (candidate: RouteCandidate, recovery?: PartialRecoveryRequest) => AsyncIterable<StreamChunk> {
+  return (
+    candidate: RouteCandidate,
+    recovery?: PartialRecoveryRequest,
+  ): AsyncIterable<StreamChunk> => {
     const attempt = (): AsyncIterable<StreamChunk> => {
       const adapter = registry.get(candidate.providerId); // throws → folded to an error chunk by withRetry
-      return streamFor(candidate, adapter);
+      return streamFor(candidate, adapter, recovery);
     };
-    return withRetry(attempt, policy, scope.signal);
+    return withProviderCircuit(
+      candidate,
+      () => withRetry(attempt, policy, scope.signal),
+      guard,
+    );
   };
 }

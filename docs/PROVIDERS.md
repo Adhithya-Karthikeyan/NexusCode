@@ -499,10 +499,32 @@ nexus route test --optimize explicit --allow mock-flaky/mock-fast --allow mock/m
 
 ### Live failover
 
-Failover is not just a retry loop. If a candidate produces a terminal error **before it
-has streamed any real content**, the engine transparently moves to the next candidate.
-Once real output has been committed, failover is disabled and the terminal event is
-forwarded verbatim — NexusCode will never replay or splice a half-finished answer.
+Failover is not just a retry loop. If a candidate produces a terminal error
+before it has streamed real content, the engine transparently moves to the next
+candidate. Eligible failures include temporary throttling, exhausted account
+quota, provider overload, transport/CLI failure, and an empty response. Quota
+and empty output are not retried against the same account.
+
+Once real output has been committed, the safe default is still to forward the
+terminal error without replay. Opt-in partial recovery (`transfer.handoff.
+partialContinuation.enabled` or `route test --recover-partial`) can continue
+text/read-only work from a provider-neutral checkpoint. It refuses uncertain
+mutations, requires exact approval for completed mutations, treats captured
+content as untrusted data, and removes overlap from the replacement response.
+
+Every provider transition receives a bounded HMAC-authenticated handoff capsule containing
+the current goal, context manifest, constraints, source/target identity, and
+do-not-repeat action state. Before mutation, Nexus validates the workspace
+fingerprint and rejects replayed completed/partial actions. Quota/auth/model/
+transient blocks are persisted transactionally by account-scoped circuit
+breakers so another process does not immediately call a provider known to be
+unavailable or reserve a duplicate recovery probe.
+
+Direct chat, native agent loops, declarative routes, SDK calls, and the TUI use
+the same compatibility planner. It preserves required modalities/tools and
+adapts older history to a smaller target context window. Returning to Claude
+Code or Codex resumes that provider's own saved native session slot; switching
+to a different provider still relies only on portable Nexus state.
 
 Every failover is recorded in a trail on the run's start event, so the UI and the audit
 log can show exactly which providers were tried and why each was abandoned.
@@ -510,6 +532,9 @@ log can show exactly which providers were tried and why each was abandoned.
 Cache affinity interacts with this deliberately: with `cache.affinity` on (the default),
 a session prefers the provider it last used so that provider's prompt cache stays warm —
 but affinity never blocks failover.
+
+Use `nexus providers status` to inspect active limits/cooldowns and reset times,
+or `nexus providers reset [provider]` after credentials or quota have changed.
 
 ---
 

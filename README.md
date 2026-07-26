@@ -3,12 +3,12 @@
 **One AI coding CLI for every provider.** NexusCode is a provider-agnostic AI harness: a single `nexus` command, a single engine, and a swappable set of model backends — OpenAI, Anthropic, Gemini, Bedrock, Vertex, Azure, Ollama, or a wrapped Claude Code / Codex CLI. Every run streams, every run is priced, and every run is recorded.
 
 ![status](https://img.shields.io/badge/status-v0.1.0%20first%20public%20release-blue)
-![tests](https://img.shields.io/badge/tests-1731%20passing-brightgreen)
-![packages](https://img.shields.io/badge/packages-44-informational)
+![tests](https://img.shields.io/badge/tests-2049%20passing-brightgreen)
+![packages](https://img.shields.io/badge/packages-45-informational)
 ![node](https://img.shields.io/badge/node-%3E%3D20.11-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status — read this first.** NexusCode is at **v0.1.0**, its first public release. The engine is real and well tested (1731 tests across 166 files, all passing), but this is a young project: the CLI surface, the config schema, and the SDK types **may change without a deprecation cycle** until 1.0. It is **not yet published to npm** — install from source (below).
+> **Project status — read this first.** NexusCode is at **v0.1.0**, its first public release. The engine is real and well tested (2,049 tests across 209 executed test files, all passing), but this is a young project: the CLI surface, the config schema, and the SDK types **may change without a deprecation cycle** until 1.0. It is **not yet published to npm** — install from source (below).
 
 ---
 
@@ -22,6 +22,7 @@ Every vendor now ships its own coding CLI, and each one locks you into one model
 - **A real agentic tool loop.** Filesystem, shell, web, browser, database, cloud, and container tools behind a permission gate (read-only by default, `--approve` / `--yolo` to widen). Optionally the full OODA loop — observe, reason, plan, act, evaluate — with specialized roles.
 - **Multi-provider orchestration as first-class commands.** Fan one prompt across providers (`compare`), race them (`race`), reconcile them through a judge (`consensus`), or pipe them through stages (`chain`).
 - **Context that persists.** A local RAG index with citations, an aider-style PageRank repo map, durable memory, and branchable sessions you can replay or export.
+- **Provider-neutral continuity.** Every run path receives the same project instructions, repo context, memory, RAG, git state, and conversation. Switching is capability-aware and target-context-aware, with authenticated handoffs, encrypted resume history, durable action guards, and separate Claude Code/Codex native session slots.
 - **MCP in both directions.** Consume Model Context Protocol servers as tools, and expose the engine's own tools over MCP.
 - **Everything is local.** SQLite history, file-backed indexes, secrets in the OS keychain. The REST daemon binds to loopback and requires a bearer token. No telemetry.
 
@@ -35,7 +36,7 @@ It works with **zero API keys** — the built-in `mock` provider is a determinis
 |---|---|
 | **Providers** | 12 adapters covering OpenAI, Anthropic, Gemini, Vertex, Bedrock, Azure OpenAI, Ollama, Grok, Claude Code, Codex, a deterministic mock, and a generic OpenAI-compatible transport — which in turn unlocks Groq, Together, DeepSeek, Mistral, OpenRouter, NVIDIA, LM Studio, and vLLM |
 | **Auth** | Real OAuth 2.0 + PKCE browser flows, device-code flows, vendor-CLI delegation, cloud SSO, and guided API-key capture — tokens in the OS keychain, never printed |
-| **Routing** | Pick a provider by `cost`, `latency`, `quality`, `local`, or explicit rules, with live failover; `nexus route explain` shows the decision before you spend anything |
+| **Routing** | Pick by `cost`, `latency`, `quality`, `local`, or explicit rules, with account-scoped cross-process circuits, authenticated context handoff, universal direct/agent failover, switch receipts, and opt-in safe partial recovery |
 | **Orchestration** | `compare`, `race --mode first\|best`, `consensus --strategy rank\|vote\|merge`, `chain --stages` |
 | **Agents** | Native tool loop, or the OODA framework with `coder`, `reviewer`, `tester`, `planner`, `researcher`, `architect`, `doc-writer`, `security-reviewer`, `coordinator` roles |
 | **Tools** | fs, shell, web search/fetch/crawl, Playwright browser, SQL databases, AWS/Azure/GCP read APIs, Docker/Kubernetes inspection, vision/OCR/image-gen/TTS/STT — each with a permission class, heavy integrations lazily loaded |
@@ -61,7 +62,7 @@ npm install
 npm run build
 ```
 
-Requires **Node.js >= 20.11**. The build compiles all 44 workspace packages in dependency order and takes a couple of minutes on a first run.
+Requires **Node.js >= 20.11**. The build compiles all 45 workspace packages in dependency order and takes a couple of minutes on a first run.
 
 ### Putting `nexus` on your PATH
 
@@ -437,6 +438,8 @@ Useful environment variables (all real, all optional): `NEXUS_DEFAULT_PROVIDER`,
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Config schema, precedence, secrets, and environment variables |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | Per-provider setup, authentication flows, and model maps |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer diagrams, engine internals, frozen contracts, data flow |
+| [docs/FEATURE-AUDIT.md](docs/FEATURE-AUDIT.md) | Complete feature inventory, provider-continuity guarantees, verification matrix, and audit fixes |
+| [docs/EDGE-CASE-AUDIT.md](docs/EDGE-CASE-AUDIT.md) | Provider quota, stream, subprocess, failover, transcript, and UI edge-case coverage |
 
 ---
 
@@ -447,8 +450,8 @@ git clone https://github.com/Adhithya-Karthikeyan/NexusCode.git
 cd NexusCode
 npm install
 
-npm run build       # build all 44 packages in dependency order
-npm test            # vitest, whole workspace (1731 tests / 166 files)
+npm run build       # build all 45 packages in dependency order
+npm test            # vitest, whole workspace (2,049 tests / 209 executed files)
 npm run typecheck   # tsc --noEmit across every workspace
 npm run clean       # remove dist/ and coverage/ everywhere
 npm run test:watch  # vitest in watch mode
@@ -491,6 +494,7 @@ packages/
   fileintel/         language detection, parsing seam, PageRank repo map
   lsp/               JSON-RPC LSP client with graceful degradation
   mcp/               MCP client, server, and tool bridge
+  transfer/          encrypted provider-neutral event/state capture + recovery
   session/           sessions over the event log, replay, export, Code Receipt
   tasks/             task/subtask model, dependency DAG, durable store
   git/               git context + provider-driven explain/review/commit/PR
@@ -499,7 +503,7 @@ packages/
   hooks/             lifecycle HookBus + HMAC-signed outbound webhooks
   plugins/           plugin manifest, discovery, sandboxed loading
   enterprise/        RBAC, policy, hash-chained audit log, budgets, usage
-  theme/             pure token data + resolver for the signature palettes
+  theme/             pure token data + resolver for 16 signature palettes
 ```
 
 ---

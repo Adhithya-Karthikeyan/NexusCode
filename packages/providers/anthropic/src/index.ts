@@ -35,7 +35,7 @@ import type {
   ToolDef,
   Usage,
 } from "@nexuscode/shared";
-import { AdapterError, createModelListCache } from "@nexuscode/shared";
+import { AdapterError, createModelListCache, looksLikeQuotaExhaustion } from "@nexuscode/shared";
 
 const PROVIDER_ID = "anthropic";
 
@@ -479,6 +479,13 @@ export function mapError(e: unknown): AdapterError {
   if (e instanceof Anthropic.APIError) {
     const s = e.status;
     const msg = redactSecrets(e.message);
+    if (looksLikeQuotaExhaustion(e.message)) {
+      return new AdapterError("quota_exhausted", msg, {
+        ...(s !== undefined ? { httpStatus: s } : {}),
+        providerId: PROVIDER_ID,
+        cause: e,
+      });
+    }
     if (s === 401 || s === 403) {
       return new AdapterError("auth", msg, { httpStatus: s, providerId: PROVIDER_ID, cause: e });
     }

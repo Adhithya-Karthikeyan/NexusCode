@@ -139,6 +139,24 @@ describe("nexus ask response cache (CAG short-circuit + savings)", () => {
     expect(Number(m![1])).toBeGreaterThan(0);
   }, 30_000);
 
+  it("invalidates an identical prompt when project instructions change", async () => {
+    const instructions = join(WORK_DIR, "AGENTS.md");
+    writeFileSync(instructions, "Project policy revision: alpha.\n");
+
+    const first = await runCli(["ask", "-p", "mock", "context-sensitive-cache-run"]);
+    expect(first.code).toBe(0);
+    expect(first.stderr).not.toContain("[cache] hit");
+
+    const second = await runCli(["ask", "-p", "mock", "context-sensitive-cache-run"]);
+    expect(second.code).toBe(0);
+    expect(second.stderr).toContain("[cache] hit");
+
+    writeFileSync(instructions, "Project policy revision: beta.\n");
+    const afterChange = await runCli(["ask", "-p", "mock", "context-sensitive-cache-run"]);
+    expect(afterChange.code).toBe(0);
+    expect(afterChange.stderr).not.toContain("[cache] hit");
+  }, 30_000);
+
   it("cache stats report the persisted response entries, and clear empties them", async () => {
     const stats = await runCli(["cache", "stats", "-o", "json"]);
     expect(stats.code).toBe(0);

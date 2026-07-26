@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { AdapterError, type ProviderAdapter } from "@nexuscode/core";
 import { createMockAdapter } from "@nexuscode/provider-mock";
 import { okText, type Tool } from "@nexuscode/tools";
 import { createNexus, Nexus, type UiEvent } from "../src/index.js";
@@ -101,6 +102,59 @@ describe("ask", () => {
       const text = await nexus.ask("no streaming here").text();
       expect(typeof text).toBe("string");
       expect(text.length).toBeGreaterThan(0);
+    } finally {
+      await nexus.dispose();
+    }
+  });
+
+  it("text() rejects with the normalized provider error instead of resolving to an empty string", async () => {
+    const quota = new AdapterError(
+      "quota_exhausted",
+      "You've hit your usage limit; limit resets at 2am",
+      { providerId: "quota-test" },
+    );
+    const adapter: ProviderAdapter = {
+      id: "quota-test",
+      label: "Quota test",
+      transport: "http-sdk",
+      capabilities: async () => ({
+        models: [{ id: "m" }],
+        streaming: true,
+        tools: false,
+        parallelToolCalls: false,
+        vision: false,
+        structuredOutput: false,
+        reasoning: false,
+        systemPrompt: true,
+        fileEdit: false,
+        shellExec: false,
+        git: false,
+        approvalGate: false,
+        mcp: false,
+        cancel: "abort-signal",
+      }),
+      chat: async () => {
+        throw quota;
+      },
+      stream: async function* (_req, ctx) {
+        yield {
+          type: "run-start",
+          runId: ctx.runId,
+          adapterId: "quota-test",
+          model: "m",
+          ts: 0,
+        };
+        yield { type: "error", runId: ctx.runId, error: quota, retryable: false };
+      },
+    };
+    const nexus = await createNexus({
+      config: { defaultProvider: "quota-test", defaultModel: "m" },
+      providers: [adapter],
+    });
+    try {
+      await expect(nexus.ask("hello").text()).rejects.toMatchObject({
+        code: "quota_exhausted",
+      });
     } finally {
       await nexus.dispose();
     }

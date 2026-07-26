@@ -91,7 +91,7 @@ function resolveModel(cfg: ClaudeCodeConfig, req: ChatRequest): string {
   return cfg.modelMap?.[req.model] ?? req.model;
 }
 
-function buildArgs(cfg: ClaudeCodeConfig, req: ChatRequest): string[] {
+function buildArgs(cfg: ClaudeCodeConfig, req: ChatRequest, ctx?: CallContext): string[] {
   const args: string[] = [
     "-p",
     promptOf(req),
@@ -112,7 +112,7 @@ function buildArgs(cfg: ClaudeCodeConfig, req: ChatRequest): string[] {
   for (const d of cfg.addDirs ?? []) args.push("--add-dir", d);
   if (cfg.mcpConfig) args.push("--mcp-config", cfg.mcpConfig);
 
-  if (cfg.resume) args.push("--resume", cfg.resume);
+  if (cfg.resume ?? ctx?.providerSessionId) args.push("--resume", cfg.resume ?? ctx?.providerSessionId ?? "");
   else if (cfg.sessionId) args.push("--session-id", cfg.sessionId);
   else if (cfg.continue) args.push("--continue");
 

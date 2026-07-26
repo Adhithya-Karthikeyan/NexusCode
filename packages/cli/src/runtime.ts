@@ -23,6 +23,12 @@ export interface ProviderModelChoice {
   provider: string;
   model: string;
   hint?: string;
+  /**
+   * The model's real context window, when the provider reported one. Carried
+   * alongside the display `hint` so a switch can size the HUD gauge for the model
+   * the user actually picked instead of guessing from the curated snapshot.
+   */
+  contextWindow?: number;
 }
 
 /** How long a live `listModels()` probe may run before we fall back to curated. */
@@ -62,6 +68,7 @@ export async function listModelsForProvider(
     provider: providerId,
     model: m.id,
     ...(m.contextWindow ? { hint: `${Math.round(m.contextWindow / 1000)}k ctx` } : {}),
+    ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}),
   });
   const curated = (): ProviderModelChoice[] => {
     try {
