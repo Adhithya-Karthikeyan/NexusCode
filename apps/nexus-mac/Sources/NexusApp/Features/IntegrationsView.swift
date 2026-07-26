@@ -419,7 +419,7 @@ private struct ToolGroupSection: View {
             }
             VStack(spacing: Space.xs) {
                 ForEach(group.tools) { tool in
-                    ToolRow(tool: tool)
+                    NexusToolRow(tool: tool)
                 }
             }
         }
@@ -447,7 +447,7 @@ private struct IntegrationHintRow: View {
     }
 }
 
-private struct ToolRow: View {
+private struct NexusToolRow: View {
     @Environment(\.nexusTheme) private var theme
     let tool: NexusTool
 

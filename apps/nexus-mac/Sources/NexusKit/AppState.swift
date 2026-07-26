@@ -8,6 +8,8 @@ public enum WorkspaceTab: String, CaseIterable, Identifiable, Sendable {
     case sessions
     case tasks
     case accounts
+    case integrations
+    case git
     case settings
 
     public var id: String { rawValue }
@@ -19,6 +21,8 @@ public enum WorkspaceTab: String, CaseIterable, Identifiable, Sendable {
         case .sessions: return "Sessions"
         case .tasks: return "Tasks"
         case .accounts: return "Accounts"
+        case .integrations: return "Integrations"
+        case .git: return "Git"
         case .settings: return "Settings"
         }
     }
@@ -30,6 +34,8 @@ public enum WorkspaceTab: String, CaseIterable, Identifiable, Sendable {
         case .sessions: return "clock.arrow.circlepath"
         case .tasks: return "checklist"
         case .accounts: return "person.badge.key"
+        case .integrations: return "puzzlepiece.extension"
+        case .git: return "arrow.triangle.branch"
         case .settings: return "slider.horizontal.3"
         }
     }

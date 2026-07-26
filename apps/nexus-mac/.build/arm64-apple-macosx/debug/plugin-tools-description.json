@@ -57,6 +57,14 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/GitView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/IntegrationsView.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/SessionsView.swift"
         },
         {
@@ -92,6 +100,8 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/AgentsView.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/AuthView.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/ConversationView.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/GitView.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/IntegrationsView.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/SessionsView.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/TasksView.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/NexusApp.swift.o",
@@ -166,6 +176,14 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/GitView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/IntegrationsView.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/SessionsView.swift.o"
         },
         {
@@ -191,6 +209,8 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AgentsView.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AuthView.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ConversationView.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/GitView.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/IntegrationsView.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/SessionsView.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/TasksView.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/NexusApp.swift",
@@ -769,6 +789,8 @@
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AgentsView.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AuthView.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ConversationView.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/GitView.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/IntegrationsView.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/SessionsView.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/TasksView.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/NexusApp.swift",
@@ -1108,6 +1130,14 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/GitView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/IntegrationsView.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/SessionsView.swift"
         },
         {
@@ -1147,6 +1177,14 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/DesignSystem.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/GitView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/IntegrationsView.swift.o"
         },
         {
           "kind" : "file",

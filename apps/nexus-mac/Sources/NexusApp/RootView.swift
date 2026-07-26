@@ -63,6 +63,10 @@ struct RootView: View {
             TasksView()
         case .accounts:
             AuthView()
+        case .integrations:
+            IntegrationsView()
+        case .git:
+            GitView()
         case .settings:
             SettingsView()
         }
