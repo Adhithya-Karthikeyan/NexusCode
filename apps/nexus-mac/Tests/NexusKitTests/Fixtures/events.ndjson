@@ -1,0 +1,18 @@
+{"t":"session","id":"run_a7bc6786-7086-4d7b-b3ef-ffa2560ed343","provider":"mock","model":"mock-fast","ts":1785088736427}
+{"t":"route","chosen":"anthropic","reason":"capability","candidates":["anthropic","openai"]}
+{"t":"prompt","lane":"main","id":"p0","text":"hello world"}
+{"t":"reasoning","lane":"main","delta":"thinking about it"}
+{"t":"text","lane":"main","delta":"[mock-fast] "}
+{"t":"text","lane":"main","delta":"Echo: "}
+{"t":"text","lane":"main","delta":"hello "}
+{"t":"text","lane":"main","delta":"world"}
+{"t":"tool_call","lane":"main","id":"call-1","name":"read_file","args":{"path":"config.json","limit":100}}
+{"t":"tool_result","lane":"main","id":"call-1","ok":true,"result":[{"type":"text","text":"PORT=8080"}]}
+{"t":"diff","lane":"main","path":"src/app.ts","patch":"@@ -1 +1 @@\n-const a = 1\n+const a = 2\n"}
+{"t":"approval","lane":"main","id":"ap-1","action":"write","detail":"{\"path\":\"src/app.ts\"}"}
+{"t":"usage","lane":"main","inputTokens":3,"outputTokens":8,"cacheRead":128,"cacheWrite":16,"costUsd":0.0042}
+{"t":"failover","lane":"main","from":"anthropic","to":"openai","code":"quota_exhausted","message":"switched provider"}
+{"t":"done","lane":"main","finishReason":"stop"}
+{"t":"prompt","lane":"main","id":"p1","text":"second turn"}
+{"t":"error","lane":"main","code":"quota_exhausted","message":"provider is out of quota","retryable":true}
+{"t":"some_future_event_type","lane":"main","payload":{"anything":true}}

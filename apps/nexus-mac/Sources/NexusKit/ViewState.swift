@@ -1,0 +1,351 @@
+import Foundation
+
+/// Health of one provider, derived passively from real run outcomes.
+public enum ProviderStatus: String, Sendable, Hashable {
+    case ok, warm, degraded, down
+}
+
+public struct ProviderHealth: Sendable, Hashable {
+    public let provider: String
+    public var status: ProviderStatus
+    public var lastTs: Double
+    public var note: String
+}
+
+/// A single tool invocation on a lane.
+public struct ToolActivity: Sendable, Hashable, Identifiable {
+    public let id: String
+    public let lane: String
+    public let name: String
+    public let args: JSONValue?
+    public var status: Status
+    public var result: JSONValue?
+
+    public enum Status: String, Sendable, Hashable {
+        case running, ok, error
+    }
+}
+
+public struct TurnDiff: Sendable, Hashable {
+    public let path: String
+    public let patch: String
+}
+
+public struct TurnError: Sendable, Hashable {
+    public let code: String
+    public let message: String
+    public let retryable: Bool
+}
+
+/// One assistant-side turn on a lane: text + reasoning + tools, delimited by `done`.
+public struct Turn: Sendable, Hashable, Identifiable {
+    public let id: String
+    public let lane: String
+    /// The user prompt that started this turn, stamped at creation so the
+    /// pairing is intrinsic and survives interruption and replay.
+    public var prompt: String?
+    public var text: String = ""
+    public var reasoning: String = ""
+    public var tools: [ToolActivity] = []
+    public var diffs: [TurnDiff] = []
+    public var finished: Bool = false
+    public var finishReason: String?
+    public var error: TurnError?
+    public let startedTs: Double
+}
+
+/// Per-lane conversation state: the live (streaming) turn + finalized history.
+public struct LaneState: Sendable, Hashable, Identifiable {
+    public let lane: String
+    public var live: Turn?
+    public var finalized: [Turn] = []
+    public var id: String { lane }
+
+    /// Whether this lane is currently producing output — the "agent is working"
+    /// signal the Agents view renders.
+    public var isStreaming: Bool { live != nil }
+}
+
+public struct UsageTotals: Sendable, Hashable {
+    public var inputTokens: Int = 0
+    public var outputTokens: Int = 0
+    public var cacheRead: Int = 0
+    public var cacheWrite: Int = 0
+    public var costUsd: Double = 0
+}
+
+public struct SessionInfo: Sendable, Hashable {
+    public let id: String
+    public let provider: String
+    public let model: String
+    public let ts: Double
+}
+
+public struct RouteInfo: Sendable, Hashable {
+    public let chosen: String
+    public let reason: UiEvent.RouteReason
+    public let candidates: [String]
+}
+
+public struct NotificationItem: Sendable, Hashable, Identifiable {
+    public enum Kind: String, Sendable, Hashable { case error, approval, failover }
+    public let kind: Kind
+    public let lane: String
+    public let ts: Double
+    public let title: String
+    public let detail: String
+    public var retryable: Bool?
+
+    /// Derived from content, NOT a fresh `UUID()`.
+    ///
+    /// SwiftUI needs `Identifiable`, but a random id would make two folds of the
+    /// same event log unequal — silently destroying the determinism that lets
+    /// the app rebuild its entire state by replaying a session's events. The
+    /// ingest `ts` is the event's position in the log, so this is stable across
+    /// replays and still unique per notification.
+    public var id: String { "\(kind.rawValue)-\(lane)-\(ts)-\(title)" }
+}
+
+/// The derived projection every view reads.
+///
+/// A faithful port of `packages/tui/src/store/viewState.ts`. Kept a pure
+/// `(state, event, ts) -> state` fold with no wall-clock reads, exactly like the
+/// original, so replaying the same log always produces byte-identical state —
+/// which is what lets the app reconnect to a session and rebuild the whole UI
+/// from the event log alone.
+public struct ViewState: Sendable, Hashable {
+    public var session: SessionInfo?
+    public var route: RouteInfo?
+    public var lanes: [String: LaneState] = [:]
+    public var laneOrder: [String] = []
+    public var totals = UsageTotals()
+    /// Cost attributed to the most recent `usage` event.
+    public var runUsd: Double = 0
+    public var lastUsage: (inputTokens: Int, outputTokens: Int) = (0, 0)
+    public var providerHealth: [String: ProviderHealth] = [:]
+    public var notifications: [NotificationItem] = []
+    public var streaming: Bool = false
+    public var eventCount: Int = 0
+
+    public init() {}
+
+    public static func == (lhs: ViewState, rhs: ViewState) -> Bool {
+        lhs.session == rhs.session
+            && lhs.route == rhs.route
+            && lhs.lanes == rhs.lanes
+            && lhs.laneOrder == rhs.laneOrder
+            && lhs.totals == rhs.totals
+            && lhs.runUsd == rhs.runUsd
+            && lhs.lastUsage == rhs.lastUsage
+            && lhs.providerHealth == rhs.providerHealth
+            && lhs.notifications == rhs.notifications
+            && lhs.streaming == rhs.streaming
+            && lhs.eventCount == rhs.eventCount
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(eventCount)
+        hasher.combine(laneOrder)
+        hasher.combine(streaming)
+    }
+
+    /// Lanes in first-seen order — the stable ordering the Agents view renders.
+    public var orderedLanes: [LaneState] {
+        laneOrder.compactMap { lanes[$0] }
+    }
+
+    /// Lanes currently producing output.
+    public var activeLanes: [LaneState] {
+        orderedLanes.filter(\.isStreaming)
+    }
+}
+
+// MARK: - The fold
+
+extension ViewState {
+    /// A turn's id is derived from `(lane, finalized-count)` — deterministic
+    /// given the log, so replaying a prefix yields identical ids.
+    private static func newTurn(lane: String, ts: Double, index: Int) -> Turn {
+        Turn(id: "turn-\(lane)-\(index)", lane: lane, startedTs: ts)
+    }
+
+    private mutating func ensureLane(_ lane: String) {
+        if lanes[lane] == nil {
+            lanes[lane] = LaneState(lane: lane)
+            laneOrder.append(lane)
+        }
+    }
+
+    private mutating func withLiveTurn(_ lane: String, ts: Double, _ mutate: (inout Turn) -> Void) {
+        ensureLane(lane)
+        var state = lanes[lane]!
+        var turn = state.live ?? Self.newTurn(lane: lane, ts: ts, index: state.finalized.count)
+        mutate(&turn)
+        state.live = turn
+        lanes[lane] = state
+        recomputeStreaming()
+    }
+
+    private mutating func recomputeStreaming() {
+        streaming = lanes.values.contains { $0.live != nil }
+    }
+
+    private var hasAnyLiveTurn: Bool { lanes.values.contains { $0.live != nil } }
+
+    private func hasLiveTurn(_ lane: String) -> Bool { lanes[lane]?.live != nil }
+
+    /// Commit a lane's live turn to its finalized history. The single delimiter
+    /// used by `done`, by `error`, and by the next `prompt` — so a dangling turn
+    /// can never silently merge into the next prompt's turn.
+    private mutating func finalizeLive(_ lane: String, finishReason: String) {
+        guard var state = lanes[lane], var live = state.live else { return }
+        live.finished = true
+        live.finishReason = finishReason
+        state.finalized.append(live)
+        state.live = nil
+        lanes[lane] = state
+    }
+
+    /// The provider a lane's health is attributed to. In fan-out the lane key IS
+    /// the adapter id; only the single-run `"main"` lane falls back to the
+    /// session's provider.
+    private func providerFor(_ lane: String) -> String {
+        lane == "main" ? (session?.provider ?? lane) : lane
+    }
+
+    private mutating func setHealth(_ provider: String, _ status: ProviderStatus, _ note: String, _ ts: Double) {
+        providerHealth[provider] = ProviderHealth(provider: provider, status: status, lastTs: ts, note: note)
+    }
+
+    /// Fold one event into the view. Pure: `ts` is the ingest timestamp the
+    /// caller stamps, never read from the clock here.
+    public mutating func reduce(_ event: UiEvent, ts: Double) {
+        switch event {
+        case .session(let e):
+            session = SessionInfo(id: e.id, provider: e.provider, model: e.model, ts: e.ts)
+            setHealth(e.provider, .ok, "ok", e.ts)
+            eventCount += 1
+
+        case .route(let e):
+            route = RouteInfo(chosen: e.chosen, reason: e.reason, candidates: e.candidates)
+            eventCount += 1
+
+        case .prompt(let e):
+            // Finalize any dangling live turn FIRST so this prompt starts fresh.
+            finalizeLive(e.lane, finishReason: "interrupted")
+            ensureLane(e.lane)
+            var state = lanes[e.lane]!
+            var turn = Self.newTurn(lane: e.lane, ts: ts, index: state.finalized.count)
+            turn.prompt = e.text
+            state.live = turn
+            lanes[e.lane] = state
+            recomputeStreaming()
+            eventCount += 1
+
+        case .text(let e):
+            withLiveTurn(e.lane, ts: ts) { $0.text += e.delta }
+            eventCount += 1
+
+        case .reasoning(let e):
+            withLiveTurn(e.lane, ts: ts) { $0.reasoning += e.delta }
+            eventCount += 1
+
+        case .toolCall(let e):
+            withLiveTurn(e.lane, ts: ts) {
+                $0.tools.append(
+                    ToolActivity(id: e.id, lane: e.lane, name: e.name, args: e.args, status: .running)
+                )
+            }
+            eventCount += 1
+
+        case .toolResult(let e):
+            // A stray/late result with no live turn cannot belong to anything in
+            // view; ignore it rather than minting a blank turn.
+            guard hasLiveTurn(e.lane) else { eventCount += 1; return }
+            withLiveTurn(e.lane, ts: ts) { turn in
+                for index in turn.tools.indices where turn.tools[index].id == e.id {
+                    turn.tools[index].status = e.ok ? .ok : .error
+                    turn.tools[index].result = e.result
+                }
+            }
+            eventCount += 1
+
+        case .diff(let e):
+            withLiveTurn(e.lane, ts: ts) { $0.diffs.append(TurnDiff(path: e.path, patch: e.patch)) }
+            eventCount += 1
+
+        case .approval(let e):
+            notifications.append(
+                NotificationItem(
+                    kind: .approval, lane: e.lane, ts: ts,
+                    title: "approval: \(e.action)", detail: e.detail
+                )
+            )
+            eventCount += 1
+
+        case .usage(let e):
+            totals.inputTokens += e.inputTokens
+            totals.outputTokens += e.outputTokens
+            totals.cacheRead += e.cacheRead ?? 0
+            totals.cacheWrite += e.cacheWrite ?? 0
+            totals.costUsd += e.costUsd
+            runUsd = e.costUsd
+            lastUsage = (e.inputTokens, e.outputTokens)
+            setHealth(providerFor(e.lane), .ok, "ok", ts)
+            eventCount += 1
+
+        case .failover(let e):
+            notifications.append(
+                NotificationItem(
+                    kind: .failover, lane: e.lane, ts: ts,
+                    title: "failover: \(e.from) → \(e.to)",
+                    detail: "\(e.code): \(e.message)", retryable: true
+                )
+            )
+            setHealth(e.from, .degraded, "degraded", ts)
+            setHealth(e.to, .ok, "ok", ts)
+            eventCount += 1
+
+        case .error(let e):
+            // Attach the failure to the turn before committing it: a collapsed
+            // side panel must never make a failure look like an empty answer.
+            if hasLiveTurn(e.lane) {
+                withLiveTurn(e.lane, ts: ts) {
+                    $0.error = TurnError(code: e.code, message: e.message, retryable: e.retryable)
+                }
+            }
+            finalizeLive(e.lane, finishReason: "error:\(e.code)")
+            notifications.append(
+                NotificationItem(
+                    kind: .error, lane: e.lane, ts: ts,
+                    title: "error: \(e.code)", detail: e.message, retryable: e.retryable
+                )
+            )
+            setHealth(providerFor(e.lane), e.retryable ? .degraded : .down, e.retryable ? "degraded" : "down", ts)
+            recomputeStreaming()
+            eventCount += 1
+
+        case .done(let e):
+            // A stray/late `done` would otherwise mint a blank turn and flash
+            // streaming on. Ignore it.
+            guard hasLiveTurn(e.lane) else { eventCount += 1; return }
+            finalizeLive(e.lane, finishReason: e.finishReason)
+            setHealth(providerFor(e.lane), .ok, "ok", ts)
+            recomputeStreaming()
+            eventCount += 1
+
+        case .unknown:
+            eventCount += 1
+        }
+    }
+
+    /// Fold a whole log (replay / initial derivation). The ingest `ts` is the
+    /// event's position, never the wall clock, so folding twice is identical.
+    public static func reduce(events: [UiEvent], base: ViewState = ViewState()) -> ViewState {
+        var state = base
+        for (index, event) in events.enumerated() {
+            state.reduce(event, ts: Double(index))
+        }
+        return state
+    }
+}

@@ -1,0 +1,242 @@
+import Foundation
+
+/// One normalized event from `nexus … -o ndjson`.
+///
+/// This mirrors the TypeScript `UiEvent` union in
+/// `packages/core/src/projection.ts` (plus the client-injected `prompt` marker
+/// from `packages/tui/src/store/events.ts`). It is the ONLY contract between
+/// the CLI and this app.
+///
+/// It is hand-written rather than generated because the source is a TypeScript
+/// *type* union, and parsing types out of source is brittle. Drift is caught
+/// instead by `UiEventDecodingTests`, which decodes a fixture containing every
+/// variant: if the CLI changes a field, the decode fails loudly in CI rather
+/// than silently rendering an empty panel. The repo already documents this exact
+/// hazard for its own CLI/TUI projection copies, so the guard is deliberate.
+public enum UiEvent: Sendable, Hashable {
+    case session(Session)
+    case route(Route)
+    case failover(Failover)
+    case prompt(Prompt)
+    case text(Delta)
+    case reasoning(Delta)
+    case toolCall(ToolCall)
+    case toolResult(ToolResult)
+    case diff(Diff)
+    case approval(Approval)
+    case usage(Usage)
+    case error(RunError)
+    case done(Done)
+
+    /// An event whose `t` this build does not know. Never dropped: an unknown
+    /// event still reaches the UI so a newer CLI degrades to "something
+    /// happened" instead of silence.
+    case unknown(type: String, raw: JSONValue)
+
+    public struct Session: Sendable, Hashable, Codable {
+        public let id: String
+        public let provider: String
+        public let model: String
+        public let ts: Double
+    }
+
+    public enum RouteReason: String, Sendable, Hashable, Codable {
+        case explicit, cost, latency, capability, local
+    }
+
+    public struct Route: Sendable, Hashable, Codable {
+        public let chosen: String
+        public let reason: RouteReason
+        public let candidates: [String]
+    }
+
+    public struct Failover: Sendable, Hashable, Codable {
+        public let lane: String
+        public let from: String
+        public let to: String
+        public let code: String
+        public let message: String
+    }
+
+    public struct Prompt: Sendable, Hashable, Codable {
+        public let lane: String
+        public let id: String
+        public let text: String
+    }
+
+    /// Shared shape of the two streaming-text events (`text`, `reasoning`).
+    public struct Delta: Sendable, Hashable, Codable {
+        public let lane: String
+        public let delta: String
+    }
+
+    public struct ToolCall: Sendable, Hashable {
+        public let lane: String
+        public let id: String
+        public let name: String
+        public let args: JSONValue?
+    }
+
+    public struct ToolResult: Sendable, Hashable {
+        public let lane: String
+        public let id: String
+        public let ok: Bool
+        public let result: JSONValue?
+    }
+
+    public struct Diff: Sendable, Hashable, Codable {
+        public let lane: String
+        public let path: String
+        public let patch: String
+    }
+
+    public struct Approval: Sendable, Hashable, Codable {
+        public let lane: String
+        public let id: String
+        public let action: String
+        public let detail: String
+    }
+
+    public struct Usage: Sendable, Hashable, Codable {
+        public let lane: String
+        public let inputTokens: Int
+        public let outputTokens: Int
+        public let cacheRead: Int?
+        public let cacheWrite: Int?
+        public let costUsd: Double
+    }
+
+    public struct RunError: Sendable, Hashable, Codable {
+        public let lane: String
+        public let code: String
+        public let message: String
+        public let retryable: Bool
+    }
+
+    public struct Done: Sendable, Hashable, Codable {
+        public let lane: String
+        public let finishReason: String
+    }
+
+    /// The lane this event belongs to, when it has one.
+    ///
+    /// Lanes are how a multi-provider run keeps concurrent agents apart: a
+    /// single run collapses to `"main"`, while a race/compare run keys each lane
+    /// by adapter id. This is what the Agents view groups on.
+    public var lane: String? {
+        switch self {
+        case .session, .route: return nil
+        case .failover(let e): return e.lane
+        case .prompt(let e): return e.lane
+        case .text(let e), .reasoning(let e): return e.lane
+        case .toolCall(let e): return e.lane
+        case .toolResult(let e): return e.lane
+        case .diff(let e): return e.lane
+        case .approval(let e): return e.lane
+        case .usage(let e): return e.lane
+        case .error(let e): return e.lane
+        case .done(let e): return e.lane
+        case .unknown: return nil
+        }
+    }
+
+    /// The discriminant, as it appears on the wire.
+    public var wireType: String {
+        switch self {
+        case .session: return "session"
+        case .route: return "route"
+        case .failover: return "failover"
+        case .prompt: return "prompt"
+        case .text: return "text"
+        case .reasoning: return "reasoning"
+        case .toolCall: return "tool_call"
+        case .toolResult: return "tool_result"
+        case .diff: return "diff"
+        case .approval: return "approval"
+        case .usage: return "usage"
+        case .error: return "error"
+        case .done: return "done"
+        case .unknown(let type, _): return type
+        }
+    }
+}
+
+// MARK: - Decoding
+
+extension UiEvent: Decodable {
+    private enum Tag: CodingKey { case t }
+
+    public init(from decoder: Decoder) throws {
+        let tagged = try decoder.container(keyedBy: Tag.self)
+        let type = try tagged.decode(String.self, forKey: .t)
+        let single = try decoder.singleValueContainer()
+
+        switch type {
+        case "session": self = .session(try single.decode(Session.self))
+        case "route": self = .route(try single.decode(Route.self))
+        case "failover": self = .failover(try single.decode(Failover.self))
+        case "prompt": self = .prompt(try single.decode(Prompt.self))
+        case "text": self = .text(try single.decode(Delta.self))
+        case "reasoning": self = .reasoning(try single.decode(Delta.self))
+        case "diff": self = .diff(try single.decode(Diff.self))
+        case "approval": self = .approval(try single.decode(Approval.self))
+        case "usage": self = .usage(try single.decode(Usage.self))
+        case "error": self = .error(try single.decode(RunError.self))
+        case "done": self = .done(try single.decode(Done.self))
+
+        // `args` / `result` are `unknown` on the wire, so these two decode
+        // through JSONValue rather than a generated struct.
+        case "tool_call":
+            let raw = try single.decode(JSONValue.self)
+            self = .toolCall(
+                ToolCall(
+                    lane: raw["lane"]?.stringValue ?? "main",
+                    id: raw["id"]?.stringValue ?? "",
+                    name: raw["name"]?.stringValue ?? "",
+                    args: raw["args"]
+                )
+            )
+        case "tool_result":
+            let raw = try single.decode(JSONValue.self)
+            var ok = false
+            if case .bool(let value)? = raw["ok"] { ok = value }
+            self = .toolResult(
+                ToolResult(
+                    lane: raw["lane"]?.stringValue ?? "main",
+                    id: raw["id"]?.stringValue ?? "",
+                    ok: ok,
+                    result: raw["result"]
+                )
+            )
+
+        default:
+            self = .unknown(type: type, raw: try single.decode(JSONValue.self))
+        }
+    }
+}
+
+// MARK: - Stream decoding
+
+public enum UiEventDecoder {
+    /// Decode one ndjson line. Returns `nil` for blank lines.
+    ///
+    /// A line that is not valid JSON, or not an object with a `t`, is surfaced
+    /// as `.unknown` rather than thrown away — a CLI that interleaves a stray
+    /// warning on stdout must not be able to silently truncate the UI's view of
+    /// a run.
+    public static func decodeLine(_ line: String) -> UiEvent? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return nil }
+        do {
+            return try JSONDecoder().decode(UiEvent.self, from: data)
+        } catch {
+            return .unknown(type: "malformed", raw: .string(trimmed))
+        }
+    }
+
+    /// Decode a whole ndjson document (used by tests and by session replay).
+    public static func decodeStream(_ text: String) -> [UiEvent] {
+        text.split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { decodeLine(String($0)) }
+    }
+}
