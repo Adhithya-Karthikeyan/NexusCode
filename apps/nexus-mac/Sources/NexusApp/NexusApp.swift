@@ -43,8 +43,10 @@ struct NexusMacApp: App {
 @Observable
 final class WorkspaceModel {
     var tab: WorkspaceTab = .chat
-    var themeId: String = NexusTheme.defaultThemeId
-    var followSystemAppearance = true
+
+    var themeId: String = NexusTheme.defaultThemeId {
+        didSet { defaults.set(themeId, forKey: Keys.theme) }
+    }
 
     private(set) var conversation: ConversationController?
     private(set) var omc: OMCController?
@@ -54,18 +56,43 @@ final class WorkspaceModel {
     private(set) var setupProblem: String?
 
     var projectDirectory: URL {
-        didSet { attach() }
+        didSet {
+            defaults.set(projectDirectory.path, forKey: Keys.project)
+            attach()
+        }
     }
 
-    init() {
-        // Default to the current working directory; the Settings tab can repoint
-        // it, and each project gets its own OMC state and session history.
-        projectDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    private let defaults: UserDefaults
+    private enum Keys {
+        static let project = "nexus.projectDirectory"
+        static let theme = "nexus.themeId"
+    }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        // Launched from Finder, the working directory is `/` — useless as a
+        // project root. Prefer the last directory the user actually chose, so
+        // the app reopens where they left off, and fall back to the working
+        // directory only when it looks like a real project (i.e. launched from
+        // a terminal inside one).
+        projectDirectory = ProjectLocation.resolve(
+            remembered: defaults.string(forKey: Keys.project)
+        )
+        if let saved = defaults.string(forKey: Keys.theme), NexusTheme.named(saved) != nil {
+            themeId = saved
+        }
         attach()
     }
 
     var activeTheme: NexusTheme {
         NexusTheme.named(themeId) ?? NexusTheme.all[0]
+    }
+
+    /// Point the window at another project. Rebuilds the CLI client and restarts
+    /// the OMC watcher, because both are scoped to a directory.
+    func chooseProjectDirectory(_ url: URL) {
+        omc?.stop()
+        projectDirectory = url
     }
 
     private func attach() {
