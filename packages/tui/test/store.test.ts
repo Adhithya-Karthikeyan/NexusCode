@@ -98,7 +98,7 @@ describe("event-log reducer", () => {
   it("attaches provider failures to the finalized conversation turn", () => {
     const v = reduceEvents([
       session,
-      { t: "prompt", lane: "main", text: "hello" },
+      { t: "prompt", lane: "main", id: "p0", text: "hello" },
       {
         t: "error",
         lane: "main",

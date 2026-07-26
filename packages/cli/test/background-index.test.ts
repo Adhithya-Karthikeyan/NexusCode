@@ -154,6 +154,7 @@ describe("cmdIndex — child-side fork-bomb guard", () => {
       positionals: [repoDir],
       flags: new Map([["output", "json"]]),
       multi: new Map(),
+      unknown: [],
       bools: new Set(), // NOTE: no "--background" flag either — config alone would trigger it.
     };
     let stdout = "";

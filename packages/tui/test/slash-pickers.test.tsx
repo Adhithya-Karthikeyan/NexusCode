@@ -19,6 +19,7 @@ import {
   ThemeProvider,
   buildSlashCommands,
   createEventStore,
+  type AppProps,
   type Capabilities,
   type ModelChoice,
 } from "../src/index.js";
@@ -52,7 +53,7 @@ const TOOLS = [
   { name: "bash", description: "run a command" },
 ];
 
-function appProps(cols: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
+function appProps(cols: number, extra: Partial<AppProps> = {}): AppProps {
   return {
     caps: { ...richCaps, width: cols },
     viewport: { cols, rows: 40 },
@@ -81,7 +82,7 @@ const ESC = "\x1b";
 
 describe("slash-command menu", () => {
   it("typing '/' shows the command menu with the real command names", async () => {
-    const { stdin, lastFrame } = render(<App {...(appProps(120) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps(120))} />);
     await tick();
     await type(stdin, "/");
     const frame = strip(lastFrame());
@@ -94,7 +95,7 @@ describe("slash-command menu", () => {
   });
 
   it("typing '/mod' filters the menu down to /model", async () => {
-    const { stdin, lastFrame } = render(<App {...(appProps(120) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps(120))} />);
     await tick();
     await type(stdin, "/mod");
     const frame = strip(lastFrame());
@@ -104,7 +105,7 @@ describe("slash-command menu", () => {
   });
 
   it("Esc closes the menu and clears the draft", async () => {
-    const { stdin, lastFrame } = render(<App {...(appProps(120) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps(120))} />);
     await tick();
     await type(stdin, "/mod");
     stdin.write(ESC);
@@ -124,7 +125,7 @@ describe("interactive pickers over real data", () => {
           store,
           contextMax: 8192,
           traceTarget: "session-live-123",
-        }) as never)}
+        }))}
       />,
     );
     await tick();
@@ -166,7 +167,7 @@ describe("interactive pickers over real data", () => {
   it("opening /model shows ONLY the active provider's models (not the global catalog) and Enter switches live", async () => {
     const onModelChange = vi.fn();
     const { stdin, lastFrame } = render(
-      <App {...(appProps(120, { onModelChange }) as never)} />,
+      <App {...(appProps(120, { onModelChange }))} />,
     );
     await tick();
     // Baseline status bar shows the active model.
@@ -211,7 +212,7 @@ describe("interactive pickers over real data", () => {
   it("opening /theme and selecting a theme applies it live", async () => {
     const onThemeChange = vi.fn();
     const { stdin, lastFrame } = render(
-      <App {...(appProps(120, { onThemeChange }) as never)} />,
+      <App {...(appProps(120, { onThemeChange }))} />,
     );
     await tick();
     await type(stdin, "/theme");
@@ -236,7 +237,7 @@ describe("interactive pickers over real data", () => {
   });
 
   it("Tab completes the highlighted command into the draft", async () => {
-    const { stdin, lastFrame } = render(<App {...(appProps(120) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps(120))} />);
     await tick();
     await type(stdin, "/th");
     stdin.write(TAB);
@@ -369,7 +370,7 @@ describe("registry construction from real data", () => {
 describe("layout overhaul — clean at 80 and 120 cols", () => {
   for (const cols of [80, 100, 120]) {
     it(`renders a clean frame at ${cols} cols (input + status present, no overflow, no overlap)`, async () => {
-      const { stdin, lastFrame } = render(<App {...(appProps(cols) as never)} />);
+      const { stdin, lastFrame } = render(<App {...(appProps(cols))} />);
       await tick();
       await type(stdin, "explain the layout in one line");
       const frame = strip(lastFrame() ?? "");
@@ -387,7 +388,7 @@ describe("layout overhaul — clean at 80 and 120 cols", () => {
 
   it("the menu overlay renders above the input without overlapping the status bar", async () => {
     const cols = 120;
-    const { stdin, lastFrame } = render(<App {...(appProps(cols) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps(cols))} />);
     await tick();
     await type(stdin, "/");
     const frame = strip(lastFrame() ?? "");

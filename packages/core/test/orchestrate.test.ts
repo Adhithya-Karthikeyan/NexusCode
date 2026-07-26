@@ -7,7 +7,7 @@ import {
   type Labeled,
   type RunContext,
 } from "@nexuscode/core";
-import type { StreamChunk } from "@nexuscode/shared";
+import type { Message, StreamChunk } from "@nexuscode/shared";
 import { createMockAdapter } from "@nexuscode/provider-mock";
 
 async function setup(): Promise<{ engine: Engine; ctx: () => Promise<{ ctx: RunContext; input: Message[] }> }> {
@@ -24,8 +24,6 @@ async function setup(): Promise<{ engine: Engine; ctx: () => Promise<{ ctx: RunC
   };
 }
 
-// Local alias to avoid importing the whole message surface.
-type Message = { role: string; content: { type: string; text?: string }[] };
 
 async function drain(events: AsyncIterable<Labeled<StreamChunk>>): Promise<Labeled<StreamChunk>[]> {
   const out: Labeled<StreamChunk>[] = [];

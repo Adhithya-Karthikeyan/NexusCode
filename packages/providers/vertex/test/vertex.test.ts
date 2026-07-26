@@ -55,7 +55,7 @@ describe("vertex adapter — request translation (pure, no network)", () => {
     expect(native.config?.systemInstruction).toBe("be terse");
     expect(native.config?.temperature).toBe(0.3);
     expect(native.config?.maxOutputTokens).toBe(128);
-    expect(native.config?.tools?.[0]?.functionDeclarations?.[0]?.name).toBe("get_weather");
+    expect((native.config?.tools?.[0] as { functionDeclarations?: { name?: string }[] } | undefined)?.functionDeclarations?.[0]?.name).toBe("get_weather");
     const contents = native.contents as Array<{ role?: string }>;
     expect(contents[0]?.role).toBe("user");
   });

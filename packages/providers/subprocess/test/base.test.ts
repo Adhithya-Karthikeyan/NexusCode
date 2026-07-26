@@ -11,7 +11,7 @@ import {
   type SubprocessConfig,
 } from "@nexuscode/provider-subprocess";
 import type { CallContext } from "@nexuscode/core";
-import type { ChatRequest, StreamChunk } from "@nexuscode/shared";
+import type { Capabilities, ChatRequest, StreamChunk } from "@nexuscode/shared";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HANG_FIXTURE = path.join(HERE, "fixtures", "fake-claude-hang.mjs");
@@ -28,11 +28,30 @@ async function collect(iter: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
   return out;
 }
 
+/** Minimal capabilities shared by the fixture specs below. */
+const TEST_CAPS: Capabilities = {
+  models: [{ id: "test-model" }],
+  streaming: true,
+  tools: false,
+  parallelToolCalls: false,
+  vision: false,
+  structuredOutput: false,
+  reasoning: false,
+  systemPrompt: true,
+  fileEdit: false,
+  shellExec: false,
+  git: false,
+  approvalGate: false,
+  mcp: false,
+  cancel: "abort-signal",
+};
+
 // A minimal spec that never maps a terminal line — used to exercise base rules.
 const noopSpec: CliSpec<SubprocessConfig> = {
   id: "test-cli",
   label: "Test CLI",
   defaultBin: "test-cli",
+  capabilities: () => TEST_CAPS,
   resolveModel: (_cfg, r) => r.model,
   buildArgs: () => [],
   handleEvent: () => {},
@@ -141,6 +160,7 @@ const hangSpec: CliSpec<SubprocessConfig> = {
   id: "hang-cli",
   label: "Hang CLI",
   defaultBin: process.execPath,
+  capabilities: () => TEST_CAPS,
   resolveModel: (_cfg, r) => r.model,
   buildArgs: () => [HANG_FIXTURE],
   handleEvent: () => {},
@@ -153,6 +173,7 @@ const quickExitSpec: CliSpec<SubprocessConfig> = {
   id: "quick-exit-cli",
   label: "Quick Exit CLI",
   defaultBin: process.execPath,
+  capabilities: () => TEST_CAPS,
   resolveModel: (_cfg, r) => r.model,
   buildArgs: () => ["-e", "process.exit(0)"],
   handleEvent: () => {},

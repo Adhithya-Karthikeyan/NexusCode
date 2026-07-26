@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "types": [
+      "node",
+      "react"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@nexuscode/agent": [
+        "./packages/agent/src/index.ts"
+      ],
+      "@nexuscode/auth": [
+        "./packages/auth/src/index.ts"
+      ],
+      "@nexuscode/cache": [
+        "./packages/cache/src/index.ts"
+      ],
+      "@nexuscode/cli": [
+        "./packages/cli/src/index.ts"
+      ],
+      "@nexuscode/config": [
+        "./packages/config/src/index.ts"
+      ],
+      "@nexuscode/context": [
+        "./packages/context/src/index.ts"
+      ],
+      "@nexuscode/core": [
+        "./packages/core/src/index.ts"
+      ],
+      "@nexuscode/enterprise": [
+        "./packages/enterprise/src/index.ts"
+      ],
+      "@nexuscode/fileintel": [
+        "./packages/fileintel/src/index.ts"
+      ],
+      "@nexuscode/git": [
+        "./packages/git/src/index.ts"
+      ],
+      "@nexuscode/hooks": [
+        "./packages/hooks/src/index.ts"
+      ],
+      "@nexuscode/lsp": [
+        "./packages/lsp/src/index.ts"
+      ],
+      "@nexuscode/mcp": [
+        "./packages/mcp/src/index.ts"
+      ],
+      "@nexuscode/memory": [
+        "./packages/memory/src/index.ts"
+      ],
+      "@nexuscode/observability": [
+        "./packages/observability/src/index.ts"
+      ],
+      "@nexuscode/plugins": [
+        "./packages/plugins/src/index.ts"
+      ],
+      "@nexuscode/prompt": [
+        "./packages/prompt/src/index.ts"
+      ],
+      "@nexuscode/provider-anthropic": [
+        "./packages/providers/anthropic/src/index.ts"
+      ],
+      "@nexuscode/provider-azure": [
+        "./packages/providers/azure/src/index.ts"
+      ],
+      "@nexuscode/provider-bedrock": [
+        "./packages/providers/bedrock/src/index.ts"
+      ],
+      "@nexuscode/provider-claude-code": [
+        "./packages/providers/claude-code/src/index.ts"
+      ],
+      "@nexuscode/provider-codex": [
+        "./packages/providers/codex/src/index.ts"
+      ],
+      "@nexuscode/provider-gemini": [
+        "./packages/providers/gemini/src/index.ts"
+      ],
+      "@nexuscode/provider-mock": [
+        "./packages/providers/mock/src/index.ts"
+      ],
+      "@nexuscode/provider-ollama": [
+        "./packages/providers/ollama/src/index.ts"
+      ],
+      "@nexuscode/provider-openai": [
+        "./packages/providers/openai/src/index.ts"
+      ],
+      "@nexuscode/provider-subprocess": [
+        "./packages/providers/subprocess/src/index.ts"
+      ],
+      "@nexuscode/provider-vertex": [
+        "./packages/providers/vertex/src/index.ts"
+      ],
+      "@nexuscode/rag": [
+        "./packages/rag/src/index.ts"
+      ],
+      "@nexuscode/runtime": [
+        "./packages/runtime/src/index.ts"
+      ],
+      "@nexuscode/sdk": [
+        "./packages/sdk/src/index.ts"
+      ],
+      "@nexuscode/server": [
+        "./packages/server/src/index.ts"
+      ],
+      "@nexuscode/session": [
+        "./packages/session/src/index.ts"
+      ],
+      "@nexuscode/shared": [
+        "./packages/shared/src/index.ts"
+      ],
+      "@nexuscode/tasks": [
+        "./packages/tasks/src/index.ts"
+      ],
+      "@nexuscode/theme": [
+        "./packages/theme/src/index.ts"
+      ],
+      "@nexuscode/tools": [
+        "./packages/tools/src/index.ts"
+      ],
+      "@nexuscode/tools-ai": [
+        "./packages/tools-ai/src/index.ts"
+      ],
+      "@nexuscode/tools-browser": [
+        "./packages/tools-browser/src/index.ts"
+      ],
+      "@nexuscode/tools-cloud": [
+        "./packages/tools-cloud/src/index.ts"
+      ],
+      "@nexuscode/tools-containers": [
+        "./packages/tools-containers/src/index.ts"
+      ],
+      "@nexuscode/tools-db": [
+        "./packages/tools-db/src/index.ts"
+      ],
+      "@nexuscode/tools-web": [
+        "./packages/tools-web/src/index.ts"
+      ],
+      "@nexuscode/transfer": [
+        "./packages/transfer/src/index.ts"
+      ],
+      "@nexuscode/tui": [
+        "./packages/tui/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages/*/test",
+    "packages/providers/*/test"
+  ],
+  "exclude": [
+    "**/fixtures/**"
+  ]
+}

@@ -86,7 +86,7 @@ describe("createNexusMcpServer (expose NexusCode tools as MCP)", () => {
     const client = await connectClientToNexusServer([upperTool]);
     const res = await client.callTool("upper", { text: "hello" });
     expect(res.isError).not.toBe(true);
-    expect(res.content[0]).toMatchObject({ type: "text", text: "HELLO" });
+    expect(res.content[0]!).toMatchObject({ type: "text", text: "HELLO" });
   });
 
   it("reports an unknown tool as an error", async () => {
@@ -99,15 +99,15 @@ describe("createNexusMcpServer (expose NexusCode tools as MCP)", () => {
     const client = await connectClientToNexusServer([failTool]);
     const res = await client.callTool("fail", {});
     expect(res.isError).toBe(true);
-    expect(res.content[0]).toMatchObject({ type: "text", text: "nope" });
+    expect(res.content[0]!).toMatchObject({ type: "text", text: "nope" });
   });
 
   it("denies an ungated exec tool by default (read-only PermissionGate)", async () => {
     const client = await connectClientToNexusServer([dangerTool]);
     const res = await client.callTool("danger", { cmd: "rm -rf /" });
     expect(res.isError).toBe(true);
-    expect(res.content[0]).toMatchObject({ type: "text" });
-    expect(String((res.content[0] as { text: string }).text)).toContain("permission denied");
+    expect(res.content[0]!).toMatchObject({ type: "text" });
+    expect(String((res.content[0]! as unknown as { text: string }).text)).toContain("permission denied");
     // Critically, the tool body never executed.
     expect(execRan).toBe(false);
   });
@@ -116,7 +116,7 @@ describe("createNexusMcpServer (expose NexusCode tools as MCP)", () => {
     const client = await connectClientToNexusServer([upperTool]);
     const res = await client.callTool("upper", { text: "ok" });
     expect(res.isError).not.toBe(true);
-    expect(res.content[0]).toMatchObject({ type: "text", text: "OK" });
+    expect(res.content[0]!).toMatchObject({ type: "text", text: "OK" });
   });
 
   it("runs an exec tool when an explicit gate approves it", async () => {
@@ -125,7 +125,7 @@ describe("createNexusMcpServer (expose NexusCode tools as MCP)", () => {
     const res = await client.callTool("danger", { cmd: "echo hi" });
     expect(res.isError).not.toBe(true);
     expect(execRan).toBe(true);
-    expect(res.content[0]).toMatchObject({ type: "text", text: "ran" });
+    expect(res.content[0]!).toMatchObject({ type: "text", text: "ran" });
   });
 
   it("honors a denylist on an explicit gate", async () => {

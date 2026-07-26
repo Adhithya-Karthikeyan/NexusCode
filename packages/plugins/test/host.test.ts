@@ -155,7 +155,7 @@ describe("PluginHost.register (contributions land in the real registries)", () =
     const result = await Promise.resolve(
       tool.run({ message: "yo" }, { signal: new AbortController().signal, cwd: process.cwd() }),
     );
-    expect((result as { content: { text: string }[] }).content[0].text).toBe("echo:yo");
+    expect((result as { content: { text: string }[] }).content[0]!.text).toBe("echo:yo");
 
     // Prompt template is registered and assembles.
     expect(promptEngine.hasTemplate("fixture.greeting", "1.0.0")).toBe(true);

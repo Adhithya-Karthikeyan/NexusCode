@@ -46,7 +46,7 @@ function makeIo(): { io: Io; stdout: () => string; stderr: () => string } {
 }
 
 function args(positionals: string[] = [], bools: string[] = []): ParsedArgs {
-  return { positionals, flags: new Map(), multi: new Map(), bools: new Set(bools) };
+  return { positionals, flags: new Map(), multi: new Map(), bools: new Set(bools), unknown: [] };
 }
 
 /** A disk-backed SecretStore (keychain disabled) under a throwaway temp file. */

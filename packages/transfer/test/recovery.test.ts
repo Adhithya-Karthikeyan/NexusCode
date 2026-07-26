@@ -9,12 +9,13 @@ import { createDeltaSyncBus, recoverUnfolded } from "../src/sync.js";
 import {
   makeEmbeddingKey,
   ulid,
-  type Delta,
+
   type EpisodicFields,
   type GraphEdge,
   type GraphNode,
   type KnowledgeItem,
 } from "../src/items.js";
+import type { Delta } from "../src/deltas.js";
 
 interface Db {
   exec(sql: string): unknown;

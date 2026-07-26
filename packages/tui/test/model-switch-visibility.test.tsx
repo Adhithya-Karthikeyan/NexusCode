@@ -15,7 +15,7 @@
 
 import { render } from "ink-testing-library";
 import { describe, expect, it, vi } from "vitest";
-import { App, type Capabilities, type ModelChoice } from "../src/index.js";
+import { App, type AppProps, type Capabilities, type ModelChoice } from "../src/index.js";
 
 const richCaps: Partial<Capabilities> = {
   truecolor: true,
@@ -49,7 +49,7 @@ const MODELS: ModelChoice[] = [
   { provider: "mock", model: "mock-smart" },
 ];
 
-function appProps(extra: Record<string, unknown> = {}): Record<string, unknown> {
+function appProps(extra: Partial<AppProps> = {}): AppProps {
   return {
     caps: richCaps,
     viewport: { cols: 120, rows: 40 },
@@ -85,7 +85,7 @@ describe("a /model switch is visible on the conversation surface", () => {
       reasoningSupported: true,
       receipt: `mock/mock-fast → ${provider}/${model}; preflight passed`,
     }));
-    const { stdin, lastFrame } = render(<App {...(appProps({ onModelChange }) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps({ onModelChange }))} />);
     await tick();
     expect(strip(lastFrame())).toContain("mock-fast");
 
@@ -106,7 +106,7 @@ describe("a /model switch is visible on the conversation surface", () => {
       provider: "mock",
       reason: "mock has no model mock-smart",
     }));
-    const { stdin, lastFrame } = render(<App {...(appProps({ onModelChange }) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps({ onModelChange }))} />);
     await tick();
 
     await pickSecondModel(stdin);
@@ -122,7 +122,7 @@ describe("a /model switch is visible on the conversation surface", () => {
     const onModelChange = vi.fn(() => {
       throw new Error("registry exploded");
     });
-    const { stdin, lastFrame } = render(<App {...(appProps({ onModelChange }) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps({ onModelChange }))} />);
     await tick();
 
     await pickSecondModel(stdin);
@@ -139,7 +139,7 @@ describe("a /model switch is visible on the conversation surface", () => {
       reasoningSupported: false,
       receipt: "switched for real",
     }));
-    const { stdin, lastFrame } = render(<App {...(appProps({ onModelChange }) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps({ onModelChange }))} />);
     await tick();
 
     await pickSecondModel(stdin);
@@ -159,7 +159,7 @@ describe("/agent actually changes the role a turn is dispatched with", () => {
     const onSubmit = vi.fn();
     const onRoleChange = vi.fn();
     const { stdin, lastFrame } = render(
-      <App {...(appProps({ onSubmit, onRoleChange }) as never)} />,
+      <App {...(appProps({ onSubmit, onRoleChange }))} />,
     );
     await tick();
 
@@ -197,7 +197,7 @@ describe("/agent actually changes the role a turn is dispatched with", () => {
   it("keeps an elevated role visible on the status bar after the notice clears", async () => {
     const onSubmit = vi.fn();
     const { stdin, lastFrame } = render(
-      <App {...(appProps({ onSubmit, initialRole: "AUTOPILOT" }) as never)} />,
+      <App {...(appProps({ onSubmit, initialRole: "AUTOPILOT" }))} />,
     );
     await tick();
     // No notice yet — the role itself is on the bar.
@@ -211,7 +211,7 @@ describe("/agent actually changes the role a turn is dispatched with", () => {
   });
 
   it("adds no role chrome in the default CHAT role", async () => {
-    const { lastFrame } = render(<App {...(appProps() as never)} />);
+    const { lastFrame } = render(<App {...(appProps())} />);
     await tick();
     // The status line stays clean; "CHAT" is the assumed default.
     expect(strip(lastFrame())).not.toContain("CHAT");
@@ -228,7 +228,7 @@ describe("a /provider switch is visible too", () => {
       reasoningSupported: false,
       receipt: `mock/mock-fast → ${provider}/gpt-4o; switched`,
     }));
-    const { stdin, lastFrame } = render(<App {...(appProps({ onProviderChange }) as never)} />);
+    const { stdin, lastFrame } = render(<App {...(appProps({ onProviderChange }))} />);
     await tick();
 
     await type(stdin, "/provider");

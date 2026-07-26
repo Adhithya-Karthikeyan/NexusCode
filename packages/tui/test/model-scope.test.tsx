@@ -15,7 +15,7 @@
 
 import { render } from "ink-testing-library";
 import { describe, expect, it, vi } from "vitest";
-import { App, type Capabilities, type ModelChoice } from "../src/index.js";
+import { App, type AppProps, type Capabilities, type ModelChoice } from "../src/index.js";
 
 const richCaps: Partial<Capabilities> = {
   truecolor: true,
@@ -67,7 +67,7 @@ function makeLoader() {
   return vi.fn(async (pid: string) => PER_PROVIDER[pid] ?? []);
 }
 
-function appProps(extra: Record<string, unknown> = {}): Record<string, unknown> {
+function appProps(extra: Partial<AppProps> = {}): AppProps {
   return {
     caps: richCaps,
     viewport: { cols: 120, rows: 40 },
@@ -84,7 +84,7 @@ describe("/model picker scopes to the active provider", () => {
   it("with active provider = mock, /model shows ONLY mock models (not gpt-4o / gemini)", async () => {
     const listModelsFor = makeLoader();
     const { stdin, lastFrame } = render(
-      <App {...(appProps({ listModelsFor }) as never)} />,
+      <App {...(appProps({ listModelsFor }))} />,
     );
     await tick();
 
@@ -112,7 +112,7 @@ describe("/model picker scopes to the active provider", () => {
     const listModelsFor = makeLoader();
     const onProviderChange = vi.fn();
     const { stdin, lastFrame } = render(
-      <App {...(appProps({ listModelsFor, onProviderChange }) as never)} />,
+      <App {...(appProps({ listModelsFor, onProviderChange }))} />,
     );
     await tick();
 

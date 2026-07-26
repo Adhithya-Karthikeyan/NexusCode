@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { chmodSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createClaudeCodeAdapter, buildClaudeCodeArgs } from "@nexuscode/provider-claude-code";
-import { defaultSpawn, type SpawnedChild } from "@nexuscode/provider-subprocess";
+import { defaultSpawn, type SpawnFn, type SpawnedChild } from "@nexuscode/provider-subprocess";
 import type { CallContext } from "@nexuscode/core";
 import type { ChatRequest, StreamChunk } from "@nexuscode/shared";
 
@@ -27,7 +27,7 @@ async function collect(iter: AsyncIterable<StreamChunk>): Promise<StreamChunk[]>
 /** A spawn wrapper that records the most recent child (to assert no orphan). */
 function spyingSpawn() {
   let last: SpawnedChild | undefined;
-  const spawn = (bin: string, args: readonly string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
+  const spawn: SpawnFn = (bin, args, opts) => {
     const child = defaultSpawn(bin, args, opts);
     last = child;
     return child;
@@ -169,7 +169,7 @@ describe("claude-code adapter — completion / error rules", () => {
     expect(last?.type).toBe("error");
     if (last?.type !== "error") throw new Error("expected error");
     expect(last.error.code).toBe("cli_exit");
-    expect(last.error.opts.subtype ?? last.error.message).toContain("error_max_turns");
+    expect((last.error.opts as { subtype?: string }).subtype ?? last.error.message).toContain("error_max_turns");
     expect(last.retryable).toBe(false);
   });
 

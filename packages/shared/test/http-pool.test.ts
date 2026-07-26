@@ -29,7 +29,7 @@ describe("shared http-pool — keep-alive connection pooling", () => {
     const b = sharedHttpsAgent();
     expect(b).toBe(a);
     expect(a).toBeInstanceOf(HttpsAgent);
-    expect(a.options.keepAlive).toBe(true);
+    expect((a as unknown as { options: { keepAlive?: boolean } }).options.keepAlive).toBe(true);
   });
 
   it("returns the SAME keep-alive http agent instance across calls", () => {
@@ -37,7 +37,7 @@ describe("shared http-pool — keep-alive connection pooling", () => {
     const b = sharedHttpAgent();
     expect(b).toBe(a);
     expect(a).toBeInstanceOf(HttpAgent);
-    expect(a.options.keepAlive).toBe(true);
+    expect((a as unknown as { options: { keepAlive?: boolean } }).options.keepAlive).toBe(true);
   });
 
   it("picks the agent by URL scheme (http:// → http agent, else https)", () => {

@@ -22,7 +22,7 @@ describe("parseArgs", () => {
   });
 
   describe("unknown-flag detection + warning (FIX 3: typo'd flags must be visible, not silently dropped)", () => {
-    let stderrSpy: ReturnType<typeof vi.spyOn>;
+    let stderrSpy: { mockRestore: () => void; mock: { calls: unknown[][] } };
 
     beforeEach(() => {
       stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

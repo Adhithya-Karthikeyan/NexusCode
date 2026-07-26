@@ -343,7 +343,6 @@ describe("Code Receipt (flagship)", () => {
     seedCodingSession({ secret: "sk-abcdef0123456789abcdef", withTest: true });
     const fetchSpy = vi.fn();
     const realFetch = globalThis.fetch;
-    // @ts-expect-error override for the assertion
     globalThis.fetch = fetchSpy;
     try {
       const receipt = store.generateReceipt(SESSION, { prompt: "p", outDir: dir });

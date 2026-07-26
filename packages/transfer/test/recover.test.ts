@@ -13,7 +13,8 @@ import { join } from "node:path";
 import { migrateMindDb } from "../src/migrate.js";
 import { createBlobStore } from "../src/blobs.js";
 import { recoverMindDbOnOpen } from "../src/recover.js";
-import type { Delta, EpisodicFields } from "../src/items.js";
+import type { EpisodicFields } from "../src/items.js";
+import type { Delta } from "../src/deltas.js";
 
 interface Db {
   exec(sql: string): unknown;

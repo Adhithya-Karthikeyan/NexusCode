@@ -47,7 +47,7 @@ describe("OpenAICompatAdapter — keep-alive connection pooling", () => {
     expect(c2.httpAgent).toBe(sharedHttpsAgent());
     // Two DIFFERENT http adapters share the SAME agent (one process-wide socket pool).
     expect(c3.httpAgent).toBe(c1.httpAgent);
-    expect((c1.httpAgent as { options: { keepAlive?: boolean } }).options.keepAlive).toBe(true);
+    expect((c1.httpAgent as unknown as { options: { keepAlive?: boolean } }).options.keepAlive).toBe(true);
   });
 
   it("honors an explicit httpAgent override", async () => {

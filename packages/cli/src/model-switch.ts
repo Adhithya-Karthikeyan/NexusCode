@@ -92,6 +92,37 @@ function curatedModel(
   }
 }
 
+/**
+ * Reserve held back from a model's context window when sizing the conversation
+ * history budget: room for the answer itself, plus the system prompt, tool
+ * definitions and retrieved context that share the same window. History gets the
+ * remaining share rather than the whole window.
+ */
+const OUTPUT_RESERVE_TOKENS = 8_192;
+const HISTORY_SHARE = 0.7;
+/** Never squeeze history below this, however small the model's window is. */
+const MIN_HISTORY_TOKENS = 8_000;
+
+/**
+ * How many tokens of conversation history a provider/model can actually afford.
+ *
+ * The engine's default is a flat 32k ceiling picked when the session opens. On a
+ * 1M-token model that discards ~97% of the usable window; on a small model it
+ * overflows. Deriving it from the ACTIVE model — and re-reading it every turn —
+ * is what makes a switch keep as much of the conversation as the new model can
+ * hold, and trim it BEFORE the request when the new model is smaller.
+ */
+export function historyBudgetFor(
+  runtime: Runtime,
+  providerId: string,
+  model: string,
+  catalog?: ModelCatalog,
+): number {
+  const window = contextWindowFor(runtime, providerId, model, catalog);
+  const usable = Math.floor((window - OUTPUT_RESERVE_TOKENS) * HISTORY_SHARE);
+  return Math.max(MIN_HISTORY_TOKENS, usable);
+}
+
 /** Whether `providerId` advertises reasoning support (drives the `/effort` picker). */
 export function reasoningSupportedFor(runtime: Runtime, providerId: string): boolean {
   try {

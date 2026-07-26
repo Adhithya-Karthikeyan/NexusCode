@@ -21,6 +21,7 @@ import {
   COMPAT_PROVIDER_CONFIGS,
   GROQ_API_KEY_ENV,
   DEEPSEEK_API_KEY_ENV,
+  type CompatProviderOptions,
   type OpenAICompatConfig,
 } from "@nexuscode/provider-openai";
 import type { ProviderAdapter } from "@nexuscode/core";
@@ -37,7 +38,7 @@ interface Case {
   label: string;
   baseURL: string;
   requiresAuth: boolean;
-  config: (o?: unknown) => OpenAICompatConfig;
+  config: (o?: CompatProviderOptions) => OpenAICompatConfig;
   adapter: () => ProviderAdapter;
 }
 

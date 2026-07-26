@@ -26,9 +26,9 @@ describe("Anthropic tool results become tool_result blocks (not plain text)", ()
         { role: "tool", toolCallId: "toolu_1", content: [{ type: "text", text: "build a harness" }] },
       ]),
     );
-    const last = native.messages[native.messages.length - 1];
+    const last = native.messages[native.messages.length - 1]!;
     expect(last.role).toBe("user");
-    const block = (last.content as Array<{ type: string; tool_use_id?: string; content?: unknown }>)[0];
+    const block = (last.content as Array<{ type: string; tool_use_id?: string; content?: unknown }>)[0]!;
     expect(block.type).toBe("tool_result");
     expect(block.tool_use_id).toBe("toolu_1");
     expect(JSON.stringify(block.content)).toContain("build a harness");
@@ -52,12 +52,12 @@ describe("Anthropic tool results become tool_result blocks (not plain text)", ()
     );
     // The two tool results collapse into a single trailing user message with two
     // tool_result blocks — not two separate user messages (which Anthropic rejects).
-    const last = native.messages[native.messages.length - 1];
+    const last = native.messages[native.messages.length - 1]!;
     expect(last.role).toBe("user");
     const blocks = last.content as Array<{ type: string; tool_use_id?: string }>;
     expect(blocks).toHaveLength(2);
     expect(blocks.map((b) => b.tool_use_id)).toEqual(["a", "b"]);
     // And the assistant tool_use turn is preserved just before it.
-    expect(native.messages[native.messages.length - 2].role).toBe("assistant");
+    expect(native.messages[native.messages.length - 2]!.role).toBe("assistant");
   });
 });

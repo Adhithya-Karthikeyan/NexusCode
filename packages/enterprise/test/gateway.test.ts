@@ -13,6 +13,7 @@ import {
   isEgressAllowed,
   hostOf,
   GatewayEgressError,
+  type GatewayableProviderConfig,
   type GatewayConfig,
   type GatewaySet,
 } from "../src/gateway/index.js";
@@ -55,7 +56,7 @@ describe("applyGateway — endpoint + header rewrite", () => {
   });
 
   it("establishes `baseUrl`+`headers` when the config carries neither key", () => {
-    const out = applyGateway({ id: "mock" }, GW);
+    const out = applyGateway({ id: "mock" } as GatewayableProviderConfig, GW);
     expect(out.baseUrl).toBe("https://gw.corp.example.com/openai/v1");
     expect(out.headers).toEqual({ "x-org-id": "acme", authorization: "Bearer gw-token" });
   });
@@ -120,8 +121,8 @@ describe("stripProviderAuth — the provider's own vendor credential is not forw
     const providerCfg = { id: "azure", baseURL: "https://my-resource.openai.azure.com", defaultHeaders: { "api-key": "sk-vendor-azure" } };
     const gw: GatewayConfig = { baseUrl: "https://gw.corp.example.com/azure", headers: { "x-org-id": "acme" } };
     const out = applyGateway(providerCfg, gw);
-    expect(out.defaultHeaders?.["api-key"]).toBeUndefined();
-    expect(out.defaultHeaders?.["x-org-id"]).toBe("acme");
+    expect((out.defaultHeaders as Record<string, string> | undefined)?.["api-key"]).toBeUndefined();
+    expect((out.defaultHeaders as Record<string, string> | undefined)?.["x-org-id"]).toBe("acme");
   });
 
   it("keeps an explicitly allowlisted provider header", () => {

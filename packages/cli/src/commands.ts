@@ -138,6 +138,7 @@ import {
 import {
   ModelCatalog,
   contextWindowFor,
+  historyBudgetFor,
   preflightModelSwitch,
   preflightProviderSwitch,
   reasoningSupportedFor,
@@ -3034,21 +3035,26 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   const obs = buildObservability(config);
   const transfer = await openTransferRuntime(config, runtime.secrets, historyDb);
   const continuity = continuityEngineOptions(config, transfer);
-  const engine = createEngine({
-    registry: runtime.registry,
-    pricing: runtime.pricing,
-    store,
-    contextAssembler: assembler,
-    ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
-    ...continuity,
-    ...(obs.emit ? { emit: obs.emit } : {}),
-  });
-
   // Live model/provider selection: `/model` + `/provider` re-point these, so the
   // NEXT turn dispatches against the picked target (the TUI stays a pure renderer;
   // it only signals the switch — the engine dispatch still lives here).
   let activeProvider = providerId;
   let activeModel = model;
+
+  const engine = createEngine({
+    registry: runtime.registry,
+    pricing: runtime.pricing,
+    store,
+    contextAssembler: assembler,
+    // Size the conversation history to the ACTIVE model, re-read every turn, so
+    // a switch keeps as much history as the new model can hold (and trims it
+    // BEFORE the request when the new model is smaller) instead of living under
+    // one flat ceiling chosen at launch.
+    history: { maxTokens: () => historyBudgetFor(runtime, activeProvider, activeModel, catalog) },
+    ...(transfer.factory ? { transferFactory: transfer.factory } : {}),
+    ...continuity,
+    ...(obs.emit ? { emit: obs.emit } : {}),
+  });
 
   // Static provider→model pairs, used ONLY as the curated fallback pool for the
   // `/model` picker (it scopes them to the active provider). The live path is
@@ -3191,6 +3197,17 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
       listModelsFor: async (pid: string) => {
         const rows = await listModelsForProvider(runtime, pid);
         catalog.record(pid, rows);
+        // Fold the live catalog into the registry too, so EVERY consumer agrees
+        // a discovered model exists — including core's `assessSwitchTarget`,
+        // which otherwise calls the target incompatible and silently skips the
+        // context-window compaction that makes a switch safe.
+        runtime.registry.recordDiscoveredModels(
+          pid,
+          rows.map((r) => ({
+            id: r.model,
+            ...(r.contextWindow !== undefined ? { contextWindow: r.contextWindow } : {}),
+          })),
+        );
         return rows;
       },
       onModelChange: (m, p) => applySwitch(preflightModelSwitch(switchContext(), m, p)),

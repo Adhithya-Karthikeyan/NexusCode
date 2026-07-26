@@ -47,7 +47,7 @@ function makeIo(): { io: Io; stdout: () => string; stderr: () => string } {
 }
 
 function parsedArgs(positionals: string[], bools: string[] = []): ParsedArgs {
-  return { positionals, flags: new Map(), multi: new Map(), bools: new Set(bools) };
+  return { positionals, flags: new Map(), multi: new Map(), bools: new Set(bools), unknown: [] };
 }
 
 describe("promptHiddenValue — simulated TTY hidden input", () => {

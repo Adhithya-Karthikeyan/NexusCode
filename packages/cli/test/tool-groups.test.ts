@@ -66,6 +66,7 @@ function makeArgs(opts: {
     flags: new Map(Object.entries(opts.flags ?? {})),
     multi: new Map(Object.entries(opts.multi ?? {})),
     bools: new Set(opts.bools ?? []),
+    unknown: [],
   };
 }
 

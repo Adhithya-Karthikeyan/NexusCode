@@ -507,8 +507,8 @@ describe("redactConfig unit", () => {
     expect(out.nested.apiKey).toBe(REDACTED);
     expect(out.nested.connectionString).toBe(REDACTED);
     expect(out.nested.label).toBe("keep-me");
-    expect(out.list[0].password).toBe(REDACTED);
-    expect(out.list[1].note).toBe("fine");
+    expect(out.list[0]!.password).toBe(REDACTED);
+    expect(out.list[1]!.note).toBe("fine");
     expect(out.defaultProvider).toBe("mock");
   });
 });

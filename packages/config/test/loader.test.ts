@@ -214,7 +214,7 @@ describe("loadConfig — workspace trust (untrusted project layer)", () => {
 describe("loadConfig — validation", () => {
   it("rejects an invalid value with NexusError(config_invalid)", async () => {
     await expect(
-      loadConfig({ cwd: tmp(), userConfigDir: tmp(), env: {}, flags: { approval: "bogus" } }),
+      loadConfig({ cwd: tmp(), userConfigDir: tmp(), env: {}, flags: { approval: "bogus" as never } }),
     ).rejects.toSatisfy((e: unknown) => isNexusError(e) && e.code === "config_invalid");
   });
 

@@ -56,8 +56,18 @@ export const DEFAULT_HISTORY_MAX_TOKENS = 32_000;
 export interface HistoryOptions {
   /** `false` makes every turn an isolated prompt (opt-out). Default `true`. */
   enabled?: boolean;
-  /** Token budget for the threaded transcript. Default {@link DEFAULT_HISTORY_MAX_TOKENS}. */
-  maxTokens?: number;
+  /**
+   * Token budget for the threaded transcript. Default
+   * {@link DEFAULT_HISTORY_MAX_TOKENS}.
+   *
+   * Pass a FUNCTION to make the budget follow the live provider/model: it is
+   * re-read on every turn, so a session that starts on a 200k model and switches
+   * to a 1M model widens, and one that switches DOWN narrows before the request
+   * is built instead of overflowing at the provider. A fixed number keeps the
+   * old behavior — a single ceiling chosen when the session opened, which on a
+   * 1M-token model threw away ~97% of the usable window.
+   */
+  maxTokens?: number | (() => number);
 }
 
 export interface EngineConfig {
@@ -286,7 +296,18 @@ class EngineImpl implements Engine {
 
     const history: HistoryOptions = { ...this.config.history, ...opts.history };
     const remembers = history.enabled ?? true;
-    const maxTokens = history.maxTokens ?? DEFAULT_HISTORY_MAX_TOKENS;
+    // Re-read per use so a callback-valued budget tracks the ACTIVE model rather
+    // than freezing whatever was true when the session opened.
+    const budget = history.maxTokens ?? DEFAULT_HISTORY_MAX_TOKENS;
+    const maxTokensNow = (): number => {
+      if (typeof budget !== "function") return budget;
+      try {
+        const value = budget();
+        return Number.isFinite(value) && value > 0 ? value : DEFAULT_HISTORY_MAX_TOKENS;
+      } catch {
+        return DEFAULT_HISTORY_MAX_TOKENS;
+      }
+    };
 
     /** The live transcript. Mutated in place so every turn's closures see it. */
     const transcript: Message[] = [];
@@ -327,7 +348,7 @@ class EngineImpl implements Engine {
       try {
         const loaded = await this.config.store?.loadTranscript?.(id);
         if (loaded && loaded.length > 0) {
-          setAll(boundTranscript(resumable(loaded), maxTokens, 1));
+          setAll(boundTranscript(resumable(loaded), maxTokensNow(), 1));
           seq = loaded.length;
         }
       } catch {
@@ -355,7 +376,7 @@ class EngineImpl implements Engine {
         return transcript;
       },
       setTranscript(messages: readonly Message[]): void {
-        setAll(remembers ? boundTranscript(messages, maxTokens, 1) : messages);
+        setAll(remembers ? boundTranscript(messages, maxTokensNow(), 1) : messages);
       },
       newTurn(input: TurnInput): Turn {
         const turnId = `t_${randomUUID()}`;
@@ -371,7 +392,7 @@ class EngineImpl implements Engine {
           const at = threadedAt(incoming, transcript);
           const combined = at === undefined ? [...transcript, ...incoming] : incoming;
           const fresh = at === undefined ? incoming.length : incoming.length - at;
-          messages = boundTranscript(combined, maxTokens, fresh);
+          messages = boundTranscript(combined, maxTokensNow(), fresh);
           setAll(messages);
           // Persist only this turn's NEW messages (never the re-threaded history),
           // so the durable transcript grows linearly, not quadratically.
@@ -407,7 +428,7 @@ class EngineImpl implements Engine {
           }
           recorded = reply;
           transcript.push(...reply);
-          setAll(boundTranscript(transcript, maxTokens, 1));
+          setAll(boundTranscript(transcript, maxTokensNow(), 1));
           // Same seq every time, so a later explicit `record(...)` REPLACES the
           // auto-captured reply on disk instead of appending a second one.
           persist(turnId, turnSeq + 1, reply);

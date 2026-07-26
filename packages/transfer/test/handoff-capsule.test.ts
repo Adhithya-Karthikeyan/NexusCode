@@ -186,7 +186,7 @@ describe("provider-neutral handoff capsule", () => {
       config: {
         compressionPolicy: "truncateMiddle",
         validationStrictness: "strict",
-        handoff: { mode: "consult", inflightWaitMs: 30_000, preventRetryWindow: 9 },
+        handoff: { mode: "consult", inflightWaitMs: 30_000, preventRetryWindow: 9, maxCapsuleTokens: 24_000, maxCapsuleBytes: 128 * 1024, partialContinuation: { enabled: false, maxContextCodePoints: 32_768 } },
       },
     });
     expect(capsule.handoff).toEqual({

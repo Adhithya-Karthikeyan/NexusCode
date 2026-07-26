@@ -19,8 +19,8 @@ function tmp(): string {
   return mkdtempSync(join(tmpdir(), "zlcts-migrate-"));
 }
 
-const EXPECTED_TABLES = [
-  "zlcts_edges" as never, // not present — sanity: ensure we don't false-pass
+const EXPECTED_TABLES: string[] = [
+  "zlcts_edges", // not present — sanity: ensure we do not false-pass
 ].filter((n): n is string => false);
 
 const REQUIRED = [

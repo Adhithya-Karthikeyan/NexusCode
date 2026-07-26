@@ -63,7 +63,7 @@ describe("gemini adapter — request translation (pure, no network)", () => {
     expect(native.config?.systemInstruction).toBe("be terse");
     expect(native.config?.temperature).toBe(0.4);
     expect(native.config?.maxOutputTokens).toBe(256);
-    expect(native.config?.tools?.[0]?.functionDeclarations?.[0]?.name).toBe("get_weather");
+    expect((native.config?.tools?.[0] as { functionDeclarations?: { name?: string }[] } | undefined)?.functionDeclarations?.[0]?.name).toBe("get_weather");
     expect(native.config?.thinkingConfig?.thinkingBudget).toBe(1234);
     expect(native.config?.thinkingConfig?.includeThoughts).toBe(true);
   });

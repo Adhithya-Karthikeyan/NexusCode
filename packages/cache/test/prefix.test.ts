@@ -103,9 +103,9 @@ describe("toAnthropicSystem", () => {
 
   it("marks the trailing N segments when given lane segments", () => {
     const blocks = toAnthropicSystem(["sys", "tools", "memory"], { maxBreakpoints: 2 });
-    expect(blocks[0].cache_control).toBeUndefined();
-    expect(blocks[1].cache_control).toEqual({ type: "ephemeral" });
-    expect(blocks[2].cache_control).toEqual({ type: "ephemeral" });
+    expect(blocks[0]!.cache_control).toBeUndefined();
+    expect(blocks[1]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(blocks[2]!.cache_control).toEqual({ type: "ephemeral" });
   });
 
   it("clamps breakpoints to the Anthropic cap of 4 and drops empty segments", () => {

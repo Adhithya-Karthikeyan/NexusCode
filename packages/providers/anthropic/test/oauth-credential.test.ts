@@ -123,7 +123,7 @@ describe("Anthropic OAuth requests carry the Claude Code identity system block",
   });
 
   it("oauth=true with no caller system → identity is the sole system block", () => {
-    const out = toNativeRequest(cfg, { ...req, system: undefined }, true);
+    const out = toNativeRequest(cfg, (({ system: _s, ...rest }) => rest)(req), true);
     const blocks = out.system as Array<{ type: string; text: string }>;
     expect(blocks).toEqual([{ type: "text", text: CLAUDE_CODE_IDENTITY }]);
   });

@@ -5,7 +5,7 @@
  * guarantee behind "core never changes when a provider is added".
  */
 
-import { AdapterError, NexusError, type Capabilities } from "@nexuscode/shared";
+import { AdapterError, NexusError, type Capabilities, type ModelInfo } from "@nexuscode/shared";
 import type { HealthStatus, ProviderAdapter } from "./adapter.js";
 
 interface RegistryEntry {
@@ -62,6 +62,53 @@ export class ProviderRegistry {
     const entry = this.byId.get(id);
     if (!entry) throw new AdapterError("invalid_request", `no provider "${id}"`);
     return entry.caps;
+  }
+
+  /**
+   * Fold a provider's REAL model list (from `adapter.listModels()`) into its
+   * capabilities.
+   *
+   * `capabilities().models` is a curated snapshot — for Anthropic it is a handful
+   * of undated aliases, while the live `/v1/models` endpoint returns the dated
+   * ids a user actually picks. Every consumer that asks "does this provider have
+   * this model?" reads `capabilitiesOf`, so without this merge a live-discovered
+   * model is treated as unknown everywhere: the switch preflight rejects it, the
+   * HUD cannot size its context window, and — most damagingly —
+   * `assessSwitchTarget` marks it incompatible, which silently skips the
+   * context-window compaction that makes a switch safe.
+   *
+   * Discovered models are APPENDED after the curated ones and de-duplicated by
+   * id, so `models[0]` (the default-model pick) never changes. Idempotent: the
+   * same list can be recorded on every picker open. Unknown providers are
+   * ignored rather than throwing — discovery is best-effort.
+   */
+  recordDiscoveredModels(id: string, models: readonly ModelInfo[]): void {
+    const entry = this.byId.get(id);
+    if (!entry || models.length === 0) return;
+    const byModelId = new Map(entry.caps.models.map((m) => [m.id, m]));
+    let added = false;
+    for (const model of models) {
+      if (!model.id) continue;
+      const existing = byModelId.get(model.id);
+      if (existing === undefined) {
+        byModelId.set(model.id, model);
+        added = true;
+        continue;
+      }
+      // Keep the curated entry (config-driven pricing/aliases win) but adopt
+      // facts discovery knows and the snapshot does not.
+      if (existing.contextWindow === undefined && model.contextWindow !== undefined) {
+        byModelId.set(model.id, { ...existing, contextWindow: model.contextWindow });
+        added = true;
+      }
+    }
+    if (!added) return;
+    const curatedIds = new Set(entry.caps.models.map((m) => m.id));
+    const merged = [
+      ...entry.caps.models.map((m) => byModelId.get(m.id) ?? m),
+      ...[...byModelId.values()].filter((m) => !curatedIds.has(m.id)),
+    ];
+    entry.caps = { ...entry.caps, models: merged };
   }
 
   healthOf(id: string): HealthStatus | undefined {
