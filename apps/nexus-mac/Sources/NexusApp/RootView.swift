@@ -10,27 +10,35 @@ struct RootView: View {
     @Environment(\.nexusTheme) private var theme
 
     var body: some View {
-        NavigationSplitView {
+        // A plain HStack, not `NavigationSplitView`.
+        //
+        // The split view manages its own per-column safe areas and toolbar
+        // interaction, and on this OS it gave the detail column a title-bar
+        // inset while giving the sidebar column none — drawing the sidebar's
+        // header under the traffic lights. Four documented fixes
+        // (`safeAreaInset`, `List` + `.listStyle(.sidebar)`, background-only
+        // `ignoresSafeArea`, `unifiedCompact`) each failed to move it. Owning
+        // the split directly removes the whole interaction: both columns are now
+        // ordinary views inside one content area with one safe area.
+        HStack(spacing: 0) {
             Sidebar()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-        } detail: {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(theme.color(\.surfaceBase))
-                // `safeAreaInset` rather than a VStack sibling: an inset SHRINKS
-                // the safe area the content lays out against, so the status bar
-                // is structurally guaranteed to be visible. As a VStack sibling
-                // it merely competes for space, and any greedy child evicts it
-                // off the bottom of the window — which is exactly what happened.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    StatusBar()
+                .frame(width: 248)
+
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(width: 1)
+
+            VStack(spacing: 0) {
+                if let problem = workspace.setupProblem {
+                    SetupBanner(message: problem)
                 }
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    if let problem = workspace.setupProblem {
-                        SetupBanner(message: problem)
-                    }
-                }
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                StatusBar()
+            }
+            .background(theme.color(\.surfaceBase))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .tint(theme.color(\.accentDefault))
     }
 
