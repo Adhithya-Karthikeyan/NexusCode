@@ -16,12 +16,18 @@ struct NexusMacApp: App {
                 .environment(workspace)
                 .environment(\.nexusTheme, workspace.activeTheme)
                 .frame(minWidth: 900, minHeight: 560)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .preferredColorScheme(workspace.activeTheme.isDark ? .dark : .light)
         }
         // `.unified(showsTitle: false)` collapsed the title-bar row and left the
         // sidebar column with no top safe area, drawing its header under the
         // traffic lights. `.unifiedCompact` keeps a real (slim) title bar, so
         // both columns get a correct inset.
+        // An explicit default size: `RootView` is greedy in both axes
+        // (`maxWidth/maxHeight: .infinity`), which leaves a macOS window with no
+        // ideal size to resolve — a window that cannot size itself may never
+        // become visible at all.
+        .defaultSize(width: 1280, height: 860)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {

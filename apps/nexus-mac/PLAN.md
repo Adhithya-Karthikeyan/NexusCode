@@ -1,46 +1,41 @@
 # NexusCode.app — working backlog
 
-> ## 🔴 OPEN REGRESSION — read this first
+> ## ⚠️ ENVIRONMENT ISSUE (not a code regression) — read this first
 >
-> **The app launches but no window is displayed.** Build is clean and all 177
-> Swift tests pass, so this is the window lifecycle, not the logic.
+> **Symptom:** the app launches but no window appears.
 >
-> **Established by test, not guesswork:**
-> - `RootView.onAppear` DOES fire and `WorkspaceModel.init` runs — SwiftUI builds
->   the hierarchy. So `body` is evaluated; the window just never becomes visible.
-> - Verified visually (full-screen capture shows only the desktop), so this is
->   not System Events' `count windows` lying.
-> - Main thread is idle in the normal event loop (`sample`) — not blocked.
-> - No stderr, process healthy — not a crash.
+> **Cause: NOT our code.** A minimal 4-line SwiftUI app
+> (`WindowGroup { Text("hello") }`, compiled standalone with `swiftc
+> -parse-as-library`, ad-hoc signed, in /tmp) reproduces it EXACTLY. macOS is
+> currently not displaying windows for newly-launched ad-hoc-signed bundles in
+> this login session.
 >
-> **Ruled out** (each reverted/stubbed and retested independently):
-> Integrations/Git wiring · the control-strip `.mask` scroll cue ·
-> saved application state (no such dir) · stale instance (`open -n`,
-> `ApplePersistenceIgnoreState`).
+> **Almost certainly fixed by a logout/reboot, or by launching from Xcode.**
+> Try the minimal repro first to confirm the machine is healthy again:
+>   swiftc -parse-as-library -target arm64-apple-macos14 -o /tmp/mini/Mini.app/Contents/MacOS/Mini /tmp/mini/mini.swift
+>   open /tmp/mini/Mini.app
 >
-> **Leading suspect:** I ran `defaults delete dev.nexuscode.mac` WHILE the app
-> was running, to test a hypothesis. That wipes the domain SwiftUI also uses for
-> window bookkeeping. Careless — destructive to state I had not inspected — and
-> it is the only remaining change that correlates with the failure. Unproven.
+> **Evidence gathered before the cause was found** (all still true, and all
+> consistent with an environmental cause):
+> - `RootView.onAppear` fires and `WorkspaceModel.init` runs — SwiftUI builds the
+>   hierarchy fine; only the window never becomes visible.
+> - Confirmed visually via full-screen capture, not just System Events.
+> - Main thread idle in the normal event loop; no crash, no stderr.
+> - Ruled out by reverting and retesting each independently: the Integrations/Git
+>   wiring, the control-strip `.mask`, saved application state, stale instances,
+>   and an explicit `.defaultSize`.
 >
-> **Most likely mechanism:** a zero-sized or never-activated window. Note
-> `RootView` is `HStack{…}.frame(maxWidth: .infinity, maxHeight: .infinity)`
-> inside `WindowGroup` with `.frame(minWidth: 900, minHeight: 560)` — a content
-> view with no ideal size can leave a macOS window unable to resolve one.
+> **A correction I owe the record:** I earlier blamed running
+> `defaults delete dev.nexuscode.mac` while the app was running. That was still
+> careless, but it is NOT the cause — the minimal app never touched those
+> defaults and fails identically.
 >
-> **Next steps, in order:**
-> 1. `git log` the app dir and bisect to the last bundle that showed a window —
->    the auto-commits give a usable history.
-> 2. Build a minimal `@main` SwiftUI App in isolation: if IT gets no window, the
->    cause is this machine's LaunchServices state, not our code.
-> 3. Try giving the window an explicit `.defaultSize(width:height:)` and drop
->    `maxHeight: .infinity` from RootView's outermost frame.
+> `.defaultSize(width: 1280, height: 860)` was added to `NexusApp.swift` during
+> this investigation. It is harmless and worth keeping (a window whose content is
+> greedy in both axes has no ideal size to resolve), but it did not fix this.
 >
-> Nothing is lost: all source, tests and CLI work are intact and committed.
-
-
-Living document. Updated as work lands. Items marked ✅ are verified (built +
-tested + visually confirmed), 🔄 in progress, ⬜ not started.
+> The app was rendering all eight tabs correctly earlier in the session; four
+> were audited at two window sizes. Nothing is lost.
 
 ## A. Explicitly requested
 
