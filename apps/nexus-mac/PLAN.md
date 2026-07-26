@@ -58,7 +58,13 @@ surface. `nexus auth status -o json` already returns all 15 providers with
   sidebar's title-bar inset).
 - ✅ Elevation = surface ladder + 1px hairlines, not shadows.
 - ✅ macOS type scale (13/16 body, 15/17/22 titles, 10pt floor) + HIG spacing.
-- ⬜ **Alignment/overlap audit** — every screen, two window sizes.
+- 🔄 **Alignment/overlap audit** — Chat + Sessions verified at 1440x920 and
+  900x600: no overlaps, no clipping, sidebar/control-strip/composer/status bar
+  all intact. FINDING: the model picker vanishes at 900pt while the provider
+  picker survives — need to confirm that is deliberate collapse rather than
+  overflow, and if deliberate give it a fallback (menu-bar item or overflow
+  chevron) because model choice must not become unreachable at small widths.
+  Agents / Tasks / Settings not yet audited.
 - ⬜ **Icon + button shape consistency** — one icon weight, one control height.
 - ⬜ Empty / loading / error state for every tab.
 
@@ -126,3 +132,16 @@ isolation and clean on a full re-run. Not a regression; worth hardening.
 4. Alignment audit at 900pt width — the control strip now carries mode + effort
    + provider + model + approval + reasoning and needs a narrow-window pass.
 5. App icon; window restoration; accessibility labels.
+6. Model picker at narrow width (see A4) — currently unreachable below ~1100pt.
+
+### Notes for whoever picks this up
+- `nexus chat` had NO `-o` support before this session; ndjson for chat is new.
+- `available: true` from `providers list` does NOT mean usable — every
+  OpenAI-compat provider reports it with zero keys. `needsKey` is the real
+  signal; `available: false` only means the provider package failed to load.
+- `models <p> -o json` has no numeric context window, only a free-text hint
+  ("32k ctx"), parsed best-effort.
+- `mcp tools` lists ENABLED servers only; `mcp list` is merged in so a disabled
+  server stays visible.
+- An auto-commit Stop hook (`auto-push.sh`) is committing work automatically,
+  bundling concurrent agents' edits into single commits.
