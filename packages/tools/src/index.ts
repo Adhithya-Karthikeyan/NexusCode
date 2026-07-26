@@ -5,8 +5,8 @@
  * of `ToolEvent`s mapped onto the frozen `StreamChunk` `tool-result` shape.
  *
  * Exports: the Tool contract, a `ToolRegistry`, a `PermissionGate`
- * (read-only / workspace-write / full-access / plan, with allow/deny lists,
- * approval callback, and secret redaction), the streaming bridge (`runTool`,
+ * (read-only / ask / workspace-write / full-access / plan, with allow/deny
+ * lists, approval callback, and secret redaction), the streaming bridge (`runTool`,
  * `streamToolChunks`, `toolResultChunk`), and a starter built-in suite
  * (`fs_read`, `fs_write`, `fs_patch`, `fs_search`, `shell_exec`).
  */

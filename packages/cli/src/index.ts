@@ -145,6 +145,7 @@ const FLAG_SPEC: FlagSpec = {
     yolo: [],
     approve: [],
     "read-only": [],
+    ask: [],
     disabled: [],
     verify: [],
     background: ["bg"],
@@ -251,6 +252,9 @@ Options:
       --yolo              tool loop: full-access (no approval prompts)
       --approve           tool loop: workspace-write, auto-approve exec/network
       --read-only         tool loop: read-only (default)
+      --ask               tool loop: like workspace-write, but write/exec/network
+                          all require a REAL approval (chat: over the persistent
+                          stdin control line; see 'chat --persistent' details)
       --max-turns <n>     tool loop: cap provider re-invocations (default 8)
       --device            login: use the headless OAuth device-code flow
       --api-key           login: force the guided api-key path (composite providers)

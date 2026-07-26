@@ -10,6 +10,10 @@
  * The escalation ladder across modes is deliberate:
  *   plan            read only; no writes, exec, or network at all.
  *   read-only       read allowed; write/exec denied; network asks.
+ *   ask             read allowed; write/exec/network ALL ask — the honest
+ *                   "manual mode": nothing mutating happens without a real
+ *                   approval, unlike workspace-write below (which auto-allows
+ *                   writes outright once granted).
  *   workspace-write read + write allowed; exec/network ask.
  *   full-access     everything allowed outright.
  *
@@ -20,13 +24,14 @@
 import { redactArgs } from "./redact.js";
 import type { Tool, ToolPermission } from "./types.js";
 
-export type PermissionMode = "read-only" | "workspace-write" | "full-access" | "plan";
+export type PermissionMode = "read-only" | "ask" | "workspace-write" | "full-access" | "plan";
 
 type Outcome = "allow" | "deny" | "ask";
 
 const MODE_POLICY: Record<PermissionMode, Record<ToolPermission, Outcome>> = {
   plan: { read: "allow", write: "deny", exec: "deny", network: "deny" },
   "read-only": { read: "allow", write: "deny", exec: "deny", network: "ask" },
+  ask: { read: "allow", write: "ask", exec: "ask", network: "ask" },
   "workspace-write": { read: "allow", write: "allow", exec: "ask", network: "ask" },
   "full-access": { read: "allow", write: "allow", exec: "allow", network: "allow" },
 };
@@ -34,13 +39,17 @@ const MODE_POLICY: Record<PermissionMode, Record<ToolPermission, Outcome>> = {
 /**
  * The capability ranking of the escalation ladder (least → most privileged).
  * Used to intersect a parent gate with a requested child mode so delegation can
- * only ever narrow — never widen — the capability envelope.
+ * only ever narrow — never widen — the capability envelope. `ask` ranks above
+ * `read-only` (it can eventually reach write/exec/network, just gated behind a
+ * human) and below `workspace-write` (which reaches the same capabilities
+ * without asking for writes).
  */
 const MODE_RANK: Record<PermissionMode, number> = {
   plan: 0,
   "read-only": 1,
-  "workspace-write": 2,
-  "full-access": 3,
+  ask: 2,
+  "workspace-write": 3,
+  "full-access": 4,
 };
 
 /** What the approve callback is shown. `input` is already redacted. */
