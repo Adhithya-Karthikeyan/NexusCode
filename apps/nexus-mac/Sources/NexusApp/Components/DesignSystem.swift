@@ -8,67 +8,77 @@ import NexusKit
 /// are a deliberate ramp rather than arbitrary numbers, so density is consistent
 /// and hierarchy is legible at a glance.
 
+/// Spacing, on the AppKit HIG baseline: 6pt within a group, 8pt between
+/// groups, 20pt window margins. The first pass invented its own ramp (4/8/12/
+/// 18/26/44), which is why density never matched native chrome.
 enum Space {
     /// Hairline gaps inside a control.
     static let xs: CGFloat = 4
-    /// Between tightly-related elements (icon ↔ label).
-    static let sm: CGFloat = 8
-    /// Default gap inside a card.
-    static let md: CGFloat = 12
-    /// Between cards.
-    static let lg: CGFloat = 18
-    /// Page gutters.
-    static let xl: CGFloat = 26
-    /// Around hero/empty states.
-    static let xxl: CGFloat = 44
+    /// Between stacked controls in the same group (HIG: 6pt).
+    static let sm: CGFloat = 6
+    /// Between distinct control groups (HIG: 8pt).
+    static let md: CGFloat = 8
+    /// Inside a card.
+    static let lg: CGFloat = 12
+    /// Window margin (HIG: 20pt).
+    static let xl: CGFloat = 20
+    /// Around hero states.
+    static let xxl: CGFloat = 32
 }
 
 enum Radius {
-    static let control: CGFloat = 7
-    static let card: CGFloat = 12
-    static let panel: CGFloat = 16
+    /// Buttons, fields.
+    static let control: CGFloat = 6
+    /// Cards, panels.
+    static let card: CGFloat = 10
+    /// Sheets, popovers.
+    static let panel: CGFloat = 14
     static let pill: CGFloat = 999
 }
 
-/// One typographic ramp. Weight and size move together so hierarchy survives
-/// even in a monochrome theme.
+/// The macOS system type scale.
+///
+/// macOS has FIXED text styles (no Dynamic Type), and the real metrics are
+/// Body 13/16, Headline 13 bold, Title3 15, Title2 17, Title1 22, LargeTitle 26,
+/// with 10pt the readable floor. The first pass used invented sizes, which is
+/// why nothing sat right next to native controls.
 enum Kind {
-    static let hero = Font.system(size: 25, weight: .semibold, design: .rounded)
+    static let hero = Font.system(size: 22, weight: .semibold)
     static let title = Font.system(size: 15, weight: .semibold)
-    static let section = Font.system(size: 11, weight: .semibold, design: .rounded)
+    static let headline = Font.system(size: 13, weight: .semibold)
+    static let section = Font.system(size: 11, weight: .semibold)
     static let body = Font.system(size: 13, weight: .regular)
     static let bodyEmphasis = Font.system(size: 13, weight: .medium)
     static let caption = Font.system(size: 11, weight: .regular)
-    static let micro = Font.system(size: 9.5, weight: .semibold, design: .rounded)
-    static let mono = Font.system(size: 11.5, design: .monospaced)
-    static let monoSmall = Font.system(size: 10, design: .monospaced)
+    /// 10pt is the documented minimum readable size on macOS — never go below.
+    static let micro = Font.system(size: 10, weight: .semibold)
+    static let mono = Font.system(size: 12, design: .monospaced)
+    static let monoSmall = Font.system(size: 10.5, design: .monospaced)
 }
 
 extension NexusTheme {
-    /// Shadow tuned per theme mode: a dark UI needs depth from a darker, wider
-    /// shadow, while a light UI needs a tighter, softer one or it looks muddy.
-    var cardShadow: (color: Color, radius: CGFloat, y: CGFloat) {
+    /// The hairline that separates one surface from another.
+    ///
+    /// Depth in a dark tool UI comes from a LADDER OF SURFACE COLOURS plus a 1px
+    /// border — not from drop shadows. Shadows over a near-black canvas read as
+    /// grey smudge and are the main reason the first pass looked flat rather
+    /// than layered. A light theme still needs a slightly stronger edge to
+    /// separate two near-white surfaces.
+    var hairline: Color {
         isDark
-            ? (Color.black.opacity(0.42), 14, 5)
-            : (Color.black.opacity(0.09), 9, 3)
+            ? Color.white.opacity(0.09)
+            : Color.black.opacity(0.11)
     }
 
-    /// A soft accent wash used behind hero moments.
+    /// A restrained wash for the one hero moment per screen. Accent is
+    /// load-bearing (selection, focus, primary action) — it is not decoration,
+    /// so this stays subtle and is used sparingly.
     var accentGlow: RadialGradient {
         RadialGradient(
-            colors: [color(\.accentDefault).opacity(isDark ? 0.20 : 0.13), .clear],
+            colors: [color(\.accentDefault).opacity(isDark ? 0.10 : 0.07), .clear],
             center: .center,
             startRadius: 2,
-            endRadius: 190
-        )
-    }
-
-    /// Vertical wash that lifts a surface off the page without a hard edge.
-    func surfaceWash(_ top: KeyPath<ThemeTokens, String>, _ bottom: KeyPath<ThemeTokens, String>) -> LinearGradient {
-        LinearGradient(
-            colors: [color(top), color(bottom)],
-            startPoint: .top,
-            endPoint: .bottom
+            endRadius: 150
         )
     }
 }
@@ -77,28 +87,27 @@ extension NexusTheme {
 /// own background+border+shadow combinations.
 struct Card<Content: View>: View {
     @Environment(\.nexusTheme) private var theme
-    var padding: CGFloat = Space.md
+    var padding: CGFloat = Space.lg
     var radius: CGFloat = Radius.card
-    var elevated = true
+    /// One step further up the surface ladder, for a card that must read as
+    /// floating above an already-raised surface.
+    var elevated = false
     @ViewBuilder var content: Content
 
     var body: some View {
-        let shadow = theme.cardShadow
         content
             .padding(padding)
             .background {
+                // `.continuous` curvature: the squircle every native control
+                // uses. A plain `cornerRadius` reads subtly wrong beside system
+                // chrome.
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(theme.color(\.surfaceRaised))
+                    .fill(theme.color(elevated ? \.surfaceOverlay : \.surfaceRaised))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+                    .strokeBorder(theme.hairline, lineWidth: 1)
             }
-            .shadow(
-                color: elevated ? shadow.color : .clear,
-                radius: elevated ? shadow.radius : 0,
-                y: elevated ? shadow.y : 0
-            )
     }
 }
 

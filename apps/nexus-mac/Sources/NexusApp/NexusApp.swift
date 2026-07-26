@@ -18,7 +18,11 @@ struct NexusMacApp: App {
                 .frame(minWidth: 900, minHeight: 560)
                 .preferredColorScheme(workspace.activeTheme.isDark ? .dark : .light)
         }
-        .windowToolbarStyle(.unified(showsTitle: false))
+        // `.unified(showsTitle: false)` collapsed the title-bar row and left the
+        // sidebar column with no top safe area, drawing its header under the
+        // traffic lights. `.unifiedCompact` keeps a real (slim) title bar, so
+        // both columns get a correct inset.
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Conversation") { workspace.conversation?.clear() }

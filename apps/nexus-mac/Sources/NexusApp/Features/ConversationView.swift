@@ -18,12 +18,21 @@ struct ConversationView: View {
     @FocusState private var composerFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            ControlStrip(controller: controller, showsReasoning: $showsReasoning)
-            Divider().overlay(theme.color(\.chromeDivider))
-            transcript
-            composer
-        }
+        transcript
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Both bars are safe-area insets, not VStack siblings. An inset
+            // shrinks the area the transcript lays out against, so neither bar
+            // can be squeezed out by a greedy transcript — the failure that hid
+            // the composer and control strip entirely.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    ControlStrip(controller: controller, showsReasoning: $showsReasoning)
+                    Divider().overlay(theme.color(\.chromeDivider))
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                composer
+            }
     }
 
     private var laneOrder: [LaneState] { controller.view.orderedLanes }

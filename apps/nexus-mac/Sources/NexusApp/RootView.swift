@@ -14,15 +14,22 @@ struct RootView: View {
             Sidebar()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
         } detail: {
-            VStack(spacing: 0) {
-                if let problem = workspace.setupProblem {
-                    SetupBanner(message: problem)
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(theme.color(\.surfaceBase))
+                // `safeAreaInset` rather than a VStack sibling: an inset SHRINKS
+                // the safe area the content lays out against, so the status bar
+                // is structurally guaranteed to be visible. As a VStack sibling
+                // it merely competes for space, and any greedy child evicts it
+                // off the bottom of the window — which is exactly what happened.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    StatusBar()
                 }
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                StatusBar()
-            }
-            .background(theme.color(\.surfaceBase))
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if let problem = workspace.setupProblem {
+                        SetupBanner(message: problem)
+                    }
+                }
         }
         .tint(theme.color(\.accentDefault))
     }
@@ -96,38 +103,54 @@ private struct Sidebar: View {
     @Environment(\.nexusTheme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            BrandHeader()
-                .padding(.horizontal, Space.md)
-                .padding(.top, Space.lg)
-                .padding(.bottom, Space.md)
+        // A `List` rather than a bare `VStack`. Only a List's scroll view
+        // participates in the sidebar column's title-bar safe area on macOS — a
+        // plain VStack gets no top inset at all, which drew the brand header and
+        // project switcher underneath the traffic lights. Keeping List for the
+        // inset (and for free keyboard navigation) while hiding its background
+        // and row chrome preserves the fully custom look.
+        List {
+            Group {
+                BrandHeader()
+                    .padding(.bottom, Space.md)
 
-            ProjectSwitcherRow()
-                .padding(.horizontal, Space.sm)
-                .padding(.bottom, Space.lg)
+                ProjectSwitcherRow()
+                    .padding(.bottom, Space.lg)
 
-            SectionHeader("Workspace")
-                .padding(.horizontal, Space.md)
-                .padding(.bottom, Space.xs)
+                SectionHeader("Workspace")
+                    .padding(.bottom, Space.xs)
 
-            VStack(spacing: 2) {
-                ForEach(WorkspaceTab.allCases) { tab in
-                    SidebarNavRow(
-                        tab: tab,
-                        isSelected: workspace.tab == tab,
-                        badge: badge(for: tab),
-                        action: { workspace.tab = tab }
-                    )
+                VStack(spacing: 2) {
+                    ForEach(WorkspaceTab.allCases) { tab in
+                        SidebarNavRow(
+                            tab: tab,
+                            isSelected: workspace.tab == tab,
+                            badge: badge(for: tab),
+                            action: { workspace.tab = tab }
+                        )
+                    }
                 }
             }
-            .padding(.horizontal, Space.sm)
-
-            Spacer(minLength: Space.lg)
-
+            .listRowInsets(EdgeInsets(top: 0, leading: Space.md, bottom: 0, trailing: Space.md))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The footer is an inset, not the last VStack child, for the same reason
+        // as the status bar: a sibling can be pushed out, an inset cannot.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(theme.color(\.surfaceSunken))
+        // ONLY the background bleeds under the title bar. Applying
+        // `.ignoresSafeArea()` to the whole sidebar is the standard way to get a
+        // native-looking material behind the traffic lights — and also the
+        // standard way to drag your own content up into that dead zone, because
+        // it applies to the entire subtree.
+        .background(alignment: .top) {
+            theme.color(\.surfaceSunken).ignoresSafeArea()
+        }
     }
 
     /// Live agent count on the Agents tab, so activity is visible from any tab.
