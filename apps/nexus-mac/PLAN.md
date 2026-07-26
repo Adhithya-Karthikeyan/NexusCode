@@ -132,7 +132,7 @@ isolation and clean on a full re-run. Not a regression; worth hardening.
 4. Alignment audit at 900pt width — the control strip now carries mode + effort
    + provider + model + approval + reasoning and needs a narrow-window pass.
 5. App icon; window restoration; accessibility labels.
-6. Model picker at narrow width (see A4) — currently unreachable below ~1100pt.
+6. ~~Model picker at narrow width~~ — resolved (scroll cue added).
 
 ### Notes for whoever picks this up
 - `nexus chat` had NO `-o` support before this session; ndjson for chat is new.
