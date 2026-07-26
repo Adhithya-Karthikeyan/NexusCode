@@ -61,7 +61,19 @@ export interface ApprovalRequest {
   reason: string;
 }
 
-export type ApproveFn = (req: ApprovalRequest) => boolean | Promise<boolean>;
+/**
+ * A richer approve outcome, for an approver that wants to say WHY a decision
+ * was reached — not just what it was. `note` is appended to the recorded
+ * `reason` as `: denied (<note>)` / `: approved (<note>)`; a plain `boolean`
+ * (every existing approver) still works exactly as before, with no note.
+ */
+export interface ApproveOutcome {
+  granted: boolean;
+  /** e.g. "timeout", "cancelled" — omit for an ordinary explicit decision. */
+  note?: string;
+}
+
+export type ApproveFn = (req: ApprovalRequest) => boolean | ApproveOutcome | Promise<boolean | ApproveOutcome>;
 
 export interface PermissionGateOptions {
   mode: PermissionMode;
@@ -208,19 +220,22 @@ export class PermissionGate {
     }
 
     const reason = `${permission} requires approval in ${this.mode} mode`;
-    const granted = await this.approve({
+    const approveResult = await this.approve({
       toolName: tool.name,
       permission,
       mode: this.mode,
       input: loggedInput,
       reason,
     });
+    const granted = typeof approveResult === "boolean" ? approveResult : approveResult.granted;
+    const note = typeof approveResult === "boolean" ? undefined : approveResult.note;
+    const verdict = granted ? "approved" : "denied";
 
     return {
       ...base,
       allowed: granted,
       viaApproval: true,
-      reason: granted ? `${reason}: approved` : `${reason}: denied`,
+      reason: note ? `${reason}: ${verdict} (${note})` : `${reason}: ${verdict}`,
     };
   }
 }

@@ -71,6 +71,20 @@ struct ConversationView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composer
             }
+            // A sheet, deliberately: a blocked tool call is modal in fact — the
+            // turn is genuinely halted waiting on this answer — so making it
+            // modal in the UI matches reality rather than letting the user keep
+            // typing into a conversation that cannot advance.
+            .sheet(item: Binding(
+                get: { controller.approvals.current },
+                set: { _ in }
+            )) { approval in
+                ApprovalSheet(
+                    approval: approval,
+                    onAllow: { controller.respondToApproval(allow: true) },
+                    onDeny: { controller.respondToApproval(allow: false) }
+                )
+            }
     }
 
     private var laneOrder: [LaneState] { controller.view.orderedLanes }

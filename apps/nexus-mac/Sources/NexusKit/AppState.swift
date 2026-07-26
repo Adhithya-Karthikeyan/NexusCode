@@ -98,6 +98,17 @@ public final class ConversationController {
     /// Session to continue, so turns build on each other.
     public var sessionId: String?
 
+    /// Pending tool approvals for this conversation.
+    public let approvals = ApprovalsController()
+
+    /// Whether tools run with a REAL approval gate.
+    ///
+    /// `true` launches the backend with `-t --ask`, so a write/exec/network tool
+    /// call blocks and emits an approval event instead of proceeding. `false`
+    /// leaves the backend tool-less, which is the safe default: a tool loop the
+    /// user cannot see or gate should never start implicitly.
+    public var approvalsEnabled = true
+
     private let client: NexusClient
     private let binary: NexusBinary
     private let workingDirectory: URL?
@@ -195,6 +206,10 @@ public final class ConversationController {
             var extras: [String] = []
             if let provider { extras += ["-p", provider] }
             if let model { extras += ["-m", model] }
+            // `-t` enables the tool loop, `--ask` makes write/exec/network
+            // require a decision. Without `--ask` the gate would auto-allow,
+            // which is the behaviour this whole path exists to remove.
+            if approvalsEnabled { extras += ["-t", "--ask"] }
             let started = PersistentSession(
                 binary: binary,
                 workingDirectory: workingDirectory,
@@ -217,6 +232,14 @@ public final class ConversationController {
         Task { [session] in await session?.send(text) }
     }
 
+    /// Answer the front-most approval. The decision travels on the SAME stdin
+    /// the prompts do — the CLI distinguishes them by shape, so no second
+    /// channel is needed.
+    public func respondToApproval(allow: Bool) {
+        guard let decision = allow ? approvals.allow() : approvals.deny() else { return }
+        Task { [session] in await session?.send(decision.controlLine) }
+    }
+
     private func absorb(_ item: NexusStreamItem) {
         switch item {
         case .event(let event):
@@ -227,6 +250,8 @@ public final class ConversationController {
             if case .session(let session) = event, let id = session.sessionId, sessionId == nil {
                 sessionId = id
             }
+            // A tool call is blocked waiting on the user; surface it.
+            approvals.ingest(event)
             // A settled turn frees the composer; the process stays alive.
             if case .done = event { isRunning = false }
             if case .error = event { isRunning = false }

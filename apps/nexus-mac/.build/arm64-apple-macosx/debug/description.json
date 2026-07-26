@@ -49,6 +49,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ApprovalSheet.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AuthView.swift"
         },
         {
@@ -98,6 +102,7 @@
       "objects" : [
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/DesignSystem.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/AgentsView.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/ApprovalSheet.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/AuthView.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/ConversationView.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/GitView.swift.o",
@@ -168,6 +173,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/ApprovalSheet.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/AuthView.swift.o"
         },
         {
@@ -207,6 +216,7 @@
       "sources" : [
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/DesignSystem.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AgentsView.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ApprovalSheet.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AuthView.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ConversationView.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/GitView.swift",
@@ -227,6 +237,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/AppState.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Approvals.swift"
         },
         {
           "kind" : "file",
@@ -302,6 +316,7 @@
       "moduleOutputPath" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/Modules/NexusKit.swiftmodule",
       "objects" : [
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/AppState.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Approvals.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Auth.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Themes.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Integrations.swift.o",
@@ -375,6 +390,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Approvals.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Auth.swift.o"
         },
         {
@@ -441,6 +460,7 @@
       "prepareForIndexing" : false,
       "sources" : [
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/AppState.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Approvals.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Auth.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Integrations.swift",
@@ -468,6 +488,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AppStateTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ApprovalsTests.swift"
         },
         {
           "kind" : "file",
@@ -539,6 +563,7 @@
       "moduleOutputPath" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/Modules/NexusKitTests.swiftmodule",
       "objects" : [
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/AppStateTests.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/ApprovalsTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/AuthTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/IntegrationsTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/NexusClientIntegrationTests.swift.o",
@@ -608,6 +633,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/ApprovalsTests.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/AuthTests.swift.o"
         },
         {
@@ -662,6 +691,7 @@
       "prepareForIndexing" : false,
       "sources" : [
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AppStateTests.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ApprovalsTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AuthTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/IntegrationsTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusClientIntegrationTests.swift",
@@ -787,6 +817,7 @@
       "-c",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/DesignSystem.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AgentsView.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ApprovalSheet.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AuthView.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ConversationView.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/GitView.swift",
@@ -855,6 +886,7 @@
       "nexus_mac",
       "-c",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/AppState.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Approvals.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Auth.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Integrations.swift",
@@ -930,6 +962,7 @@
       "nexus_mac",
       "-c",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AppStateTests.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ApprovalsTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AuthTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/IntegrationsTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusClientIntegrationTests.swift",
@@ -1122,6 +1155,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ApprovalSheet.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AuthView.swift"
         },
         {
@@ -1168,6 +1205,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/ApprovalSheet.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/AuthView.swift.o"
         },
         {
@@ -1205,6 +1246,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/AppState.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Approvals.swift.o"
         },
         {
           "kind" : "file",
@@ -1282,6 +1327,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Approvals.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Auth.swift"
         },
         {
@@ -1353,6 +1402,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AppStateTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ApprovalsTests.swift"
         },
         {
           "kind" : "file",
@@ -1432,6 +1485,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Approvals.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Auth.swift.o"
         },
         {
@@ -1493,6 +1550,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/AppStateTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/ApprovalsTests.swift.o"
         },
         {
           "kind" : "file",

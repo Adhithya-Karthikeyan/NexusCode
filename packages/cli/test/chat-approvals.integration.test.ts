@@ -292,6 +292,10 @@ describe("nexus chat --persistent -t — real tool approvals", () => {
     expect(toolResult.ok).toBe(false);
     expect(JSON.stringify(toolResult.result)).toMatch(/denied/i);
     expect(JSON.stringify(toolResult.result)).toContain("shell_exec");
+    // An explicit human decision carries NO parenthetical note — that absence
+    // is what distinguishes it from a harness-side timeout/cancellation/EOF
+    // deny (see the two tests below).
+    expect(JSON.stringify(toolResult.result)).not.toMatch(/denied \(/);
 
     // Denied, not crashed: the turn still settles with a real reply.
     const turnEnd = await lines.waitFor((e) => e.t === "turn_end");
@@ -331,12 +335,36 @@ describe("nexus chat --persistent -t — real tool approvals", () => {
     const toolResult = await lines.waitFor((e) => e.t === "tool_result", 5_000);
     expect(toolResult.ok).toBe(false);
     expect(JSON.stringify(toolResult.result)).toMatch(/denied/i);
+    // Distinguishable from an explicit deny AND from a cancellation — the UI
+    // can say "no one answered in time" rather than a flat "denied".
+    expect(JSON.stringify(toolResult.result)).toContain("denied (timeout)");
 
     const turnEnd = await lines.waitFor((e) => e.t === "turn_end", 5_000);
     expect(turnEnd.ok).toBe(true);
 
     child.stdin.end();
     expect(await closed).toBe(0);
+  }, 30_000);
+
+  it("a SIGINT while an approval is pending denies it as 'cancelled', distinct from a timeout or explicit deny", async () => {
+    received.length = 0;
+    const child = spawnChat(["--ask"]);
+    const closed = new Promise<number>((resolve) => child.on("close", (code) => resolve(code ?? -1)));
+    const lines = lineWaiter(child);
+
+    child.stdin.write("please run the command\n");
+    await waitForApproval(lines);
+    // No decision line ever written — SIGINT cancels the turn (and with it,
+    // this pending approval) instead of a timeout or an explicit deny.
+    child.kill("SIGINT");
+
+    const toolResult = await lines.waitFor((e) => e.t === "tool_result", 5_000);
+    expect(toolResult.ok).toBe(false);
+    expect(JSON.stringify(toolResult.result)).toContain("denied (cancelled)");
+
+    // SIGINT closes the process (mirrors every other command's Ctrl+C); it
+    // must exit cleanly rather than hang or crash.
+    expect(await closed).not.toBeNull();
   }, 30_000);
 
   it("default mode (no --ask/--yolo/--approve) denies exec outright, with no approval prompt at all", async () => {

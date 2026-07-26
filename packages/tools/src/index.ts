@@ -30,6 +30,7 @@ export type {
   PermissionDecision,
   ApprovalRequest,
   ApproveFn,
+  ApproveOutcome,
 } from "./permission.js";
 
 export { redactArgs, redactSecrets, REDACTED } from "./redact.js";

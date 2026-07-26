@@ -72,6 +72,7 @@ import {
   runTool,
   type ApprovalRequest,
   type ApproveFn,
+  type ApproveOutcome,
   type PermissionGateOptions,
   type PermissionMode,
   type ToolPermission,
@@ -2977,7 +2978,7 @@ async function buildApprovalDiff(req: ApprovalRequest, cwd: string): Promise<str
  * forever with no signal.
  */
 class ApprovalBroker {
-  private readonly pending = new Map<string, (granted: boolean) => void>();
+  private readonly pending = new Map<string, (outcome: ApproveOutcome) => void>();
 
   constructor(
     private readonly cwd: string,
@@ -2990,7 +2991,7 @@ class ApprovalBroker {
     return (req) => this.request(req);
   }
 
-  private async request(req: ApprovalRequest): Promise<boolean> {
+  private async request(req: ApprovalRequest): Promise<ApproveOutcome> {
     const id = randomUUID();
     const detail: ApprovalDetailPayload = {
       toolName: req.toolName,
@@ -3007,34 +3008,39 @@ class ApprovalBroker {
     const action = req.permission === "write" ? "file" : req.permission === "exec" ? "shell" : "tool";
     this.emit({ t: "approval", lane: "main", id, action, detail: JSON.stringify(detail) });
 
-    return new Promise<boolean>((resolve) => {
+    return new Promise<ApproveOutcome>((resolve) => {
       const scope = this.getScope();
       if (scope?.isCancelled) {
-        resolve(false);
+        resolve({ granted: false, note: "cancelled" });
         return;
       }
       let timer: ReturnType<typeof setTimeout>;
-      const finish = (granted: boolean): void => {
+      const finish = (outcome: ApproveOutcome): void => {
         if (!this.pending.delete(id)) return; // already settled
         clearTimeout(timer);
         scope?.signal.removeEventListener("abort", onAbort);
-        resolve(granted);
+        resolve(outcome);
       };
-      const onAbort = (): void => finish(false);
+      const onAbort = (): void => finish({ granted: false, note: "cancelled" });
       scope?.signal.addEventListener("abort", onAbort);
-      timer = setTimeout(() => finish(false), APPROVAL_TIMEOUT_MS);
+      timer = setTimeout(() => finish({ granted: false, note: "timeout" }), APPROVAL_TIMEOUT_MS);
       this.pending.set(id, finish);
     });
   }
 
-  /** Resolve a pending approval from a decision line. A no-op for an unknown/expired id. */
+  /**
+   * Resolve a pending approval from an explicit decision line. A no-op for an
+   * unknown/expired id. No `note`: the recorded reason stays the plain
+   * "...: approved"/"...: denied" — its ABSENCE is what marks this as a real
+   * human answer, distinct from a harness-side timeout/cancellation/shutdown.
+   */
   decide(id: string, decision: "allow" | "deny"): void {
-    this.pending.get(id)?.(decision === "allow");
+    this.pending.get(id)?.({ granted: decision === "allow" });
   }
 
   /** Deny every still-pending approval (stdin EOF: no more decisions can ever arrive). */
   denyAll(): void {
-    for (const resolve of [...this.pending.values()]) resolve(false);
+    for (const resolve of [...this.pending.values()]) resolve({ granted: false, note: "stdin-closed" });
   }
 }
 
