@@ -273,6 +273,13 @@ function replyMessages(reply: TurnReply): Message[] {
   if (Array.isArray(reply)) return reply;
   const result: RunResult | undefined = "runId" in reply ? reply : (reply.winner ?? reply.runs[0]);
   if (!result || result.status !== "ok" || result.text.length === 0) return [];
+  // An agentic run that looped through tool calls carries the whole exchange
+  // (assistant tool-call messages + their tool results, ending in the final
+  // reply) on `toolExchange` — use it verbatim instead of synthesizing a
+  // single text-only message from `result.text`, which would both drop every
+  // intermediate tool call/result AND duplicate text already inside them
+  // (`result.text` concatenates text deltas across every turn of the loop).
+  if (result.toolExchange && result.toolExchange.length > 0) return result.toolExchange;
   return [{ role: "assistant", content: [{ type: "text", text: result.text }] }];
 }
 

@@ -67,7 +67,7 @@ struct GitView: View {
                         }
                     }
                 } else {
-                    loadingState
+                    LoadingState(message: "Checking repository state…")
                 }
             } else {
                 HeroEmptyState(
@@ -96,16 +96,6 @@ struct GitView: View {
                 .buttonStyle(SoftButton(size: .compact))
             )
         )
-    }
-
-    private var loadingState: some View {
-        VStack(spacing: Space.sm) {
-            ProgressView()
-            Text("Checking repository state…")
-                .font(Kind.caption)
-                .foregroundStyle(theme.color(\.textMuted))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func repoStatusCard(_ state: GitRepoState) -> some View {

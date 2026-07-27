@@ -35,12 +35,15 @@ struct IntegrationsView: View {
         } content: {
             if let controller {
                 if controller.isLoading && controller.mcpServers.isEmpty && controller.tools.isEmpty {
-                    loadingState
+                    LoadingState(message: "Loading integrations…")
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: Space.lg) {
+                            // Dismissible: MCP/tools/hooks below are real,
+                            // already-loaded data either way — see
+                            // `InlineBanner`'s doc for why that's unconditional.
                             if let error = controller.error {
-                                ErrorBanner(message: error)
+                                InlineBanner(message: error) { controller.error = nil }
                             }
                             mcpSection(controller)
                             toolsSection(controller)
@@ -78,16 +81,6 @@ struct IntegrationsView: View {
                 .buttonStyle(SoftButton(size: .compact))
             )
         )
-    }
-
-    private var loadingState: some View {
-        VStack(spacing: Space.sm) {
-            ProgressView()
-            Text("Loading integrations…")
-                .font(Kind.caption)
-                .foregroundStyle(theme.color(\.textMuted))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - MCP
@@ -491,32 +484,5 @@ private struct NexusToolRow: View {
         case .exec: return .danger
         case .unknown: return .neutral
         }
-    }
-}
-
-// MARK: - Shared
-
-/// A dismissible-looking (but non-fatal) notice for a refresh that partially
-/// failed — mirrors `TasksView`'s `ErrorBanner`, duplicated per-file the same
-/// way `SessionsView`'s `errorBanner` is, rather than adding a shared type
-/// this task isn't scoped to touch.
-private struct ErrorBanner: View {
-    @Environment(\.nexusTheme) private var theme
-    let message: String
-
-    var body: some View {
-        HStack(spacing: Space.xs) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 10))
-                .accessibilityHidden(true)
-            Text(message)
-                .font(Kind.caption)
-                .lineLimit(2)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(theme.color(\.warningFg))
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm)
-        .background(theme.color(\.warningBg).opacity(0.6), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
     }
 }

@@ -50,9 +50,9 @@ struct SessionsView: View {
     @ViewBuilder
     private func stateBody(_ controller: SessionsController) -> some View {
         if controller.isLoading && controller.sessions.isEmpty {
-            loadingState
+            LoadingState(message: "Loading sessions…")
         } else if let error = controller.error, controller.sessions.isEmpty {
-            errorState(error) { Task { await controller.refresh() } }
+            ErrorState(message: error) { Task { await controller.refresh() } }
         } else if controller.sessions.isEmpty {
             HeroEmptyState(
                 icon: "clock.arrow.circlepath",
@@ -63,8 +63,12 @@ struct SessionsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // A stale-data caveat, not a fatal error — the list already
                 // loaded once, so a failed refresh must not blank it out.
+                // Dismissible: the list underneath is real and usable either
+                // way (see `InlineBanner`'s doc for why that's unconditional).
                 if let error = controller.error {
-                    errorBanner(error)
+                    InlineBanner(message: error) { controller.error = nil }
+                        .padding(.horizontal, Space.xl)
+                        .padding(.vertical, Space.xs)
                 }
                 splitView(controller)
             }
@@ -93,55 +97,6 @@ struct SessionsView: View {
         )
         .padding(.horizontal, Space.xl)
         .padding(.vertical, Space.md)
-    }
-
-    // MARK: - States
-
-    private var loadingState: some View {
-        VStack(spacing: Space.sm) {
-            ProgressView()
-            Text("Loading sessions…")
-                .font(Kind.caption)
-                .foregroundStyle(theme.color(\.textMuted))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func errorState(_ message: String, retry: @escaping () -> Void) -> some View {
-        VStack(spacing: Space.sm) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 26, weight: .light))
-                .foregroundStyle(theme.color(\.errorFg))
-                // The message text right below already says what's wrong —
-                // this glyph is decoration, not a second, unlabeled thing to
-                // announce.
-                .accessibilityHidden(true)
-            Text(message)
-                .font(Kind.body)
-                .foregroundStyle(theme.color(\.textSecondary))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-            Button("Retry", action: retry)
-                .buttonStyle(SoftButton(tone: .accent))
-        }
-        .padding(Space.xxl)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: Space.xs) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 10))
-                .accessibilityHidden(true)
-            Text(message)
-                .font(Kind.caption)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(theme.color(\.warningFg))
-        .padding(.horizontal, Space.xl)
-        .padding(.vertical, Space.xs)
-        .background(theme.color(\.warningBg).opacity(0.5))
     }
 
     // MARK: - Split view

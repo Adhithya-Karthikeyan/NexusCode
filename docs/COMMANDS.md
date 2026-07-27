@@ -364,7 +364,7 @@ from stdin when no positional is given.
 Turn an objective into a verifiable, dependency-ordered task plan using the
 planner role.
 
-**Usage:** `nexus plan <objective...> [--role <name>] [--max-steps <n>] [-p <provider>] [-m <model>]`
+**Usage:** `nexus plan <objective...> [--role <name>] [--max-steps <n>] [--no-persist] [-p <provider>] [-m <model>]`
 
 **Flags**
 
@@ -372,6 +372,7 @@ planner role.
 | --- | --- | --- | --- |
 | `-r, --role <name>` | string | `planner` | Role preset to plan with |
 | `--max-steps <n>` | number | role budget | Cap OODA iterations |
+| `--no-persist` | boolean | off | Preview only — skip writing the plan into the durable task store |
 | `-p, --provider <id>` | string | config default | Provider to run against |
 | `-m, --model <id>` | string | provider default | Model id |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
@@ -383,10 +384,17 @@ planner role.
 ```bash
 nexus plan -p mock -m mock-tools 'build a login page'
 echo 'ship a CLI installer' | nexus plan -p mock -m mock-tools
+nexus plan --no-persist -p mock -m mock-tools 'just show me the shape'
+nexus task list   # the plan above is already here
 ```
 
 **Notes:** Reads stdin when no objective is given, and exits 2 with neither.
-Persist the resulting work with [`task`](#nexus-task).
+The drafted plan is written into the durable store `nexus task list` reads
+**by default** — ids, parent/subtask structure, and dependency edges intact —
+so it survives past this one process (`--no-persist` opts out and only prints
+the preview). The OODA run itself still plans against its own private,
+in-memory store while it runs; persistence copies out the settled result once,
+at the end. See [`task`](#nexus-task) to manage the persisted plan afterward.
 
 ---
 
@@ -1023,14 +1031,16 @@ to absolute before being stored.
 
 Terminal integration: background jobs, command history, and the PTY seam.
 
-**Usage:** `nexus jobs [list|run|history|pty] [args...]`
+**Usage:** `nexus jobs [list|run|logs|kill|history|pty] [args...]`
 
 **Subcommands**
 
 | Subcommand | Usage | Description |
 | --- | --- | --- |
-| `list` | `nexus jobs list` | List background jobs for this process (default) |
-| `run` | `nexus jobs run -- <command> [args...]` | Launch a command as a job, streaming its output |
+| `list` | `nexus jobs list` | List backgrounded jobs (`run --background`), liveness re-probed |
+| `run` | `nexus jobs run [--background\|--bg] -- <command> [args...]` | Launch a command as a job; foreground by default, streaming its output |
+| `logs` | `nexus jobs logs <id>` | Show a background job's captured combined stdout+stderr |
+| `kill` | `nexus jobs kill <id>` | Stop a running background job (SIGTERM → SIGKILL) |
 | `history` | `nexus jobs history` | Show the 20 most recent recorded commands |
 | `pty` | `nexus jobs pty` | Report whether a native PTY is available |
 
@@ -1038,6 +1048,7 @@ Terminal integration: background jobs, command history, and the PTY seam.
 
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
+| `--background`, `--bg` | boolean | off | `run`: detach the command so it outlives this invocation, tracked in a durable registry |
 | `--cwd <dir>` | string | current dir | `run`: working directory for the job |
 | `-o, --output <mode>` | enum | `text` | `text` or `json` |
 
@@ -1047,13 +1058,26 @@ Terminal integration: background jobs, command history, and the PTY seam.
 nexus jobs
 nexus jobs run -- echo hello
 nexus jobs run --cwd ./packages/core -- npm test
+nexus jobs run --bg -- npm run build   # prints an id, returns immediately
+nexus jobs list                        # a LATER, separate invocation still sees it
+nexus jobs logs <id>
+nexus jobs kill <id>
 nexus jobs history
 nexus jobs pty
 ```
 
-**Notes:** Background jobs are tracked per process, so a fresh CLI invocation
-lists none — `jobs run` launches and waits within a single invocation. Combined
-stdout and stderr go to stdout so the output is capturable. `jobs run` exits 0
+**Notes:** Plain `jobs run` is foreground: it streams the command's output and
+waits for it within this one invocation, so `jobs list` in a fresh process has
+nothing to show for it — that is expected, not the historical bug. `jobs run
+--background` (alias `--bg`) is the cross-invocation path: the command is
+detached and recorded in a JSON registry under the data dir, so a later,
+separate `jobs list` / `jobs logs <id>` / `jobs kill <id>` can act on it.
+Liveness is re-probed against the real OS process table on every read (a dead
+or reassigned pid is reported as such, never left showing "running" forever).
+`jobs kill` re-verifies the recorded command name and OS-reported process
+start time against the live process immediately before signaling, and refuses
+— does not signal — on any mismatch (pid reuse). Foreground `jobs run`: combined
+stdout and stderr go to stdout so the output is capturable, and it exits 0
 only when the job exited cleanly with code 0.
 
 ---

@@ -767,20 +767,36 @@ both of which survive their CLI-side verifications.
 - **What:** Turn an objective into a verifiable, dependency-ordered task plan.
 - **Surface:** `cmdPlan` `packages/cli/src/commands.ts:1571-1589`; tree renderer
   `renderPlanTree` `commands.ts:1547-1569`.
-- **Inputs:** objective positional/stdin; `--role` (default `planner`, `commands.ts:1579`);
-  everything `agent --role` accepts.
+- **Inputs:** objective positional/stdin; `--role` (default `planner`); `--no-persist`
+  (opt out of persistence, `commands.ts:1940`); everything `agent --role` accepts.
 - **Outputs:** `text` → `plan for: <objective>` then an indented tree with status marks
-  `[ ]` todo, `[~]` in_progress, `[x]` blocked, `[✓]` done, `[-]` cancelled
-  (`commands.ts:1555-1561`), then the agent trailer. `(no tasks drafted)` when the plan is empty.
+  `[ ]` todo, `[~]` in_progress, `[x]` blocked, `[✓]` done, `[-]` cancelled, then — unless
+  `--no-persist` or the plan was empty — a `[plan] persisted N tasks…` stderr line with each
+  created id, then the agent trailer. `(no tasks drafted)` when the plan is empty.
 - **Expected behaviour:**
   - It is `runAgentOoda` with a role default, so every §22 behaviour applies — including
-    `--resume`, the subprocess refusal, and the `:memory:` task store.
-  - **The plan is not persisted.** `renderPlanTree` reads `res.result.plan` from the in-memory
-    store; nothing writes it to the durable `nexus task` store. See **GAPS G3**.
-  - `-o json` prints the agent result JSON (from `runAgentOoda`), not a separate plan document;
-    `-o text` is the only mode that renders the tree (`commands.ts:1582`).
-- **macOS app:** `NOT SURFACED` — the Tasks tab reads `nexus task list`, which `plan` never writes to.
-- **Status:** `UNVERIFIED`
+    `--resume`, the subprocess refusal, and the `:memory:` task store the run itself plans
+    against.
+  - **RESOLVED (was GAPS G3): the settled plan is now persisted into the durable `nexus task`
+    store by default.** `cmdPlan` (`commands.ts:1922`) copies `res.result.plan` out via
+    `persistPlan` (`commands.ts:1902`), which orders tasks so every parent/dependency is created
+    before the task that references it (`orderPlanForPersist`, `commands.ts:1864`) and recreates
+    each with its ORIGINAL id, so `nexus task list` — and the app's Tasks tab — see exactly what
+    was drafted, ids and parent/dependency edges intact. `--no-persist` skips this and only prints
+    the preview (`commands.ts:1940-1952`). The `:memory:` store used during the run itself is
+    unchanged — persistence is a one-time copy-out of the final result, not a change to how the
+    OODA loop plans.
+  - `-o json` prints the agent result JSON (from `runAgentOoda`), not a separate plan document,
+    and does not currently reflect what was persisted (a client wanting the persisted ids under
+    `-o json` should follow with `nexus task list -o json`); `-o text` is the only mode that
+    renders the tree and the persistence confirmation.
+- **macOS app:** `NOT SURFACED` still (the app does not invoke `nexus plan`), but the underlying
+  gap that made it structurally impossible — the Tasks tab reads `nexus task list`, which `plan`
+  now writes to by default — is fixed.
+- **Status:** `VERIFIED (execution pass)` — `nexus plan 'build a login page' -p mock -m mock-tools`
+  followed by a SEPARATE `nexus task list` invocation shows the drafted tasks, ids matching what
+  `plan` printed; `--no-persist` leaves the store empty. Covered by
+  `packages/cli/test/plan-persist.integration.test.ts`.
 
 ## 24. `nexus roles`
 
@@ -1347,31 +1363,64 @@ both of which survive their CLI-side verifications.
 - **Config:** `terminal.*` (`schema.ts:563-586`) — `shell`, `pty` (`auto|child_process|node-pty`),
   `maxOutputBytes` (8 MiB), `historySize` (1000), `maxConcurrentJobs` (8),
   `maxJobRuntimeMs` (10 min).
-- **Subcommands:** `list` (default), `run <command> [args…]`, `history`, `pty`.
+- **Subcommands:** `list` (default), `run [--background|--bg] <command> [args…]`, `logs <id>`,
+  `kill <id>`, `history`, `pty`. `logs` and `kill` are new (fixing GAPS G4, below).
 - **Outputs:**
-  - `run -o text` → the child's output streamed live to stdout, then a stderr
-    `[job] <status> exit=<code>[ signal=…]` line.
-  - `run -o json` → `{id, status, exitCode, signal, output}` with the combined output **buffered**
-    into one field so stdout stays a single valid JSON document (`commands.ts:1816-1839`).
+  - `run -o text` (foreground, no `--background`) → the child's output streamed live to stdout,
+    then a stderr `[job] <status> exit=<code>[ signal=…]` line.
+  - `run -o json` (foreground) → `{id, status, exitCode, signal, output}` with the combined output
+    **buffered** into one field so stdout stays a single valid JSON document.
+  - `run --background -o text` → one stderr confirmation line with the job id (and pid once the
+    registry write is confirmed); `-o json` → `{id, background: true, pid, command, args}`. Returns
+    at once — does NOT wait for the job.
+  - `list` → an array of `{id, pid, command, args, cwd, logFile, startedAt, status, exitCode,
+    signal, endedAt}` (JSON), or one `<id>  [<status>]  pid=<pid>  <command args…>` line per job
+    (text); `[]` / `no background jobs` when the registry is empty.
+  - `logs <id>` → the job's captured combined stdout+stderr (`text`), or `{id, status, exitCode,
+    log}` (`json`); exit `1` with `no background job "<id>"` if the id is unknown.
+  - `kill <id>` → `[job] <id> killed` / `{id, ok: true, status: "killed"}` on success; exit `1` with
+    a clear reason (not found / not running / identity mismatch — see below) otherwise.
   - `history` → the last **20** entries as `<command> <args…>  exit=<code>`, or `[]` / `no command
     history`.
   - `pty` → `{available, implementation}` / `pty: node-pty available (interactive shell)` |
     `child_process fallback (no native pty)`.
-  - `run` exits `0` only when the job `exited` with code `0`.
+  - Foreground `run` exits `0` only when the job `exited` with code `0`.
 - **Expected behaviour:**
-  - **`jobs list` always reports nothing.** Jobs are tracked per-process by the `ProcessManager`, and
-    a fresh CLI invocation has none — the command returns `[]` / `no background jobs`
-    unconditionally (`commands.ts:1796-1801`). It is a truthful statement about a
-    per-invocation manager, not a query. See **GAPS G4**.
+  - **RESOLVED (was GAPS G4): `jobs list` is no longer structurally empty.** `run --background`
+    (alias `--bg`) is a new opt-in that detaches the command via the same self-relaunch idiom as
+    `index --background` (`process.execPath` re-invoking the same CLI entry, `detached: true` +
+    `unref()`, an env marker so the re-launched process does the real work instead of forking
+    again) and records it in a durable JSON registry under the data dir
+    (`packages/cli/src/jobs-registry.ts`, `jobsRegistryFile()`). `list`, `logs`, and `kill` read
+    that registry, so a job started by one invocation is now genuinely visible, pollable, and
+    killable from a later, separate one. Plain `run` (no `--background`) is UNCHANGED —
+    still foreground, still per-process, and correctly shows nothing in a fresh `jobs list`
+    afterward (it already finished; that was never the bug).
+  - **Liveness is re-probed on every read, never trusted from the last write.** `JobRegistry.list()`
+    / `getProbed()` check the real OS process table (`process.kill(pid, 0)`) for any record still
+    marked `"running"`; a dead or reassigned pid is reported `"gone"` instead of staying `"running"`
+    forever.
+  - **`kill` re-verifies identity before ever signaling.** `verifyIdentity()` requires BOTH the
+    live process's command name (`ps -o comm=`) AND its OS-reported start time (`ps -o lstart=`,
+    within a 2-minute tolerance) to match what was recorded at spawn; either mismatch makes `kill`
+    refuse outright with `refusing to signal pid … — … likely pid reuse`, exit `1`, and it does
+    NOT send a signal. This is deliberate: a broad/unverified pid match has previously killed an
+    unrelated process on the dev box this was built on, and `killJob()` exists specifically to make
+    that impossible for this command.
   - `run` takes everything after `run` (past an optional `--`) as argv; empty ⇒ exit `2`.
-  - Each completed job is appended to `CommandHistory` with command, args, cwd and exit code
-    (`commands.ts:1824-1829`).
+  - Each completed **foreground** job is appended to `CommandHistory` with command, args, cwd and
+    exit code; a `--background` job is not (it is tracked in the job registry instead).
   - The PTY seam is **feature-detected**, never assumed: `node-pty` when present, `child_process`
-    otherwise (`commands.ts:1863-1876`).
-  - Background-job *tools* (`jobTools`) are registered only on the OODA path
-    (`commands.ts:1339-1340`), not the plain `agent` loop.
+    otherwise.
+  - Background-job *tools* (`jobTools`) are registered only on the OODA path, not the plain `agent`
+    loop — unrelated to `jobs run --background` (that is CLI-level cross-invocation persistence;
+    `jobTools` is the in-run tool the agent itself calls, still per-run/in-memory).
 - **macOS app:** `NOT SURFACED`.
-- **Status:** `UNVERIFIED`
+- **Status:** `VERIFIED (execution pass)` — `nexus jobs run --bg -- <command>` in one invocation,
+  followed by SEPARATE `nexus jobs list` / `nexus jobs logs <id>` / `nexus jobs kill <id>`
+  invocations, all behave as documented; a hand-crafted registry entry pointing an unrelated id at
+  a real, live, but non-matching pid is refused by `kill` (identity check exercised directly, not
+  just asserted). Covered by `packages/cli/test/jobs-background.integration.test.ts`.
 
 ## 40. `nexus memory` — durable memory
 
@@ -2506,7 +2555,7 @@ both of which survive their CLI-side verifications.
 | `consensus` | §51 | `NOT SURFACED` |
 | `chain` | §52 | `NOT SURFACED` |
 | `route` (`explain`/`test`) | §16 | `NOT SURFACED` |
-| `plan` | §23 | `NOT SURFACED` (and the plan is not persisted → G3) |
+| `plan` | §23 | `NOT SURFACED` (persistence gap → G3 is now RESOLVED; the app still never calls `plan`) |
 | `index` / `search` (RAG) | §43 | `NOT SURFACED` |
 | `memory` | §40 | `NOT SURFACED` |
 | `doctor` | §65 | `NOT SURFACED` → G6 |
@@ -2557,26 +2606,38 @@ evidence and proposes a design.
   subtitle and **warn on any `permissionMode` other than `read-only`** — that field exists precisely
   so a client can warn before running a role that can write files.
 
-### G3. `nexus plan` produces a plan that is thrown away
-- **Evidence:** `runAgentOoda` opens a `:memory:` TaskStore (`packages/cli/src/commands.ts` → `runAgentOoda`'s `openTasks({ file: ":memory:" })`); `cmdPlan` renders
-  `res.result.plan` (`packages/cli/src/commands.ts` → `cmdPlan`'s `renderPlanTree(res.result.plan, io)`) and returns. Nothing writes to the durable store that
-  `nexus task list` reads (`packages/cli/src/commands.ts` → `openTaskStore`).
-- **Consequence:** `nexus plan 'build X'` then `nexus task list` shows nothing. The app's Tasks tab
-  can never show a generated plan.
-- **Design:** add `nexus plan --persist` (or make persistence the default with `--no-persist`) that
-  writes the drafted tasks into the durable store with their parent/deps intact, printing the created
-  ids. Keep the `:memory:` store for the *run*; copy the settled plan out at the end.
+### G3. `nexus plan` produces a plan that is thrown away — **RESOLVED**
+- **Original evidence:** `runAgentOoda` opens a `:memory:` TaskStore; `cmdPlan` rendered
+  `res.result.plan` and returned. Nothing wrote to the durable store that `nexus task list` reads.
+- **Consequence (was):** `nexus plan 'build X'` then `nexus task list` showed nothing. The app's
+  Tasks tab could never show a generated plan.
+- **Fix shipped:** persistence is now the default. `cmdPlan` (`packages/cli/src/commands.ts:1922`)
+  copies the settled `res.result.plan` into the durable store via `persistPlan`
+  (`commands.ts:1902`), which orders tasks with `orderPlanForPersist` (`commands.ts:1864`) so every
+  parent/dependency is created before whatever references it, and recreates each task with its
+  ORIGINAL id (parent/dep edges intact) — a client that already has an id from the plan output can
+  look it up directly, no re-mapping. `--no-persist` opts out for a preview-only run. The
+  `:memory:` store the OODA run itself plans against is unchanged. See §23 above and
+  `packages/cli/test/plan-persist.integration.test.ts`.
 
-### G4. `nexus jobs list` is structurally incapable of listing anything
-- **Evidence:** `commands.ts` → `cmdJobs`'s `sub === "list"` branch returns `[]` / `no background jobs` unconditionally, with a
-  comment explaining that jobs are per-process and a fresh invocation has none.
-- **Consequence:** the "background jobs" capability has no cross-invocation existence. A job started
-  by `jobs run` cannot be listed, polled, or killed from another invocation.
-- **Design:** either (a) persist a job registry (pid + metadata) under the data dir so `list`,
-  `logs <id>` and `kill <id>` are real across invocations, with liveness re-probed on read; or
-  (b) if per-process is the intended scope, rename the subcommand and make the message say so
-  explicitly ("background jobs are scoped to one invocation; use `jobs run`"). Silently returning an
-  empty list for a command named `list` is the current failure.
+### G4. `nexus jobs list` is structurally incapable of listing anything — **RESOLVED**
+- **Original evidence:** `cmdJobs`'s `sub === "list"` branch returned `[]` / `no background jobs`
+  unconditionally, with a comment explaining that jobs are per-process and a fresh invocation has
+  none.
+- **Consequence (was):** the "background jobs" capability had no cross-invocation existence. A job
+  started by `jobs run` could not be listed, polled, or killed from another invocation.
+- **Fix shipped:** option (a) from the original design. `jobs run --background` (alias `--bg`) is a
+  new opt-in that detaches the command (self-relaunch via `process.execPath`, same idiom as `index
+  --background`) and records it in a durable JSON registry under the data dir
+  (`packages/cli/src/jobs-registry.ts`). `list`, the new `logs <id>`, and the new `kill <id>` read
+  that registry from any invocation, with liveness re-probed against the real OS process table on
+  every read (never left showing `"running"` once the process is actually gone). `kill`
+  additionally re-verifies the recorded command name AND OS-reported process start time against the
+  live process immediately before signaling and refuses outright on any mismatch — the safety rule
+  the original design flagged as required, given this box's prior incident with an unverified pid
+  match. Plain `jobs run` (no `--background`) is unchanged: still foreground, still per-process,
+  and correctly shows nothing in a fresh `jobs list` afterward. See §39 above and
+  `packages/cli/test/jobs-background.integration.test.ts`.
 
 ### G5. Mid-conversation provider switch degrades to a fresh process plus text-only resume
 - **Evidence:** `AppState.swift:333-336` (`submit`) tears the live session down on any provider/model/role

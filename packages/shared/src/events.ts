@@ -49,7 +49,26 @@ export type StreamChunk =
   | ({ type: "file-edit"; runId: string; path: string; diff: string; status: "proposed" | "applied" | "cancelled"; approvalId?: string } & RawCarrier)
   | ({ type: "approval-request"; runId: string; approvalId: string; kind: "file" | "shell" | "tool"; detail: unknown } & RawCarrier)
   | ({ type: "usage"; runId: string; usage: Partial<Usage> } & RawCarrier)
-  | ({ type: "run-end"; runId: string; finishReason: FinishReason; message: Message; usage?: Usage; providerSessionId?: string; ts: number } & RawCarrier)
+  | ({
+      type: "run-end";
+      runId: string;
+      finishReason: FinishReason;
+      message: Message;
+      /**
+       * The full intra-run tool-use exchange (assistant tool-call messages
+       * interleaved with their `role: "tool"` results, ending in `message`
+       * itself) for an agentic run that looped through one or more tool
+       * calls. Absent for a plain run and for every non-agentic orchestration
+       * primitive — only `dispatchAgent`'s loop populates it. Callers that
+       * persist conversation history should append this instead of
+       * synthesizing a single reply message from `message`/`text` alone, or
+       * every tool call and result in between is silently dropped.
+       */
+      toolExchange?: Message[];
+      usage?: Usage;
+      providerSessionId?: string;
+      ts: number;
+    } & RawCarrier)
   | ({ type: "error"; runId: string; error: AdapterError; retryable: boolean } & RawCarrier);
 
 export type StreamChunkType = StreamChunk["type"];

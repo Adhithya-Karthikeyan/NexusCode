@@ -653,6 +653,7 @@ function makeLaneBuilder(spec: RunSpec, runId: string): LaneBuilder {
   let finishReason: FinishReason | undefined;
   let error: AdapterError | undefined;
   let sawTerminal = false;
+  let toolExchange: Message[] | undefined;
 
   const statusFor = (fr: FinishReason): RunStatus =>
     fr === "cancelled" ? "cancelled" : fr === "error" ? "error" : "ok";
@@ -692,6 +693,7 @@ function makeLaneBuilder(spec: RunSpec, runId: string): LaneBuilder {
           finishReason = chunk.finishReason;
           if (chunk.usage) mergeUsage(usage, chunk.usage);
           status = statusFor(chunk.finishReason);
+          if (chunk.toolExchange && chunk.toolExchange.length > 0) toolExchange = chunk.toolExchange;
           break;
         case "error":
           sawTerminal = true;
@@ -728,6 +730,7 @@ function makeLaneBuilder(spec: RunSpec, runId: string): LaneBuilder {
       };
       if (finishReason !== undefined) result.finishReason = finishReason;
       if (error !== undefined) result.error = error;
+      if (toolExchange !== undefined) result.toolExchange = toolExchange;
       return result;
     },
   };
@@ -1796,6 +1799,14 @@ async function* agentStream(
   // the sum of turns rather than one call.
   const turnUsages: Usage[] = [];
 
+  // Every message this run generates across the tool loop — each turn's
+  // assistant (tool-call) message followed by its tool results — ending in
+  // the final terminal assistant message. Attached to the terminal `run-end`
+  // chunk so callers persisting history get the whole exchange, not just the
+  // last reply text. Stays empty (and is never attached) for a run that never
+  // loops through a tool call, so a plain run's `run-end` is unchanged.
+  const toolExchange: Message[] = [];
+
   for (let turn = 0; turn < opts.maxTurns; turn++) {
     if (scope.signal.aborted) {
       yield cancelledChunk(runId);
@@ -2105,17 +2116,23 @@ async function* agentStream(
       // so both the streamed chunk and the lane builder see the full total.
       const total = turnUsages.length > 0 ? sumUsage(turnUsages) : undefined;
       if (total) yield { type: "usage", runId, usage: total };
+      const finalMessage = assistantMessage ?? { role: "assistant", content: [] };
+      // A prior turn looped through tool calls: the exchange isn't done yet
+      // without this turn's own final reply appended after it.
+      if (toolExchange.length > 0) toolExchange.push(finalMessage);
       if (heldRunEnd) {
-        yield total ? { ...heldRunEnd, usage: total } : heldRunEnd;
+        const withUsage = total ? { ...heldRunEnd, usage: total } : heldRunEnd;
+        yield toolExchange.length > 0 ? { ...withUsage, toolExchange: [...toolExchange] } : withUsage;
       } else {
         const end: Extract<StreamChunk, { type: "run-end" }> = {
           type: "run-end",
           runId,
           finishReason: "stop",
-          message: assistantMessage ?? { role: "assistant", content: [] },
+          message: finalMessage,
           ts: Date.now(),
         };
         if (total) end.usage = total;
+        if (toolExchange.length > 0) end.toolExchange = [...toolExchange];
         yield end;
       }
       // Mark the terminal turn-end boundary (no tools → this turn ends the run).
@@ -2181,6 +2198,8 @@ async function* agentStream(
     messages = assistantMessage
       ? [...messages, assistantMessage, ...toolMessages]
       : [...messages, ...toolMessages];
+    if (assistantMessage) toolExchange.push(assistantMessage);
+    toolExchange.push(...toolMessages);
     // A tool-using provider turn is complete even though the overall agent run
     // continues. Close it before opening the next boundary so recovery sees
     // properly paired turns. The final iteration is closed by the max-turns
@@ -2199,14 +2218,20 @@ async function* agentStream(
   // accumulated usage from every completed turn.
   const total = turnUsages.length > 0 ? sumUsage(turnUsages) : undefined;
   if (total) yield { type: "usage", runId, usage: total };
+  const maxTurnsMessage: Message = {
+    role: "assistant",
+    content: [{ type: "text", text: "[agent] max turns reached" }],
+  };
   const end: Extract<StreamChunk, { type: "run-end" }> = {
     type: "run-end",
     runId,
     finishReason: "length",
-    message: { role: "assistant", content: [{ type: "text", text: "[agent] max turns reached" }] },
+    message: maxTurnsMessage,
     ts: Date.now(),
   };
   if (total) end.usage = total;
+  toolExchange.push(maxTurnsMessage);
+  end.toolExchange = [...toolExchange];
   // Mark the final turn-end boundary (maxTurns exhausted → synthesized terminal).
   if (transfer) {
     try {

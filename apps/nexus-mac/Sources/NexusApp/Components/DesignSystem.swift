@@ -511,6 +511,150 @@ extension HeroEmptyState where Actions == EmptyView {
     }
 }
 
+/// The "nothing to show yet, actively loading" moment.
+///
+/// Before this, four feature views (`SessionsView`, `GitView`,
+/// `IntegrationsView`, and `TasksView`) each hand-rolled the identical
+/// `ProgressView` + caption pair, differing only in the message string, and
+/// `AuthView` rolled a FIFTH, compact variant for the one spot that shares
+/// its frame with a pinned error banner rather than owning the whole screen.
+/// Same visual language either way — this is that same "waiting on a
+/// `nexus` process" moment, not a different one, so `.inline` changes
+/// layout density only, never font or colour.
+struct LoadingState: View {
+    @Environment(\.nexusTheme) private var theme
+    let message: String
+    var style: Style = .fullPage
+
+    enum Style {
+        /// Centred, fills the container — the screen's ENTIRE content
+        /// before anything has loaded. Mirrors `HeroEmptyState`'s own
+        /// full-page convention so a screen never has to pick between two
+        /// different "nothing here" idioms depending on why there's nothing.
+        case fullPage
+        /// A compact single row for a spot already sharing space with other
+        /// chrome (e.g. pinned below an `InlineBanner`) — no `Spacer`s
+        /// claiming the whole frame.
+        case inline
+    }
+
+    private var caption: some View {
+        Text(message)
+            .font(Kind.caption)
+            .foregroundStyle(theme.color(\.textMuted))
+    }
+
+    var body: some View {
+        switch style {
+        case .fullPage:
+            VStack(spacing: Space.sm) {
+                ProgressView()
+                caption
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .inline:
+            HStack(spacing: Space.sm) {
+                ProgressView().controlSize(.small)
+                caption
+            }
+        }
+    }
+}
+
+/// A caveat shown ABOVE still-usable content — never instead of it. The one
+/// shared shape for "something didn't work, but here's what's still true": a
+/// background refresh that failed, an add/save/sign-out that didn't take.
+///
+/// Before this, four feature views each rolled their own version — three
+/// `warning`-toned, one (`AuthView`) `error`-toned for what was functionally
+/// the identical situation, and only one of the four had a dismiss control
+/// at all. `IntegrationsView` even said outright it was duplicating
+/// `TasksView`'s copy "rather than adding a shared type this task isn't
+/// scoped to touch" — this is that type.
+///
+/// `onDismiss` is REQUIRED, not optional: every real call site this replaces
+/// is the same "informational, retryable" shape — real content is already on
+/// screen underneath, so nothing is ever blocked on this banner, and leaving
+/// dismiss optional is exactly how three of the four call sites quietly
+/// ended up without one. A state that genuinely blocks the user (nothing
+/// loaded at all) is a structurally different shape — see `ErrorState`
+/// below, which has no dismiss because there is nothing left to reveal by
+/// dismissing it.
+struct InlineBanner: View {
+    @Environment(\.nexusTheme) private var theme
+    let message: String
+    var tone: Tone = .warning
+    let onDismiss: () -> Void
+
+    enum Tone { case warning, error }
+
+    private var colors: (fg: Color, bg: Color) {
+        switch tone {
+        case .warning: return (theme.color(\.warningFg), theme.color(\.warningBg))
+        case .error: return (theme.color(\.errorFg), theme.color(\.errorBg))
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Space.sm) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 10))
+                .accessibilityHidden(true)
+            Text(message)
+                .font(Kind.caption)
+                .lineLimit(2)
+            Spacer(minLength: Space.sm)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .foregroundStyle(colors.fg)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
+        .background(colors.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+    }
+}
+
+/// The "nothing loaded at all, and here's why" moment — replaces a screen's
+/// ENTIRE content when the very first load failed. Unlike `InlineBanner`
+/// there is no other content underneath to look at, so unlike that type this
+/// is STICKY by construction, not a policy choice: dismissing a blank page
+/// would just leave a blanker one. Resolved only by `retry` succeeding.
+///
+/// Before this, `TasksView` and `SessionsView` each hand-rolled the identical
+/// icon + message + Retry button, one of the two missing the hero padding
+/// `HeroEmptyState` (the state this sits beside, for the same "nothing to
+/// show" moment for a different reason) already uses.
+struct ErrorState: View {
+    @Environment(\.nexusTheme) private var theme
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: Space.sm) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 26, weight: .light))
+                .foregroundStyle(theme.color(\.errorFg))
+                // The message text right below already says what's wrong —
+                // this glyph is decoration, not a second, unlabeled thing to
+                // announce.
+                .accessibilityHidden(true)
+            Text(message)
+                .font(Kind.body)
+                .foregroundStyle(theme.color(\.textSecondary))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+            Button("Retry", action: retry)
+                .buttonStyle(SoftButton(tone: .accent))
+        }
+        .padding(Space.xxl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 /// The standard page shell: a header that never scrolls away, and a body
 /// that fills every bit of the remaining height.
 ///

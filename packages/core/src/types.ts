@@ -73,6 +73,14 @@ export interface RunResult {
   usage: Usage;
   finishReason?: FinishReason;
   error?: AdapterError;
+  /**
+   * The full intra-run tool-use exchange, carried over from the terminal
+   * `run-end` chunk's `toolExchange` (see `@nexuscode/shared`'s `StreamChunk`
+   * doc). Only populated for an agentic run that actually looped through
+   * tool calls; a caller building conversation history from a `RunResult`
+   * should prefer this over synthesizing a single message from `text`.
+   */
+  toolExchange?: Message[];
 }
 
 export interface Run {

@@ -76,8 +76,16 @@ private struct AuthContent: View {
         // of the window instead of top-aligning inside a `ScrollView`, which
         // is what let "No providers found" float with a dead void beneath it.
         VStack(alignment: .leading, spacing: 0) {
+            // Dismissible: whatever provider list is already loaded below
+            // (or the empty/loading state) stays exactly as valid either
+            // way — see `InlineBanner`'s doc for why that's unconditional.
+            // `.warning`, not `.error`: every one of `AuthController.error`'s
+            // sources (a failed refresh, a failed key save, a failed sign
+            // out) is retryable, none is a state the user is blocked on —
+            // the same shape `SessionsView`/`IntegrationsView` already use
+            // this tone for, not a harder failure that earns the alarm colour.
             if let error = controller.error {
-                ErrorBanner(message: error)
+                InlineBanner(message: error, tone: .warning) { controller.error = nil }
                     .padding(.horizontal, Space.xl)
                     .padding(.top, Space.xl)
                     .padding(.bottom, Space.sm)
@@ -85,12 +93,7 @@ private struct AuthContent: View {
 
             Group {
                 if controller.isLoading && controller.providers.isEmpty {
-                    HStack(spacing: Space.sm) {
-                        ProgressView().controlSize(.small)
-                        Text("Loading auth status…")
-                            .font(Kind.body)
-                            .foregroundStyle(theme.color(\.textMuted))
-                    }
+                    LoadingState(message: "Loading auth status…", style: .inline)
                 } else if controller.providers.isEmpty {
                     HeroEmptyState(
                         icon: "person.badge.key",
@@ -440,25 +443,5 @@ private struct KindBadge: View {
         .padding(.vertical, 1.5)
         .background(theme.color(\.surfaceOverlay), in: Capsule())
         .foregroundStyle(theme.color(\.textMuted))
-    }
-}
-
-private struct ErrorBanner: View {
-    @Environment(\.nexusTheme) private var theme
-    let message: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: Space.sm) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(theme.color(\.errorFg))
-                .accessibilityHidden(true)
-            Text(message)
-                .font(Kind.caption)
-                .foregroundStyle(theme.color(\.textSecondary))
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(Space.md)
-        .background(theme.color(\.errorBg), in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 }
