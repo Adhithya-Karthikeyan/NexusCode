@@ -76,16 +76,15 @@ describe("history — durable transcript (storePrompts)", () => {
   });
 
   it("still decodes a pre-existing bare ContentBlock[] row (written before toolCallId was persisted)", async () => {
+    // Simulate a row written by the OLD encoding — JSON.stringify(content)
+    // directly, with no {content, toolCallId, name} envelope — by inserting it
+    // straight through the raw db handle, unencrypted; decodeTranscript treats
+    // any value not prefixed "enc:v1:" as plaintext, so this is realistic for
+    // a pre-encryption-default row too.
     const dbPath = tmpDbPath();
-    const store = await openHistory({ enabled: true, dbPath, storePrompts: true });
-    try {
-      // Simulate a row written by the OLD encoding (JSON.stringify(content)
-      // directly, no {content, toolCallId, name} envelope) by inserting through
-      // the same appendTranscript path is impossible post-fix, so reach past it
-      // via the raw db handle the way the encryption test below does.
-    } finally {
-      store.close();
-    }
+    // Create the schema first (openHistory runs `CREATE TABLE IF NOT EXISTS`
+    // on open) — a bare db file has no turn_message table to insert into yet.
+    (await openHistory({ enabled: true, dbPath, storePrompts: true })).close();
     const { default: Database } = (await import("better-sqlite3")) as unknown as {
       default: new (path: string) => {
         prepare(sql: string): { run(...args: unknown[]): unknown };
