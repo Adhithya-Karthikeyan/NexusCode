@@ -142,6 +142,7 @@ export type NexusErrorCode =
   | "secret_not_found"
   | "secret_backend"
   | "invalid_argument"
+  | "timeout"
   | "internal";
 
 export interface NexusErrorOptions {

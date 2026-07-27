@@ -58,6 +58,30 @@ describe("dispatch — single", () => {
     await engine.dispose();
   });
 
+  it("a genuinely free run (mock's self-reported costUsd: 0) survives lane accumulation as $0, not unpriced", async () => {
+    // Regression: `mergeUsage` in orchestrator.ts used to merge every `Usage`
+    // field EXCEPT `costUsd`, so the mock adapter's own `costUsd: 0` (real,
+    // not a guess — the run genuinely cost nothing) was silently dropped.
+    // With no `DEFAULT_PRICING`/config entry for "mock-fast" either, the lane
+    // fell through to `costUsd: undefined` — indistinguishable from a real
+    // paid call with unknown pricing, exactly the confusion the cost-honesty
+    // fix (see `@nexuscode/core`'s `projection.ts`) exists to prevent.
+    const { engine, ctx } = await setup();
+    const { ctx: runCtx, input } = await ctx();
+
+    const handle = dispatch(
+      { kind: "single", run: { adapterId: "mock", model: "mock-fast", input, idempotencyKey: "k1b" } },
+      runCtx,
+    );
+    await drain(handle.events());
+    const outcome = await handle.outcome();
+
+    expect(outcome.winner?.usage.costUsd).toBe(0);
+    expect(outcome.winner?.usage.costUsd).not.toBeUndefined();
+
+    await engine.dispose();
+  });
+
   it("settles (not throws) when the target adapter is unknown", async () => {
     const { engine, ctx } = await setup();
     const { ctx: runCtx, input } = await ctx();

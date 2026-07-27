@@ -626,6 +626,14 @@ function mergeUsage(target: Usage, partial: Partial<Usage>): void {
   if (partial.cacheWriteTokens != null) target.cacheWriteTokens = partial.cacheWriteTokens;
   if (partial.reasoningTokens != null) target.reasoningTokens = partial.reasoningTokens;
   if (partial.reportedCostUsd != null) target.reportedCostUsd = partial.reportedCostUsd;
+  // A provider that computes its OWN definitive cost (the mock adapter reports a
+  // real `costUsd: 0` — it is not a guess, the run genuinely cost nothing) must
+  // survive lane accumulation. Without this line `finish()` below only ever sees
+  // `costUsd` via the pricing table or `reportedCostUsd`, so a self-priced free
+  // provider with no `DEFAULT_PRICING`/config entry for its model id fell through
+  // to "unpriced" — indistinguishable from a real paid call with unknown pricing,
+  // which is exactly the confusion this cost-honesty fix exists to prevent.
+  if (partial.costUsd != null) target.costUsd = partial.costUsd;
 }
 
 interface LaneBuilder {

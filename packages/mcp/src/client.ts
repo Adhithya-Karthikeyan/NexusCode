@@ -81,6 +81,62 @@ export interface McpRequestOptions {
 const CLIENT_INFO = { name: "nexuscode", version: "0.0.0" } as const;
 
 /**
+ * Bound for the connect + `initialize` handshake when a server declares no
+ * `timeoutMs` of its own. The MCP SDK already applies its own 60s default to
+ * the `initialize` REQUEST once the transport is up, but that leaves the
+ * transport's own startup (spawning a stdio child, opening a socket) — which
+ * happens BEFORE any request-level timeout is even armed — completely
+ * unbounded. A stdio server that spawns but stalls before speaking MCP (a
+ * slow cold start, or one blocked acquiring a lock held by another already-
+ * running instance of itself) would otherwise hang the whole command
+ * forever with no output. `McpClient.connectTransport` below races the
+ * ENTIRE connect (transport start + handshake) against this bound via
+ * `withTimeout`, regardless of which layer stalls.
+ */
+export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+
+/**
+ * Race `work` against `ms`; on timeout, AWAIT `onTimeout` (cleanup — e.g.
+ * closing a half-connected client so a stalled child is not leaked) before
+ * rejecting with a clear, actionable error instead of hanging.
+ *
+ * `onTimeout` is awaited, not fire-and-forget: an earlier version fired it
+ * without waiting, which let the caller's process exit (or the caller move
+ * on) before the underlying `StdioClientTransport.close()`'s SIGTERM→SIGKILL
+ * sequence finished — silently leaking the stalled child forever instead of
+ * ending it. That is the exact failure this whole timeout exists to prevent,
+ * just moved one layer down. `onTimeout` itself must never be able to hang —
+ * `McpClient.connectTransport` passes `client.close()`, which already bounds
+ * itself to a few seconds even in the worst case (SDK-internal).
+ */
+function withTimeout<T>(work: Promise<T>, ms: number, onTimeout: () => Promise<void>, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      void onTimeout()
+        .catch(() => undefined)
+        .then(() => reject(new NexusError("timeout", message)));
+    }, ms);
+    work.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
  * Resolve a declared server config into a live SDK `Transport`, resolving any
  * auth refs through the `SecretResolver`. Exported for tests and for callers
  * that want to build a transport without the full client lifecycle.
@@ -167,6 +223,9 @@ export class McpClient {
   private readonly config: McpServerConfig | undefined;
   private readonly secrets: SecretResolver | undefined;
   private readonly trustServerAnnotations: boolean;
+  // Only set via `withTransport`'s `opts.timeoutMs` — a full `config.timeoutMs`
+  // covers the normal (declared-server) construction path.
+  private readonly explicitTimeoutMs: number | undefined;
   private connected = false;
 
   constructor(config: McpServerConfig, secrets?: SecretResolver) {
@@ -181,8 +240,12 @@ export class McpClient {
    * Alternate ctor for a caller that already holds a `Transport` (tests,
    * in-proc). `opts.trustAnnotations` mirrors `McpServerConfig.trustAnnotations`
    * for callers that build a client without a full config; defaults to `false`.
+   * `opts.timeoutMs` overrides the connect timeout the same way a declared
+   * server's `config.timeoutMs` would — mainly so tests can exercise a bounded
+   * connect against an unresponsive in-process peer without waiting out
+   * `DEFAULT_CONNECT_TIMEOUT_MS`.
    */
-  static withTransport(name: string, opts?: { trustAnnotations?: boolean }): McpClient {
+  static withTransport(name: string, opts?: { trustAnnotations?: boolean; timeoutMs?: number }): McpClient {
     const c = Object.create(McpClient.prototype) as McpClient;
     Object.assign(c, {
       name,
@@ -191,6 +254,7 @@ export class McpClient {
       secrets: undefined,
       connected: false,
       trustServerAnnotations: opts?.trustAnnotations ?? false,
+      explicitTimeoutMs: opts?.timeoutMs,
     });
     return c;
   }
@@ -210,7 +274,7 @@ export class McpClient {
   }
 
   private timeout(opts?: McpRequestOptions): number | undefined {
-    return opts?.timeoutMs ?? this.config?.timeoutMs;
+    return opts?.timeoutMs ?? this.config?.timeoutMs ?? this.explicitTimeoutMs;
   }
 
   private reqOptions(opts?: McpRequestOptions): { signal?: AbortSignal; timeout?: number } {
@@ -232,7 +296,18 @@ export class McpClient {
 
   /** Connect over a caller-supplied transport (in-process / stdio / remote). */
   async connectTransport(transport: Transport): Promise<void> {
-    await this.client.connect(transport);
+    const ms = this.timeout() ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    await withTimeout(
+      this.client.connect(transport, { timeout: ms }),
+      ms,
+      // Awaited by `withTimeout` before it rejects: drop the half-connected
+      // client so a stalled spawned child/socket is actually killed (the SDK's
+      // stdio transport SIGTERMs then SIGKILLs it) rather than merely
+      // abandoned to run forever. Never lets a broken close() re-hang us —
+      // `withTimeout` still settles even if this rejects.
+      () => this.client.close().catch(() => undefined),
+      `mcp "${this.name}": connect timed out after ${ms}ms (server did not complete the MCP handshake in time)`,
+    );
     this.connected = true;
   }
 
@@ -381,22 +456,23 @@ export class McpClientManager {
   /**
    * Connect every registered server whose config is `enabled`. Returns per-server
    * outcomes so one unreachable server does not abort the rest (graceful).
+   *
+   * Connects run CONCURRENTLY, each individually bounded (see `connectTransport`'s
+   * `withTimeout`): a stalled server costs at most its own timeout, never the sum
+   * of every server's timeout, and never blocks another server's connect.
    */
   async connectAll(): Promise<{ name: string; ok: boolean; error?: unknown }[]> {
-    const results: { name: string; ok: boolean; error?: unknown }[] = [];
-    for (const client of this.clients.values()) {
-      if (client.isConnected()) {
-        results.push({ name: client.name, ok: true });
-        continue;
-      }
-      try {
-        await client.connect();
-        results.push({ name: client.name, ok: true });
-      } catch (error) {
-        results.push({ name: client.name, ok: false, error });
-      }
-    }
-    return results;
+    const clients = [...this.clients.values()];
+    const settled = await Promise.allSettled(
+      clients.map(async (client) => {
+        if (!client.isConnected()) await client.connect();
+      }),
+    );
+    return settled.map((outcome, i) => {
+      const client = clients[i]!;
+      if (outcome.status === "fulfilled") return { name: client.name, ok: true };
+      return { name: client.name, ok: false, error: outcome.reason };
+    });
   }
 
   /** Dynamic discovery: list every tool from every connected server. */

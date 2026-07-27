@@ -22,12 +22,29 @@ export interface NexusPaths {
   secretsFile: string;
 }
 
+/**
+ * `NEXUS_CONFIG_DIR` / `NEXUS_DATA_DIR` / `NEXUS_CACHE_DIR` redirect the
+ * respective directory wholesale — the same env vars a dozen call sites
+ * across the CLI already check ad hoc (`env.NEXUS_DATA_DIR ?? nexusPaths().data`
+ * in enterprise/extensions/reliability/power, `@nexuscode/{tasks,memory,rag}`'s
+ * own `paths.ts`). Resolving them HERE, once, means every consumer of the
+ * derived `historyDb`/`secretsFile` — which previously had no override seam of
+ * their own and fell straight through to the real machine-wide path even when
+ * the caller had clearly asked for an isolated data dir — is covered too, with
+ * no per-call-site change required. Read fresh per call (not memoized with the
+ * `envPaths()` result above) so a caller that sets the env var before its
+ * first real use — every integration test spawns a fresh process, but a
+ * same-process caller could set it just as easily — sees it take effect.
+ */
 export function nexusPaths(): NexusPaths {
+  const config = process.env["NEXUS_CONFIG_DIR"] || paths.config;
+  const data = process.env["NEXUS_DATA_DIR"] || paths.data;
+  const cache = process.env["NEXUS_CACHE_DIR"] || paths.cache;
   return {
-    config: paths.config,
-    data: paths.data,
-    cache: paths.cache,
-    historyDb: join(paths.data, "history.db"),
-    secretsFile: join(paths.data, "secrets.enc.json"),
+    config,
+    data,
+    cache,
+    historyDb: join(data, "history.db"),
+    secretsFile: join(data, "secrets.enc.json"),
   };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { McpClientManager, McpClient } from "../src/index.js";
+import { McpClientManager, McpClient, parseMcpServerConfig } from "../src/index.js";
 import { startHarness, buildTestMcpServer, type Harness } from "./harness.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
@@ -69,6 +69,69 @@ describe("McpClient over an in-process server", () => {
     const client = McpClient.withTransport("orphan");
     await expect(client.listTools()).rejects.toThrow(/not connected/);
   });
+});
+
+describe("connect timeout (never hang on an unresponsive server — regression for the silent-hang bug)", () => {
+  it("a stalled handshake fails fast with a clear error instead of hanging forever", async () => {
+    // The client half of a linked in-memory pair whose peer is deliberately
+    // never `.connect()`-ed — nothing will ever answer the `initialize`
+    // request. This stands in for a real stdio server that spawns but stalls
+    // before speaking MCP (a slow cold start, or one blocked acquiring a lock
+    // already held by another running instance of itself — see
+    // DEFAULT_CONNECT_TIMEOUT_MS in client.ts). Before the fix this hung the
+    // whole CLI command indefinitely with zero output.
+    const [clientTransport] = InMemoryTransport.createLinkedPair();
+    const client = McpClient.withTransport("stalled", { timeoutMs: 50 });
+
+    const started = Date.now();
+    await expect(client.connectTransport(clientTransport)).rejects.toThrow(/timed out/);
+    // Generous margin over the 50ms configured timeout — the point is "did
+    // not hang", not exact timing.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(client.isConnected()).toBe(false);
+  }, 10_000);
+
+  it("connectAll bounds a stalled real subprocess and still reports the rest — never the sum of every server's timeout", async () => {
+    const mgr = new McpClientManager();
+    // A real child process that spawns successfully but never speaks a word
+    // of MCP — the exact "spawned but stalled" shape a hung local server
+    // takes. `resolveTransport`/`StdioClientTransport` genuinely spawn this.
+    mgr.add(
+      parseMcpServerConfig({
+        name: "stalled-subprocess",
+        transport: "stdio",
+        command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1_000_000)"],
+        timeoutMs: 300,
+      }),
+    );
+    // A server that fails immediately (ENOENT) — must not be delayed behind
+    // the stalled one if connects genuinely run concurrently.
+    mgr.add(
+      parseMcpServerConfig({
+        name: "unreachable",
+        transport: "stdio",
+        command: "definitely-not-a-real-binary-xyz",
+        timeoutMs: 300,
+      }),
+    );
+
+    const started = Date.now();
+    const outcomes = await mgr.connectAll();
+    const elapsedMs = Date.now() - started;
+
+    // Bounded by ~one timeout with slack for process spawn — NOT the sum of
+    // both servers' timeouts (which would be the old sequential behavior),
+    // and nowhere near the old real-world hangs (minutes).
+    expect(elapsedMs).toBeLessThan(5_000);
+
+    const byName = new Map(outcomes.map((o) => [o.name, o]));
+    expect(byName.get("stalled-subprocess")?.ok).toBe(false);
+    expect(String(byName.get("stalled-subprocess")?.error)).toMatch(/timed out/);
+    expect(byName.get("unreachable")?.ok).toBe(false);
+
+    await mgr.closeAll();
+  }, 15_000);
 });
 
 describe("McpClientManager (multiple servers + discovery)", () => {
