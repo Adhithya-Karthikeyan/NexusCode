@@ -628,10 +628,24 @@ public struct AgentRow: Identifiable, Sendable, Hashable {
     /// than being folded into those two.
     public let verdict: AgentVerdict?
 
+    /// The OODA step history, for a `.roleRun` row — empty for every other
+    /// origin. What "expand this card" actually shows: real steps the loop
+    /// took (`plan`/`observe`/`reflect`/…), never a fabricated progress log.
+    public let steps: [AgentStep]
+    /// Tool calls made on this turn, for a `.lane` row — empty for every
+    /// other origin. Same idea as `steps`, for the kind of concurrency that
+    /// doesn't have OODA phases: what a lane actually did is its tool calls.
+    public let toolCalls: [ToolActivity]
+    /// This agent's own slice of its mission's timeline, for an `.omc` row —
+    /// empty for every other origin (and when this agent isn't part of a
+    /// tracked mission at all).
+    public let timeline: [OMCTimelineEvent]
+
     public init(
         id: String, origin: Origin, title: String, subtitle: String,
         isRunning: Bool, isFailed: Bool, detail: String? = nil, startedAt: Date? = nil,
-        verdict: AgentVerdict? = nil
+        verdict: AgentVerdict? = nil,
+        steps: [AgentStep] = [], toolCalls: [ToolActivity] = [], timeline: [OMCTimelineEvent] = []
     ) {
         self.id = id
         self.origin = origin
@@ -642,6 +656,17 @@ public struct AgentRow: Identifiable, Sendable, Hashable {
         self.detail = detail
         self.startedAt = startedAt
         self.verdict = verdict
+        self.steps = steps
+        self.toolCalls = toolCalls
+        self.timeline = timeline
+    }
+
+    /// Whether this row has anything a disclosure control could actually
+    /// reveal — the row model's own answer to "should the expand affordance
+    /// even be offered", so `AgentsView` never has to guess or hardcode it
+    /// per origin.
+    public var hasExpandableDetail: Bool {
+        !steps.isEmpty || !toolCalls.isEmpty || !timeline.isEmpty
     }
 }
 
@@ -661,7 +686,8 @@ public enum AgentRowBuilder {
                 isRunning: lane.isStreaming,
                 isFailed: turn?.error != nil,
                 detail: toolCount > 0 ? "\(toolCount) tool call\(toolCount == 1 ? "" : "s")" : nil,
-                startedAt: turn.map { Date(timeIntervalSince1970: $0.startedTs) }
+                startedAt: turn.map { Date(timeIntervalSince1970: $0.startedTs) },
+                toolCalls: turn?.tools ?? []
             )
         }
     }
@@ -725,7 +751,8 @@ public enum AgentRowBuilder {
                 // stopped this ALWAYS resolves to one of the three verdicts —
                 // an unreadable outcome defaults to `.indeterminate`, same
                 // rule as `Turn.agentVerdict`, never silently dropped.
-                verdict: lane.isStreaming ? nil : (turn.agentVerdict ?? .indeterminate)
+                verdict: lane.isStreaming ? nil : (turn.agentVerdict ?? .indeterminate),
+                steps: turn.agentSteps
             )
         }
     }
@@ -734,6 +761,19 @@ public enum AgentRowBuilder {
     public static func omcAgents(from snapshot: OMCSnapshot) -> [AgentRow] {
         snapshot.agents.map { agent in
             let mission = snapshot.missionDetail(for: agent)
+            // Which mission (if any) actually contains this agent — the same
+            // `ownership == agent.agentId` join `missionDetail` already does,
+            // kept separate here because that helper returns the AGENT row,
+            // not the MISSION it came from, and the timeline lives on the
+            // mission.
+            let ownMission = snapshot.missions?.missions.first { candidate in
+                candidate.agents.contains { $0.ownership == agent.agentId }
+            }
+            // This agent's own slice of that mission's timeline — newest
+            // first, mirroring `OMCMission.reverseChronologicalTimeline`.
+            let ownTimeline = (ownMission?.timeline ?? [])
+                .filter { $0.agent == (mission?.name ?? "") }
+                .sorted { ($0.at ?? .distantPast) > ($1.at ?? .distantPast) }
             return AgentRow(
                 id: "omc:\(agent.agentId)",
                 origin: .omc,
@@ -742,7 +782,8 @@ public enum AgentRowBuilder {
                 isRunning: agent.status == .running,
                 isFailed: agent.status == .failed,
                 detail: mission?.currentStep ?? mission?.latestUpdate,
-                startedAt: agent.startedAt
+                startedAt: agent.startedAt,
+                timeline: ownTimeline
             )
         }
     }
