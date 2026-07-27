@@ -2589,7 +2589,7 @@ evidence and proposes a design.
   conversation.
 - **Design:** delete the early return so the existing `if let sessionId { args += ["--resume", …] }`
   applies to role runs too, and replace the comment with the accurate caveat: the *conversation*
-  resumes (text only, tool calls not replayed) while *plan/task state* deliberately does not.
+  resumes (including any tool-call exchange) while *plan/task state* deliberately does not.
   Cover with a test asserting `--resume` is present in `oneShotArguments` for `.agent` + role.
 
 ### G2. `nexus roles` exists but nothing reaches the app's picker

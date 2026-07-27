@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { EventStore, RunResult, StreamChunk } from "@nexuscode/core";
+import { isAgentMetaRaw, type EventStore, type RunResult, type StreamChunk } from "@nexuscode/core";
 import type { ContentBlock } from "@nexuscode/shared";
 import { redactArgs } from "@nexuscode/tools";
 import { openSessionDb, type SqliteDb, type SqliteStmt } from "./db.js";
@@ -94,7 +94,11 @@ export class SessionStore implements EventStore {
   // ── EventStore (write side) ────────────────────────────────────────────────
 
   /** Append one persisted `StreamChunk`. Mirrors the CLI history writer: strips
-   *  the `raw` passthrough and redacts secret-shaped tool-result content. */
+   *  the `raw` passthrough (except the coordinator's own structured
+   *  `raw.agent` metadata — see `isAgentMetaRaw` in `@nexuscode/core`'s
+   *  `projection.ts` — which is bounded and first-party, unlike the rest of
+   *  `raw`, and is the only thing a replay needs to reproduce `agent`
+   *  UiEvents) and redacts secret-shaped tool-result content. */
   append(entry: {
     sessionId: string;
     turnId: string;
@@ -106,8 +110,11 @@ export class SessionStore implements EventStore {
       "ts" in entry.chunk && typeof (entry.chunk as { ts?: number }).ts === "number"
         ? (entry.chunk as { ts: number }).ts
         : Date.now();
+    const rawValue = (entry.chunk as StreamChunk & { raw?: unknown }).raw;
     const { raw: _raw, ...chunkWithoutRaw } = entry.chunk as StreamChunk & { raw?: unknown };
-    let toStore: StreamChunk = chunkWithoutRaw as StreamChunk;
+    let toStore: StreamChunk = isAgentMetaRaw(rawValue)
+      ? ({ ...chunkWithoutRaw, raw: { agent: rawValue.agent } } as StreamChunk)
+      : (chunkWithoutRaw as StreamChunk);
     if (toStore.type === "tool-result") {
       toStore = { ...toStore, content: redactArgs(toStore.content) as ContentBlock[] };
     }

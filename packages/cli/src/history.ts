@@ -325,10 +325,20 @@ export async function openHistory(opts: {
       // Strip the untranslated-provider-event `raw` passthrough before it lands
       // in the audit log — it can carry far more than we've normalized (and
       // isn't part of the stable StreamChunk contract), across every provider.
+      // The ONE exception: the coordinator's own structured `agent` metadata
+      // (`raw.agent` — phase/role/step/data, see `isAgentMetaRaw`'s doc in
+      // `@nexuscode/core`'s `projection.ts`), a narrow, bounded, first-party
+      // payload rather than an opaque provider blob, and the only thing the
+      // canonical projection reads off `raw` at all. Keep exactly that shape;
+      // everything else `raw` might carry stays stripped.
+      const rawValue = (entry.chunk as StreamChunk & { raw?: unknown }).raw;
       const { raw: _raw, ...chunkWithoutRaw } = entry.chunk as StreamChunk & { raw?: unknown };
+      const toStore: StreamChunk = isAgentMetaRaw(rawValue)
+        ? ({ ...chunkWithoutRaw, raw: { agent: rawValue.agent } } as StreamChunk)
+        : (chunkWithoutRaw as StreamChunk);
       // Then redact any secret-shaped content a tool result carries (fs_read
       // contents, shell stdout/stderr, …) before it is durably persisted.
-      const redacted = redactToolResultContent(chunkWithoutRaw as StreamChunk);
+      const redacted = redactToolResultContent(toStore);
       insertEvent.run(
         entry.sessionId,
         entry.turnId,

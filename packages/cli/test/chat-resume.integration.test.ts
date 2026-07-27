@@ -167,8 +167,8 @@ describe("nexus chat --resume (across two processes)", () => {
     expect(second.code).toBe(0);
     expect(second.stderr).toContain("[resume]");
     expect(second.stderr).toContain("restored 4 messages");
-    // The limitation is stated, never glossed over.
-    expect(second.stderr).toContain("text only");
+    // What was restored is stated, never glossed over.
+    expect(second.stderr).toContain("including any tool calls");
 
     expect(received).toHaveLength(3);
     const resumed = received[2]!;
