@@ -317,35 +317,46 @@ receipt treatment in the UI.
 
 ### ⬜ OPEN — the short list for whoever picks this up
 
-1. **`assessSwitchTarget` needs a tool-history blocker.** Now that tool calls
-   persist, switching to a provider that cannot accept tool blocks is a REAL
-   failure where it used to be inert — and it surfaces as a provider 400 on the
-   NEXT turn, misattributed. Infer from the transcript, not the current request.
-   Blocked must mean blocked. IN FLIGHT (`switching.ts` + `commands.ts`).
-2. **Binary resolution happens in SIX places.** `NexusApp.swift` plus five
-   feature views each call `NexusBinary.discover` independently. It is a single
-   fact about the environment, and it now carries real semantics (fail-closed
-   override, distinguishable failure causes) that six call sites must each get
-   right forever. `NexusApp.swift` has the good failure message; the five views
-   still show the generic one that tells a user who set `NEXUS_BIN` to set
-   `NEXUS_BIN`. **Fixing the five strings is the change that guarantees a
-   seventh instance later** — consolidate instead, and put the "explain this
-   failure" logic in NexusKit where it can actually be tested.
-3. **Five test files remain un-retrofitted** to `spawnCli` and flake under
+1. 🔄 **Five test files remain un-retrofitted** to `spawnCli` and flake under
    full-suite parallel load (`chat-persistent`, `chat-resume`, `chat-quota`,
-   `chat-memory`, `handoff-failover`). They pass in isolation. Audit each for
-   raw-stdin dependence FIRST — `spawnCli` closes stdin, which is exactly why
-   `stdin-hang.integration.test.ts` must never adopt it.
-4. **A switch receipt has no visible treatment.** `ViewState.switches.last`
-   carries it. A BLOCKED switch especially must not be silently absorbed.
-   Proposed wording, kept because it is honest: *"switched to X — conversation
-   and context carried over; tool-call history is not (never was, any turn
-   boundary)."*
-5. **`Turn.cacheHit` has no visible treatment.** A cached turn's $0.00 is a
-   CONFIRMED zero (no model call happened) — a third state beyond unknown and
-   priced-zero.
-6. Setting the composer's text programmatically does not enable Send. Unknown
-   whether that is a real bug or an AX-harness limitation with SwiftUI `@State`.
+   `chat-memory`, `handoff-failover`). They pass in isolation every time. Audit
+   each for raw-stdin dependence FIRST — `spawnCli` closes stdin, which is
+   exactly why `stdin-hang.integration.test.ts` must NEVER adopt it. IN FLIGHT.
+2. ⬜ **Assistive-technology input is reasoned about, not tested.** The composer
+   question below is settled as far as *our* code goes, but nobody has run live
+   Dictation or Voice Control against the app. That is the one check that would
+   convert "should work" into "does work", and it needs a system-wide setting
+   the owner should decide about.
+3. ⬜ Still no visible treatment for **provider circuit state in the picker's
+   own row** beyond the warning string — fine as-is, listed so it is a choice
+   rather than an oversight.
+
+**Closed since this list was written:** the `assessSwitchTarget` tool-history
+blocker; binary resolution consolidated from SIX call sites to one with a
+testable `NexusBinary.explainMissing`; switch receipts rendered inline
+(blockers verbatim, `preserved` deliberately NOT rendered at all); cached-turn
+cost as a distinct third state; and the composer/AX question resolved below.
+
+### ✅ The composer cannot be driven programmatically — and that is macOS
+
+Setting the composer `TextField`'s value via `AXUIElementSetAttributeValue`
+leaves Send disabled. **This is NOT a NexusCode defect.** Proven by building a
+throwaway SwiftUI app containing zero project code and reproducing it exactly,
+across three variants including the `kAXSelectedTextRange`+`kAXSelectedText`
+shape that most closely matches how an input method actually commits text. The
+`@State` binding is structurally unreachable through AX text-mutation on this
+toolchain (Swift 6.3.3 / macOS 26.5.2).
+
+**To verify composer BEHAVIOUR, call `ConversationController.submit(_:)`
+directly.** For appearance, use screenshots per §C2. Do not build tooling that
+depends on typing into the live app — it cannot work.
+
+⚠️ **Boundary of that evidence:** real Dictation/Voice Control deliver text
+through the standard text-input/first-responder pipeline rather than by writing
+`kAXValueAttribute`, so they *should* reach `draft` the way live typing does —
+but that was reasoned from documented macOS architecture, **not tested live**,
+because enabling either is a system-wide toggle on the owner's machine. See
+open item 2.
 
 ### Hard rules learned the hard way
 - **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An
