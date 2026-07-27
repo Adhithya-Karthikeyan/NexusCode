@@ -274,7 +274,7 @@ describe("/provider switch preflight", () => {
  * cases used to slip through as "supported" and silently drop the value.
  */
 describe("reasoningSupportedFor — effort must actually reach the wire", () => {
-  function adapterWith(id: string, transport: string, reasoning: boolean) {
+  function adapterWith(id: string, transport: TransportKind, reasoning: boolean): ProviderAdapter {
     return {
       id,
       label: id,
@@ -308,30 +308,23 @@ describe("reasoningSupportedFor — effort must actually reach the wire", () => 
   it("TRUE for a real http-sdk provider that declares reasoning", async () => {
     const config = NexusConfig.parse({ defaultProvider: "mock" });
     const runtime = await buildRuntime(config, { secrets: stubSecrets });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await runtime.registry.register(adapterWith("thinky", "http-sdk", true) as any, { skipHealth: true });
+    await runtime.registry.register(adapterWith("thinky", "http-sdk", true), { skipHealth: true });
     expect(reasoningSupportedFor(runtime, "thinky")).toBe(true);
   });
 
   it("FALSE for a cli-subprocess provider (codex/claude-code) even though it declares reasoning", async () => {
     const config = NexusConfig.parse({ defaultProvider: "mock" });
     const runtime = await buildRuntime(config, { secrets: stubSecrets });
-    await runtime.registry.register(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      adapterWith("wrapped-cli", "cli-subprocess", true) as any,
-      { skipHealth: true },
-    );
+    await runtime.registry.register(adapterWith("wrapped-cli", "cli-subprocess", true), { skipHealth: true });
     expect(reasoningSupportedFor(runtime, "wrapped-cli")).toBe(false);
   });
 
   it("FALSE for an http-openai-compat provider (e.g. DeepSeek) even though it declares reasoning", async () => {
     const config = NexusConfig.parse({ defaultProvider: "mock" });
     const runtime = await buildRuntime(config, { secrets: stubSecrets });
-    await runtime.registry.register(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      adapterWith("deepseek-like", "http-openai-compat", true) as any,
-      { skipHealth: true },
-    );
+    await runtime.registry.register(adapterWith("deepseek-like", "http-openai-compat", true), {
+      skipHealth: true,
+    });
     expect(reasoningSupportedFor(runtime, "deepseek-like")).toBe(false);
   });
 
