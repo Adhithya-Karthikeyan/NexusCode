@@ -632,24 +632,6 @@ struct ControlStrip: View {
     }
 }
 
-/// `--effort` has no home on `ConversationController` yet (see the seam note
-/// on `ConversationView`), so this lives as view state until the lead lifts
-/// it — `commandPreview` already treats it as authoritative for what actually
-/// gets appended to the `nexus` invocation.
-enum EffortLevel: String, CaseIterable, Identifiable {
-    case off, low, medium, high
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .off: return "Off"
-        case .low: return "Low"
-        case .medium: return "Med"
-        case .high: return "High"
-        }
-    }
-}
-
 /// A themed 4-way segmented control — the same visual language as
 /// `ModePicker` but generic over `EffortLevel`, so the strip doesn't read as
 /// two different segmented-control styles side by side.
