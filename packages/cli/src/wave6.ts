@@ -62,16 +62,11 @@ function parseOutput(args: ParsedArgs): OutputMode {
   return raw === "json" || raw === "ndjson" || raw === "text" ? raw : "text";
 }
 
-async function readStdin(): Promise<string> {
-  if (process.stdin.isTTY) return "";
-  const chunks: Buffer[] = [];
-  try {
-    for await (const c of process.stdin) chunks.push(Buffer.from(c));
-  } catch {
-    return "";
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
+// `readStdin` (bounded, never-silent) is imported from `./commands.js` — see
+// its doc comment there. This file used to carry its own byte-for-byte copy
+// of the pre-fix (unbounded) implementation; that is exactly the shape of bug
+// a duplicated helper produces (a fix landing in one copy and not the other),
+// so there is deliberately only one implementation now.
 
 async function loadEffectiveConfig(): Promise<NexusConfig> {
   const { config } = await loadConfig({ userConfigDir: userConfigDir() });
