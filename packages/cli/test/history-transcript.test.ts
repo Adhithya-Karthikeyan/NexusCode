@@ -44,6 +44,73 @@ describe("history — durable transcript (storePrompts)", () => {
     }
   });
 
+  it("round-trips a tool-role message's toolCallId and name (needed to resume tool pairing)", async () => {
+    const dbPath = tmpDbPath();
+    const store = await openHistory({ enabled: true, dbPath, storePrompts: true });
+    try {
+      const toolCall: Message = {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call_1", name: "echo", input: { text: "hi" } }],
+      };
+      const toolResult: Message = {
+        role: "tool",
+        toolCallId: "call_1",
+        name: "echo",
+        content: [{ type: "text", text: "echoed: hi" }],
+      };
+      store.appendTranscript!({
+        sessionId: "s1",
+        turnId: "t1",
+        seq: 0,
+        messages: [user("hi"), toolCall, toolResult, assistant("done")],
+      });
+
+      const loaded = await store.loadTranscript!("s1");
+      expect(loaded.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"]);
+      const restoredResult = loaded[2]!;
+      expect(restoredResult.toolCallId).toBe("call_1");
+      expect(restoredResult.name).toBe("echo");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("still decodes a pre-existing bare ContentBlock[] row (written before toolCallId was persisted)", async () => {
+    const dbPath = tmpDbPath();
+    const store = await openHistory({ enabled: true, dbPath, storePrompts: true });
+    try {
+      // Simulate a row written by the OLD encoding (JSON.stringify(content)
+      // directly, no {content, toolCallId, name} envelope) by inserting through
+      // the same appendTranscript path is impossible post-fix, so reach past it
+      // via the raw db handle the way the encryption test below does.
+    } finally {
+      store.close();
+    }
+    const { default: Database } = (await import("better-sqlite3")) as unknown as {
+      default: new (path: string) => {
+        prepare(sql: string): { run(...args: unknown[]): unknown };
+        close(): void;
+      };
+    };
+    const db = new Database(dbPath);
+    db.prepare(
+      `INSERT INTO turn_message (session_id, turn_id, seq, idx, role, content, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run("s2", "t1", 0, 0, "user", JSON.stringify([{ type: "text", text: "legacy row" }]), Date.now());
+    db.close();
+
+    const reopened = await openHistory({ enabled: true, dbPath, storePrompts: true });
+    try {
+      const loaded = await reopened.loadTranscript!("s2");
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0]!.role).toBe("user");
+      expect((loaded[0]!.content[0] as { text: string }).text).toBe("legacy row");
+      expect(loaded[0]!.toolCallId).toBeUndefined();
+    } finally {
+      reopened.close();
+    }
+  });
+
   it("writes NOTHING when storePrompts is off (the default)", async () => {
     const dbPath = tmpDbPath();
     const store = await openHistory({ enabled: true, dbPath });

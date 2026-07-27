@@ -128,6 +128,84 @@ describe("dispatchAgent — native tool-execution loop", () => {
     await engine.dispose();
   });
 
+  it("carries the full tool exchange on the outcome, ending in the final reply", async () => {
+    // Regression test: a caller that persists conversation history from a
+    // `RunResult` used to see only `text` — the assistant's tool-call message
+    // and the tool's own result were silently dropped. `toolExchange` must
+    // carry the whole thing, in order, correctly paired by `toolCallId`.
+    const { engine, runCtx, input } = await setup({ toolName: "echo", prompt: "PING" });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+
+    const handle = dispatchAgent(
+      { adapterId: "mock", model: "mock-tools", input, idempotencyKey: "exch1" },
+      runCtx,
+      { tools, gate: gate("full-access") },
+    );
+
+    const events = await drain(handle.events());
+    const outcome = await handle.outcome();
+    const chunks = events.map((e) => e.chunk);
+    const callId = outcome.winner?.toolCalls[0]?.id;
+    expect(callId).toBeTruthy();
+
+    const exchange = outcome.winner?.toolExchange;
+    expect(exchange).toHaveLength(3);
+    const [toolCallMsg, toolResultMsg, finalMsg] = exchange!;
+
+    // 1. The assistant message that requested the tool call.
+    expect(toolCallMsg?.role).toBe("assistant");
+    expect(toolCallMsg?.content).toEqual([
+      { type: "tool_use", id: callId, name: "echo", input: { text: "PING" } },
+    ]);
+
+    // 2. The tool's own result, paired back by toolCallId.
+    expect(toolResultMsg?.role).toBe("tool");
+    expect(toolResultMsg?.toolCallId).toBe(callId);
+    expect(toolResultMsg?.name).toBe("echo");
+
+    // 3. The final assistant reply — identical to the terminal run-end's message.
+    const runEnd = chunks.find((c) => c.type === "run-end");
+    if (runEnd?.type !== "run-end") throw new Error("expected run-end");
+    expect(finalMsg).toEqual(runEnd.message);
+    expect(finalMsg?.role).toBe("assistant");
+
+    await engine.dispose();
+  });
+
+  it("preserves the full tool exchange in session.transcript after turn.record()", async () => {
+    // The actual bug: `nexus chat`'s persistent loop calls `turn.record(outcome)`
+    // after an agentic run, and the engine used to collapse that into a single
+    // synthesized assistant-text message — losing every tool call/result, so a
+    // follow-up turn (or a resumed session) had no idea a tool was ever used.
+    const registry = new ProviderRegistry();
+    await registry.register(createMockAdapter({ toolName: "echo", toolInput: (p) => ({ text: p }) }));
+    const engine = createEngine({ registry });
+    const session = await engine.openSession();
+    const turn = session.newTurn({ prompt: "PING" });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+
+    const handle = dispatchAgent(
+      { adapterId: "mock", model: "mock-tools", input: turn.input, idempotencyKey: "exch2" },
+      turn.context(),
+      { tools, gate: gate("full-access") },
+    );
+    for await (const _ of handle.events()) {
+      /* drain, exactly as every caller does */
+    }
+    const outcome = await handle.outcome();
+    turn.record(outcome);
+
+    const roles = session.transcript.map((m) => m.role);
+    // user prompt, assistant tool-call, tool result, final assistant reply.
+    expect(roles).toEqual(["user", "assistant", "tool", "assistant"]);
+    const toolMsg = session.transcript.find((m) => m.role === "tool");
+    expect(toolMsg?.toolCallId).toBe(outcome.winner?.toolCalls[0]?.id);
+
+    await engine.dispose();
+  });
+
   it("aggregates token usage across every provider turn (no undercount)", async () => {
     // The mock tool-model runs two provider turns: turn 1 emits the tool call
     // (usage inputTokens = estimateTokens("PING") = 1), turn 2 emits the final
