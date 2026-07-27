@@ -102,13 +102,24 @@ public extension NexusTheme {
 }
 
 /// Provides the active theme to the view tree.
+///
+/// Typed `AppTheme`, not `NexusTheme`: the app renders through the richer
+/// model (elevation, material, gradient, state layers) unconditionally, for
+/// BOTH catalogues. A hand-designed theme (`AppTheme.all`) is used as-is; one
+/// of the 16 terminal-generated palettes (`NexusTheme.all`) is used through
+/// `NexusTheme.appTheme`, the generic bridge in `AppTheme.swift` — so every
+/// view in the app can read `theme.color(...)`, `theme.elevation`, etc.
+/// without caring which catalogue the active theme came from. The default is
+/// a hand-designed theme (`AppTheme.defaultThemeId`, currently Meridian), not
+/// a generated one — a default nobody changes is what most users will
+/// actually see.
 public struct ThemeKey: EnvironmentKey {
-    public static let defaultValue: NexusTheme =
-        NexusTheme.named(NexusTheme.defaultThemeId) ?? NexusTheme.all[0]
+    public static let defaultValue: AppTheme =
+        AppTheme.named(AppTheme.defaultThemeId) ?? AppTheme.all[0]
 }
 
 public extension EnvironmentValues {
-    var nexusTheme: NexusTheme {
+    var nexusTheme: AppTheme {
         get { self[ThemeKey.self] }
         set { self[ThemeKey.self] = newValue }
     }

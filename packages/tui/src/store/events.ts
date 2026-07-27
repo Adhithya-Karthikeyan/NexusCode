@@ -42,7 +42,12 @@ export type UiEvent =
       outputTokens: number;
       cacheRead?: number;
       cacheWrite?: number;
-      costUsd: number;
+      /**
+       * `null` means genuinely UNKNOWN pricing, distinct from a real `0` for a
+       * free provider — see `@nexuscode/core`'s `projection.ts` for the full
+       * contract this mirrors.
+       */
+      costUsd: number | null;
     }
   | { t: "error"; lane: string; code: string; message: string; retryable: boolean }
   | { t: "done"; lane: string; finishReason: string }

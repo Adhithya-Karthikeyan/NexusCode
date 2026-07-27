@@ -509,14 +509,19 @@ public final class OMCController {
 
 /// One row in the unified Agents view.
 ///
-/// The tab shows two genuinely different kinds of concurrency, and conflating
-/// them would be a lie: NexusCode's provider LANES (several models answering the
-/// same prompt) and OMC's SUBAGENTS (specialised agents doing separate work).
-/// A shared row type lets one list render both while keeping the origin explicit.
+/// The tab shows THREE genuinely different kinds of concurrency, and
+/// conflating any of them would be a lie: NexusCode's provider LANES (several
+/// models answering the same prompt), NexusCode's own ROLE RUNS (one agent
+/// iterating on its own output through the OODA loop, `nexus agent --role …`),
+/// and OMC's SUBAGENTS (specialised agents doing separate work). A shared row
+/// type lets one list render all three while keeping the origin explicit.
 public struct AgentRow: Identifiable, Sendable, Hashable {
     public enum Origin: String, Sendable, Hashable {
         /// A provider lane inside a compare/race/consensus run.
         case lane
+        /// NexusCode's own OODA agent loop (`nexus agent --role …`) — one
+        /// agent, provider-agnostic, iterating on its own output.
+        case roleRun
         /// An oh-my-claudecode subagent.
         case omc
     }
@@ -529,10 +534,19 @@ public struct AgentRow: Identifiable, Sendable, Hashable {
     public let isFailed: Bool
     public let detail: String?
     public let startedAt: Date?
+    /// The role run's three-valued outcome, or `nil` while it is still
+    /// running, or for origins with no verdict concept (lane/omc).
+    ///
+    /// `isRunning`/`isFailed` are booleans and cannot carry `.indeterminate`
+    /// without squashing it into "succeeded" or "failed" — exactly the mistake
+    /// `AgentVerdict` exists to prevent — so it lives in its own field rather
+    /// than being folded into those two.
+    public let verdict: AgentVerdict?
 
     public init(
         id: String, origin: Origin, title: String, subtitle: String,
-        isRunning: Bool, isFailed: Bool, detail: String? = nil, startedAt: Date? = nil
+        isRunning: Bool, isFailed: Bool, detail: String? = nil, startedAt: Date? = nil,
+        verdict: AgentVerdict? = nil
     ) {
         self.id = id
         self.origin = origin
@@ -542,6 +556,7 @@ public struct AgentRow: Identifiable, Sendable, Hashable {
         self.isFailed = isFailed
         self.detail = detail
         self.startedAt = startedAt
+        self.verdict = verdict
     }
 }
 
@@ -566,6 +581,70 @@ public enum AgentRowBuilder {
         }
     }
 
+    /// Lane names currently driving a role run (`nexus agent --role …`) — a
+    /// lane whose current turn came through the OODA loop rather than an
+    /// ordinary chat turn. Shared by `lanesExcludingRoleRuns` and `roleRuns`
+    /// so both agree on exactly which lanes count as which.
+    private static func roleRunLaneNames(from state: ViewState) -> Set<String> {
+        Set(state.orderedLanes.compactMap { lane in
+            (lane.live ?? lane.finalized.last)?.isAgentRun == true ? lane.lane : nil
+        })
+    }
+
+    /// `lanes(from:)`, minus any lane currently driving a role run.
+    ///
+    /// A role run rides on a provider lane under the hood, so without this
+    /// filter it would render twice — once as a plain `.lane` row and once as
+    /// a `.roleRun` row from `roleRuns(from:)` — which is exactly the
+    /// double-count the three-way origin split exists to prevent.
+    public static func lanesExcludingRoleRuns(from state: ViewState) -> [AgentRow] {
+        let roleRunLanes = roleRunLaneNames(from: state)
+        return lanes(from: state).filter { !roleRunLanes.contains($0.title) }
+    }
+
+    /// NexusCode's own role runs (`nexus agent --role …`) — a THIRD kind of
+    /// concurrency alongside a provider lane (several models racing the same
+    /// prompt) and an OMC subagent (a specialised agent doing separate work):
+    /// one agent iterating on its own output through a verified
+    /// Observe → Plan → Act → Reflect → Evaluate loop. Provider-agnostic — the
+    /// identical loop runs on anthropic, mock, or any registered adapter, so
+    /// this reads the same regardless of backend.
+    public static func roleRuns(from state: ViewState) -> [AgentRow] {
+        state.orderedLanes.compactMap { lane in
+            guard let turn = lane.live ?? lane.finalized.last, turn.isAgentRun else { return nil }
+
+            let subtitle: String
+            if lane.isStreaming {
+                let lastStep = turn.agentSteps.last
+                let phase = lastStep?.phase ?? "working"
+                subtitle = "\(phase) · step \(lastStep?.step ?? 0)"
+            } else {
+                subtitle = turn.agentStopReason.map { "stopped · \($0)" } ?? "stopped"
+            }
+
+            var detailParts: [String] = []
+            if let progress = turn.agentProgress { detailParts.append("\(progress)% progress") }
+            let delegated = turn.delegatedRoles
+            if !delegated.isEmpty { detailParts.append("delegated: \(delegated.joined(separator: ", "))") }
+
+            return AgentRow(
+                id: "role:\(lane.lane)",
+                origin: .roleRun,
+                title: turn.agentRole ?? lane.lane,
+                subtitle: subtitle,
+                isRunning: lane.isStreaming,
+                isFailed: turn.error != nil,
+                detail: detailParts.isEmpty ? nil : detailParts.joined(separator: " · "),
+                startedAt: Date(timeIntervalSince1970: turn.startedTs),
+                // `nil` only while running (mirrors `Turn.agentVerdict`); once
+                // stopped this ALWAYS resolves to one of the three verdicts —
+                // an unreadable outcome defaults to `.indeterminate`, same
+                // rule as `Turn.agentVerdict`, never silently dropped.
+                verdict: lane.isStreaming ? nil : (turn.agentVerdict ?? .indeterminate)
+            )
+        }
+    }
+
     /// OMC subagents, joined with mission detail for the current step.
     public static func omcAgents(from snapshot: OMCSnapshot) -> [AgentRow] {
         snapshot.agents.map { agent in
@@ -585,7 +664,7 @@ public enum AgentRowBuilder {
 
     /// Everything working right now, running agents first.
     public static func combined(state: ViewState, snapshot: OMCSnapshot) -> [AgentRow] {
-        (lanes(from: state) + omcAgents(from: snapshot))
+        (lanesExcludingRoleRuns(from: state) + roleRuns(from: state) + omcAgents(from: snapshot))
             .sorted { lhs, rhs in
                 if lhs.isRunning != rhs.isRunning { return lhs.isRunning }
                 return (lhs.startedAt ?? .distantPast) > (rhs.startedAt ?? .distantPast)

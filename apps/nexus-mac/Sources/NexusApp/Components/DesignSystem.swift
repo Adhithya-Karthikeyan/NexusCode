@@ -125,9 +125,8 @@ struct Card<Content: View>: View {
     var elevated = false
     @ViewBuilder var content: Content
 
-    private var app: AppTheme { theme }
-    private var step: ElevationStep { app.elevation.step(elevated ? 2 : 1) }
-    private var treatment: SurfaceTreatment { elevated ? app.materials.overlay : .solid }
+    private var step: ElevationStep { theme.elevation.step(elevated ? 2 : 1) }
+    private var treatment: SurfaceTreatment { elevated ? theme.materials.overlay : .solid }
 
     var body: some View {
         content
@@ -328,8 +327,6 @@ struct SoftButton: ButtonStyle {
 
     @State private var hovering = false
 
-    private var app: AppTheme { theme }
-
     private var background: Color {
         switch tone {
         case .neutral: return theme.color(\.surfaceOverlay)
@@ -352,7 +349,7 @@ struct SoftButton: ButtonStyle {
             .padding(.horizontal, size == .compact ? Space.sm : Space.md)
             .padding(.vertical, size == .compact ? 5 : 7)
             .background(
-                background.opacity(hovering ? 1 : 1 - app.stateLayers.hover),
+                background.opacity(hovering ? 1 : 1 - theme.stateLayers.hover),
                 in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
             )
             .foregroundStyle(foreground)
@@ -364,7 +361,7 @@ struct SoftButton: ButtonStyle {
                     )
             }
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 1 - app.stateLayers.pressed : 1)
+            .opacity(configuration.isPressed ? 1 - theme.stateLayers.pressed : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             .animation(.easeOut(duration: 0.12), value: hovering)
             .onHover { hovering = $0 }
