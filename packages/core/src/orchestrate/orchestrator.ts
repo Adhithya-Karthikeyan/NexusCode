@@ -636,6 +636,106 @@ function mergeUsage(target: Usage, partial: Partial<Usage>): void {
   if (partial.costUsd != null) target.costUsd = partial.costUsd;
 }
 
+// ── toolExchange hardening ──────────────────────────────────────────────────
+// Two write-time guards on `RunResult.toolExchange` before it can reach a
+// caller that persists it into conversation history (see `engine.ts`'s
+// `replyMessages`). Both apply once, in `makeLaneBuilder.finish()` — the
+// single point every `toolExchange`, from every adapter, passes through — so
+// nothing downstream has to re-derive either guarantee per provider.
+
+/**
+ * A single tool result, once threaded into `toolExchange`, repeats in FULL on
+ * EVERY subsequent turn of a resumed or continued conversation. That is a new
+ * cost this feature introduces: a tool's own per-call cap (e.g. `fs_read`'s
+ * 262144-byte `maxBytes`, `packages/tools/src/fs.ts`) bounds one read, not
+ * what a whole conversation carries forward from here on. Cap it separately,
+ * smaller, and say so visibly — reusing the exact "[truncated: N bytes
+ * total, showed M]" notice `fs.ts` already uses, so a caller sees one
+ * truncation-marker convention everywhere, not two.
+ *
+ * Kept head+tail (the request and the outcome are the signal, the middle is
+ * filler — same rationale as `@nexuscode/context`'s `truncateMiddle`, which
+ * this deliberately does not import: it wants a token budget + estimator,
+ * this wants a hard byte cap, and `core` has no business depending on the
+ * context-assembly package for two dozen lines). The marker sits BETWEEN head
+ * and tail, inside the one block, not appended as a trailing block — so it
+ * can never be the part a later, unrelated trim strips off. Sliced by
+ * Unicode code point, never a raw byte offset, so a multi-byte character is
+ * never cut in half.
+ */
+const MAX_TOOL_RESULT_HISTORY_BYTES = 8_000;
+
+function truncateToolResultForHistory(content: ContentBlock[]): ContentBlock[] {
+  const textBlocks = content.filter(
+    (b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text",
+  );
+  if (textBlocks.length === 0) return content;
+  const otherBlocks = content.filter((b) => b.type !== "text");
+  const combined = textBlocks.map((b) => b.text).join("");
+  const totalBytes = Buffer.byteLength(combined, "utf8");
+  if (totalBytes <= MAX_TOOL_RESULT_HISTORY_BYTES) return content;
+
+  const points = Array.from(combined); // code points, not UTF-16 units or bytes
+  const headBudget = Math.ceil(MAX_TOOL_RESULT_HISTORY_BYTES * 0.6);
+  const tailBudget = MAX_TOOL_RESULT_HISTORY_BYTES - headBudget;
+  let headEnd = 0;
+  let headBytes = 0;
+  for (; headEnd < points.length; headEnd++) {
+    const next = headBytes + Buffer.byteLength(points[headEnd]!, "utf8");
+    if (next > headBudget) break;
+    headBytes = next;
+  }
+  let tailStart = points.length;
+  let tailBytes = 0;
+  for (; tailStart > headEnd; tailStart--) {
+    const next = tailBytes + Buffer.byteLength(points[tailStart - 1]!, "utf8");
+    if (next > tailBudget) break;
+    tailBytes = next;
+  }
+  const head = points.slice(0, headEnd).join("");
+  const tail = points.slice(tailStart).join("");
+  const marker = `\n[truncated: ${totalBytes} bytes total, showed ${headBytes + tailBytes}]\n`;
+  return [{ type: "text", text: `${head}${marker}${tail}` }, ...otherBlocks];
+}
+
+/**
+ * Guarantee every `tool_use` block in an accumulated exchange is answered by
+ * a `role: "tool"` message carrying the same `toolCallId` — no matter which
+ * adapter it will eventually reach. Left unpaired, this is not just noise:
+ * Anthropic 400s outright ("tool_use ids were found without tool_result
+ * blocks") and OpenAI's converter ships `tool_call_id: ""` with no guard at
+ * all (`packages/providers/openai/src/convert.ts`), silently breaking the
+ * turn. A mid-tool-call cancellation (`agentStream` returns on `scope.signal
+ * .aborted` mid-loop, before this turn's messages are ever appended to
+ * `toolExchange` — so today that specific path can't orphan one) or a future
+ * producer of `toolExchange` could still leave a call unanswered; guaranteeing
+ * it here, once, makes every consumer safe by construction instead of
+ * correct-by-audit.
+ */
+function guardToolExchange(exchange: Message[]): Message[] {
+  const answered = new Set<string>();
+  for (const m of exchange) {
+    if (m.role === "tool" && m.toolCallId) answered.add(m.toolCallId);
+  }
+  const out: Message[] = [];
+  for (const m of exchange) {
+    out.push(m);
+    if (m.role !== "assistant") continue;
+    for (const block of m.content) {
+      if (block.type !== "tool_use" || answered.has(block.id)) continue;
+      answered.add(block.id); // one placeholder per id, even if listed twice
+      const placeholder: Message = {
+        role: "tool",
+        toolCallId: block.id,
+        content: [{ type: "text", text: "[cancelled — no result recorded]" }],
+      };
+      if (block.name) placeholder.name = block.name;
+      out.push(placeholder);
+    }
+  }
+  return out;
+}
+
 interface LaneBuilder {
   consume(chunk: StreamChunk): void;
   finish(pricing?: PricingTable): RunResult;
