@@ -444,6 +444,7 @@ private struct IntegrationHintRow: View {
         HStack(spacing: Space.xs) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 9))
+                .accessibilityHidden(true)
             Text(integration.kind.map { "\(integration.name) (\($0)) not available" } ?? "\(integration.name) not available")
                 .font(Kind.caption)
             if let hint = integration.hint {
@@ -507,6 +508,7 @@ private struct ErrorBanner: View {
         HStack(spacing: Space.xs) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 10))
+                .accessibilityHidden(true)
             Text(message)
                 .font(Kind.caption)
                 .lineLimit(2)

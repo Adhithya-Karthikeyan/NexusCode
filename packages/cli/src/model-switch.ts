@@ -123,10 +123,36 @@ export function historyBudgetFor(
   return Math.max(MIN_HISTORY_TOKENS, usable);
 }
 
-/** Whether `providerId` advertises reasoning support (drives the `/effort` picker). */
+/**
+ * Whether `providerId` actually honors a reasoning EFFORT/budget on the
+ * request — drives both the TUI's `/effort` picker (live vs. dead) and the
+ * headless `--effort` flag's accept-vs-warn decision (`packages/cli/src/
+ * commands.ts`'s `applyEffort`), so the two surfaces can never disagree about
+ * which providers this actually works on.
+ *
+ * `capabilities().reasoning` alone is NOT sufficient: it only promises the
+ * provider can PRODUCE reasoning output, and two transport families advertise
+ * that without accepting reasoning as an INPUT at all:
+ *   - `cli-subprocess` (codex, claude-code): the wrapped CLI runs its own
+ *     agent loop; `ChatRequest.reasoning` is never forwarded into its argv —
+ *     see each provider's `buildArgs` (no `--reasoning`/`-c
+ *     model_reasoning_effort=…` is ever emitted).
+ *   - `http-openai-compat` (deepseek, grok, groq, together, mistral, …): the
+ *     shared transport only puts `reasoning_effort` on the wire when its
+ *     config opts in via `supportsReasoningEffort` (native "openai" and
+ *     "azure-openai" do; no compat spec does today — DeepSeek declares
+ *     `capabilities.reasoning: true` for its `deepseek-reasoner` MODEL, which
+ *     is a model choice, not a per-request effort knob).
+ * Without this check both cases would show a live-looking `/effort` picker —
+ * or silently accept `--effort` — whose value is dropped before it ever
+ * reaches the provider: the same "shown but not real" bug class already fixed
+ * once for the command preview.
+ */
 export function reasoningSupportedFor(runtime: Runtime, providerId: string): boolean {
   try {
-    return runtime.registry.capabilitiesOf(providerId).reasoning === true;
+    if (runtime.registry.capabilitiesOf(providerId).reasoning !== true) return false;
+    const transport = runtime.registry.get(providerId).transport;
+    return transport !== "cli-subprocess" && transport !== "http-openai-compat";
   } catch {
     return false;
   }

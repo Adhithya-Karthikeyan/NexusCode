@@ -100,18 +100,15 @@ struct ConversationView: View {
     @ViewBuilder
     private var transcript: some View {
         if laneOrder.isEmpty {
-            // `HeroEmptyState` fills whatever frame it's given and centers
-            // its own content within it — left alone in this screen's full
-            // (control-strip-to-composer) canvas, that put the hero dead in
-            // the vertical middle, with roughly as much void BELOW it (down
-            // to the composer) as above it. That read as two unrelated
-            // objects — a floating hero, a floating composer — rather than
-            // one screen. `.fixedSize` collapses the hero back to its own
-            // intrinsic height so it stops fighting for the full canvas, and
-            // bottom-alignment then lets it settle just above the composer —
-            // the void moves ABOVE the hero (toward the control strip),
-            // which is where an empty void reads as "unused space" rather
-            // than "something is missing between these two things."
+            // Bottom-anchored, not centered: `.fixedSize` collapses the
+            // empty state to its own intrinsic height, and bottom-alignment
+            // then settles it just above the composer, reading as one
+            // column instead of two objects floating at opposite ends of
+            // the window. That relationship is deliberately kept here — see
+            // `emptyState`'s doc comment for how the void ABOVE it (the
+            // remaining problem once this was fixed) gets addressed: by
+            // giving this region a genuinely larger, more purposeful
+            // composition rather than by moving it back toward centre.
             emptyState
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -174,35 +171,92 @@ struct ConversationView: View {
         return lane.live?.id ?? lane.finalized.last?.id
     }
 
-    private static let suggestions = [
-        "Explain this codebase",
-        "Review my staged diff",
-        "Compare two models on one prompt",
-        "Find the bug in the last commit",
+    private static let suggestions: [(icon: String, text: String)] = [
+        ("text.book.closed", "Explain this codebase"),
+        ("arrow.triangle.branch", "Review my staged diff"),
+        ("arrow.left.arrow.right", "Compare two models on one prompt"),
+        ("ladybug", "Find the bug in the last commit"),
     ]
 
+    private var heroTitle: String {
+        switch controller.mode {
+        case .ask: return "Ask anything"
+        case .agent: return "Give it a task"
+        case .compare, .race: return "Compare backends"
+        }
+    }
+
+    private var heroMessage: String {
+        controller.mode.isMultiLane
+            ? "Compare and Race fan the same prompt across backends and show every answer side by side."
+            : "This runs `nexus \(controller.mode.rawValue)` and renders its event stream."
+    }
+
+    /// Deliberately more substantial than a lone glyph in a void.
+    ///
+    /// This used to be a generic icon-in-a-glow-circle — the single most
+    /// template-looking element in the app, and (see `transcript`'s doc
+    /// comment) too small a composition to keep the region above it from
+    /// reading as a large, unexplained empty band. `ChatHeroMark` replaces
+    /// the glow with something specific to THIS product: a live echo of the
+    /// exact `nexus <mode>` invocation the control strip above is currently
+    /// configured to run, in the same monospace/caret language the
+    /// composer's command preview and the transcript's streaming cursor
+    /// already use — so it reads as "this app always shows you the real
+    /// command" rather than "generic AI chat icon." The suggestions below
+    /// grow from a single row of small capsules into a labelled 2x2 grid of
+    /// full-width cards at the transcript's own reading-column measure —
+    /// real, useful content occupying the region more deliberately, not
+    /// filler added just to consume height.
     private var emptyState: some View {
-        HeroEmptyState(
-            icon: "bubble.left.and.bubble.right",
-            title: "Ask anything",
-            message: controller.mode.isMultiLane
-                ? "Compare and Race fan the same prompt across backends and show every answer side by side."
-                : "This runs `nexus \(controller.mode.rawValue)` and renders its event stream."
-        ) {
-            VStack(spacing: Space.lg) {
-                FlowLayout(spacing: Space.sm) {
-                    ForEach(Self.suggestions, id: \.self) { suggestion in
-                        SuggestionChip(text: suggestion) { fillComposer(with: suggestion) }
+        VStack(spacing: Space.xl) {
+            ChatHeroMark(mode: controller.mode)
+
+            VStack(spacing: Space.sm) {
+                Text(heroTitle)
+                    .font(Kind.hero)
+                    .foregroundStyle(theme.color(\.textPrimary))
+                Text(heroMessage)
+                    .font(Kind.body)
+                    .foregroundStyle(theme.color(\.textMuted))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 430)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: Space.sm) {
+                Text("TRY ASKING")
+                    .font(Kind.section)
+                    .tracking(0.7)
+                    .foregroundStyle(theme.color(\.textMuted))
+
+                Grid(horizontalSpacing: Space.sm, verticalSpacing: Space.sm) {
+                    GridRow {
+                        suggestionCard(0)
+                        suggestionCard(1)
+                    }
+                    GridRow {
+                        suggestionCard(2)
+                        suggestionCard(3)
                     }
                 }
-                .frame(maxWidth: 460)
-
-                HStack(spacing: Space.lg) {
-                    KeyHint(keys: "⌘N", label: "new")
-                    KeyHint(keys: "⌘.", label: "stop")
-                    KeyHint(keys: "⏎", label: "send")
-                }
             }
+            .frame(maxWidth: readingColumnWidth)
+
+            HStack(spacing: Space.lg) {
+                KeyHint(keys: "⌘N", label: "new")
+                KeyHint(keys: "⌘.", label: "stop")
+                KeyHint(keys: "⏎", label: "send")
+            }
+        }
+        .padding(Space.xxl)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func suggestionCard(_ index: Int) -> some View {
+        let suggestion = Self.suggestions[index]
+        return SuggestionCard(icon: suggestion.icon, text: suggestion.text) {
+            fillComposer(with: suggestion.text)
         }
     }
 
@@ -348,15 +402,28 @@ struct ConversationView: View {
 }
 
 /// Mode, effort, provider/model or backends, the approval indicator, and the
-/// reasoning toggle.
+/// reasoning toggle — grouped by what they actually MEAN, not just placed
+/// left to right in declaration order.
 ///
-/// The leading cluster (mode, effort, provider/model or backend chips) sits
-/// in its own horizontal `ScrollView` rather than a bare `HStack`. Backend
-/// chips in particular have no upper bound — a Compare run with several
-/// backends added would otherwise overflow the strip at exactly the width
-/// this file is required to stay clean at (900pt). The trailing cluster
-/// (approval, session, reasoning, clear) stays fixed outside the scroll so
-/// those controls can never be the thing that scrolls out of reach.
+/// Four categories, in this order: what the run IS (`ModePicker`), how hard
+/// it thinks (`EffortPicker`), what answers it (provider/model, or backend
+/// chips in Compare/Race), and what it is allowed to do (`approvalControl`).
+/// `GroupDivider` hairlines make that grouping visible instead of leaving
+/// four differently-shaped controls to read as "placed" rather than
+/// designed. Session/reasoning/clear are deliberately NOT part of that
+/// sequence — they are utility actions on the conversation as a whole, not
+/// part of configuring the next run, so they stay a separate trailing tray.
+///
+/// `ViewThatFits` (not a hand-picked width breakpoint) decides whether that
+/// whole sequence fits one row or needs two: a real measurement at this
+/// file's required-clean width (900pt, `NexusApp.swift`'s `minWidth`) found
+/// the leading run-config cluster alone needing ~636pt against ~345pt
+/// available there once the trailing tray and its `Spacer` claimed the
+/// rest — which pushed the provider and model pickers behind a horizontal
+/// scroll with no visible indication they existed at all. Wrapping the same
+/// controls onto a second line at that width keeps every one of them
+/// visible without requiring the user to discover a hidden scroll; a scroll
+/// INDICATOR alone would only have advertised the defect, not fixed it.
 struct ControlStrip: View {
     @Environment(\.nexusTheme) private var theme
     @Bindable var controller: ConversationController
@@ -368,25 +435,62 @@ struct ControlStrip: View {
     let onLoadModels: (String) -> Void
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            singleRow
+            twoRowStack
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
+        .background(theme.color(\.surfaceSunken))
+    }
+
+    private var singleRow: some View {
         HStack(spacing: Space.md) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Space.md) {
-                    ModePicker(mode: $controller.mode)
-                        .help(controller.mode.detail)
-
-                    EffortPicker(effort: $effort)
-
-                    if controller.mode.isMultiLane {
-                        backendControls
-                    } else {
-                        singleLaneControls
-                    }
-                }
-            }
-            Spacer(minLength: Space.sm)
-
+            runConfigGroup
+            GroupDivider()
             approvalControl
+            Spacer(minLength: Space.lg)
+            utilityTray
+        }
+    }
 
+    private var twoRowStack: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            runConfigGroup
+            HStack(spacing: Space.md) {
+                approvalControl
+                Spacer(minLength: Space.lg)
+                utilityTray
+            }
+        }
+    }
+
+    /// What the run IS, how hard it thinks, and what answers it — the three
+    /// categories that together decide what `plannedCommand` builds.
+    private var runConfigGroup: some View {
+        HStack(spacing: Space.md) {
+            ModePicker(mode: $controller.mode)
+                .help(controller.mode.detail)
+
+            GroupDivider()
+
+            EffortPicker(effort: $effort)
+
+            GroupDivider()
+
+            if controller.mode.isMultiLane {
+                backendControls
+            } else {
+                singleLaneControls
+            }
+        }
+    }
+
+    /// Conversation-wide utility actions — not part of configuring the next
+    /// run, so kept visually separate from `runConfigGroup` rather than
+    /// chained onto the end of it.
+    private var utilityTray: some View {
+        HStack(spacing: Space.md) {
             if let session = controller.sessionId {
                 Metric(label: "session", value: String(session.suffix(8)))
                     .help("Follow-up turns resume this session: \(session)")
@@ -410,28 +514,37 @@ struct ControlStrip: View {
             .buttonStyle(SoftButton(tone: .neutral, size: .compact))
             .help("Clear the transcript (the durable session is kept)")
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm)
-        .background(theme.color(\.surfaceSunken))
     }
 
     private var backendControls: some View {
-        HStack(spacing: Space.xs) {
-            ForEach(controller.backends, id: \.self) { backend in
-                Chip(text: backend) {
-                    controller.backends.removeAll { $0 == backend }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Space.xs) {
+                ForEach(controller.backends, id: \.self) { backend in
+                    Chip(text: backend) {
+                        controller.backends.removeAll { $0 == backend }
+                    }
+                }
+                DropdownPicker(
+                    placeholder: "+ add",
+                    options: providers.filter { !controller.backends.contains($0.id) },
+                    selection: nil,
+                    width: 72,
+                    emptyHint: providers.isEmpty ? "No providers loaded yet" : "All providers already added"
+                ) { id in
+                    if !controller.backends.contains(id) { controller.backends.append(id) }
                 }
             }
-            DropdownPicker(
-                placeholder: "+ add",
-                options: providers.filter { !controller.backends.contains($0.id) },
-                selection: nil,
-                width: 72,
-                emptyHint: providers.isEmpty ? "No providers loaded yet" : "All providers already added"
-            ) { id in
-                if !controller.backends.contains(id) { controller.backends.append(id) }
-            }
         }
+        // Bounded, rather than left to size itself: backend chip count has
+        // no upper bound (a Compare run can grow past what any fixed width
+        // holds), so this is the one piece of `runConfigGroup` that keeps
+        // its own scroll. Bounding it also gives `ViewThatFits` an honest
+        // width to measure — an unbounded `ScrollView` always reports
+        // "fits" by clipping its content instead of overflowing, which
+        // would have silently defeated the single-row/two-row decision
+        // above exactly the way the old single, all-encompassing
+        // `ScrollView` did for provider/model.
+        .frame(maxWidth: 260)
     }
 
     private var singleLaneControls: some View {
@@ -441,7 +554,7 @@ struct ControlStrip: View {
                 leadingDot: providerDotColor(for: controller.provider, in: providers, theme: theme),
                 options: providers,
                 selection: controller.provider,
-                width: 104,
+                width: 96,
                 emptyHint: "No providers loaded yet"
             ) { id in
                 controller.provider = id
@@ -460,7 +573,7 @@ struct ControlStrip: View {
             options: models,
             selection: controller.model,
             isLoading: isLoadingModels,
-            width: 136,
+            width: 124,
             emptyHint: isLoadingModels ? "Loading models…" : "No models for this provider yet"
         ) { id in
             controller.model = id
@@ -555,6 +668,22 @@ private struct EffortPicker: View {
         }
         .animation(.easeOut(duration: 0.15), value: effort)
         .help("Reasoning effort — appended as --effort when not Off")
+    }
+}
+
+/// A hairline separating two `ControlStrip` groups by MEANING — mode,
+/// effort, provider/model, approvals. Four differently-shaped controls
+/// placed side by side with nothing marking where one category ends and the
+/// next begins is what made the strip read as controls dropped into a row
+/// rather than a designed sequence; this is the one visual device that
+/// fixes that without inventing a new spacing or color token.
+private struct GroupDivider: View {
+    @Environment(\.nexusTheme) private var theme
+
+    var body: some View {
+        Rectangle()
+            .fill(theme.color(\.chromeDivider))
+            .frame(width: 1, height: 20)
     }
 }
 
@@ -843,70 +972,81 @@ private struct ModePicker: View {
     }
 }
 
-/// A tappable prompt starter shown only on the empty state.
-private struct SuggestionChip: View {
+/// The empty state's hero visual: a live echo of the exact `nexus <mode>`
+/// invocation the control strip is currently configured to run, in the same
+/// monospace-plus-caret language the composer's command preview and the
+/// transcript's own streaming cursor use elsewhere in this file. Reusing
+/// `StreamingCaret` here (not a new blinking-cursor implementation) is
+/// deliberate: it is the one piece of motion in this app that already means
+/// "live," so it says "ready" here as literally as it says "streaming" in
+/// `TurnView`, rather than inventing a second cue for the same idea.
+///
+/// Replaces what used to be a generic icon centred in a soft radial glow —
+/// the most template-looking element in the app, and true of nearly any
+/// chat product rather than this one specifically.
+private struct ChatHeroMark: View {
     @Environment(\.nexusTheme) private var theme
+    let mode: RunMode
+
+    var body: some View {
+        HStack(spacing: Space.sm) {
+            Text("nexus")
+                .foregroundStyle(theme.color(\.textMuted))
+            Text(mode.rawValue)
+                .fontWeight(.semibold)
+                .foregroundStyle(theme.accentGradient)
+            StreamingCaret()
+        }
+        .font(.system(size: 19, weight: .medium, design: .monospaced))
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.lg)
+        .background(theme.color(\.surfaceRaised))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+        }
+        .animation(.easeOut(duration: 0.15), value: mode)
+    }
+}
+
+/// One row of the empty state's "try asking" grid — a full-width card rather
+/// than the small capsule this used to be, so the four suggestions read as
+/// real, chosen content occupying the transcript region rather than a thin
+/// afterthought pinned above the composer.
+private struct SuggestionCard: View {
+    @Environment(\.nexusTheme) private var theme
+    let icon: String
     let text: String
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            Text(text)
-                .font(Kind.caption)
-                .foregroundStyle(theme.color(\.textSecondary))
-                .padding(.horizontal, Space.md)
-                .padding(.vertical, Space.sm)
-                .background(theme.color(\.surfaceOverlay).opacity(hovering ? 1 : 0.7), in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
-                }
+            HStack(spacing: Space.md) {
+                Image(systemName: icon)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.color(\.accentDefault))
+                    .frame(width: 16)
+                Text(text)
+                    .font(Kind.body)
+                    .foregroundStyle(theme.color(\.textSecondary))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md + 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.color(\.surfaceOverlay).opacity(hovering ? 1 : 0.6), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
-        .scaleEffect(hovering ? 1.03 : 1)
         .animation(.easeOut(duration: 0.12), value: hovering)
         .onHover { hovering = $0 }
-    }
-}
-
-/// Wraps chips onto as many rows as the available width needs, instead of a
-/// hardcoded row count that would either waste space or clip on a narrow window.
-private struct FlowLayout: Layout {
-    var spacing: CGFloat = Space.sm
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var origin = CGPoint.zero
-        var rowHeight: CGFloat = 0
-        var width: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if origin.x + size.width > maxWidth, origin.x > 0 {
-                origin.x = 0
-                origin.y += rowHeight + spacing
-                rowHeight = 0
-            }
-            origin.x += size.width + spacing
-            width = max(width, origin.x - spacing)
-            rowHeight = max(rowHeight, size.height)
-        }
-        return CGSize(width: width, height: origin.y + rowHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var origin = bounds.origin
-        var rowHeight: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if origin.x + size.width > bounds.maxX, origin.x > bounds.origin.x {
-                origin.x = bounds.origin.x
-                origin.y += rowHeight + spacing
-                rowHeight = 0
-            }
-            subview.place(at: origin, proposal: .unspecified)
-            origin.x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
     }
 }
 

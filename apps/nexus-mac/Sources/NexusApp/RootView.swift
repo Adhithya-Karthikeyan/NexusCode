@@ -242,7 +242,7 @@ private struct ProjectSwitcherRow: View {
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(theme.color(\.textMuted))
                     .accessibilityHidden(true)
             }
@@ -402,7 +402,7 @@ struct StatusBar: View {
         HStack(spacing: Space.md) {
             HStack(spacing: 6) {
                 Image(systemName: "hexagon.fill")
-                    .font(.system(size: 8))
+                    .font(.system(size: 10))
                     .foregroundStyle(theme.color(\.accentDefault))
                     .accessibilityHidden(true)
                 Text("NexusCode")
@@ -518,72 +518,85 @@ struct SettingsView: View {
     private let columns = [GridItem(.adaptive(minimum: 168, maximum: 220), spacing: Space.md)]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Space.lg) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Theme")
-                        .font(Kind.title)
-                        .foregroundStyle(theme.color(\.textPrimary))
-                    Text("\(AppTheme.all.count) themes designed for this window — material, elevation and gradient a terminal palette can't express.")
-                        .font(Kind.caption)
-                        .foregroundStyle(theme.color(\.textMuted))
-                }
-
-                LazyVGrid(columns: columns, spacing: Space.md) {
-                    ForEach(AppTheme.all) { candidate in
-                        ThemeSwatch(
-                            theme: candidate,
-                            isSelected: candidate.id == workspace.themeId
-                        )
-                        .onTapGesture { workspace.themeId = candidate.id }
-                    }
-                }
-
-                SectionHeader(
-                    "Terminal palettes",
-                    subtitle: "The \(NexusTheme.all.count) palettes the CLI ships — same colours, rendered flat (no material, no elevation). Kept selectable for parity with the terminal, not because they suit a window."
-                )
-
-                LazyVGrid(columns: columns, spacing: Space.md) {
-                    // Routed through the same bridge the environment itself
-                    // uses (`NexusTheme.appTheme`) — one swatch type, one
-                    // picker, regardless of which catalogue a theme is from.
-                    ForEach(NexusTheme.all) { candidate in
-                        ThemeSwatch(
-                            theme: candidate.appTheme,
-                            isSelected: candidate.id == workspace.themeId
-                        )
-                        .onTapGesture { workspace.themeId = candidate.id }
-                    }
-                }
-
-                SectionHeader(
-                    "Project",
-                    accessory: AnyView(
-                        Button("Change Directory…") {
-                            presentDirectoryPicker(current: workspace.projectDirectory) {
-                                workspace.projectDirectory = $0
-                            }
-                        }
-                        .buttonStyle(SoftButton(size: .compact))
-                    )
-                )
-
-                Card {
-                    VStack(alignment: .leading, spacing: Space.sm) {
-                        LabeledLine(label: "Directory", value: workspace.projectDirectory.path)
-                        LabeledLine(label: "nexus", value: workspace.binaryPath ?? "not found")
-                        LabeledLine(
-                            label: "OMC",
-                            value: workspace.omc?.isAvailable == true
-                                ? "watching \(workspace.omc?.workspace?.root.lastPathComponent ?? "")/.omc"
-                                : "not used by this project"
-                        )
-                    }
-                }
+        // Header pinned, body fills-or-scrolls — see `PageScaffold`'s doc
+        // comment. This screen was a bare `ScrollView` with the "Theme"
+        // heading trapped *inside* it alongside both grids and the project
+        // card, which only avoided the dead-space symptom because 23
+        // swatches happened to fill the window. Pinning the heading here and
+        // letting the (genuinely tall) rest of the content own its own
+        // `ScrollView` brings it into line with every other screen.
+        PageScaffold {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Theme")
+                    .font(Kind.title)
+                    .foregroundStyle(theme.color(\.textPrimary))
+                Text("\(AppTheme.all.count) themes designed for this window — material, elevation and gradient a terminal palette can't express.")
+                    .font(Kind.caption)
+                    .foregroundStyle(theme.color(\.textMuted))
             }
-            .padding(Space.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Space.xl)
+            .padding(.top, Space.xl)
+            .padding(.bottom, Space.lg)
+        } content: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    LazyVGrid(columns: columns, spacing: Space.md) {
+                        ForEach(AppTheme.all) { candidate in
+                            ThemeSwatchButton(
+                                theme: candidate,
+                                isSelected: candidate.id == workspace.themeId,
+                                action: { workspace.themeId = candidate.id }
+                            )
+                        }
+                    }
+
+                    SectionHeader(
+                        "Terminal palettes",
+                        subtitle: "The \(NexusTheme.all.count) palettes the CLI ships — same colours, rendered flat (no material, no elevation). Kept selectable for parity with the terminal, not because they suit a window."
+                    )
+
+                    LazyVGrid(columns: columns, spacing: Space.md) {
+                        // Routed through the same bridge the environment itself
+                        // uses (`NexusTheme.appTheme`) — one swatch type, one
+                        // picker, regardless of which catalogue a theme is from.
+                        ForEach(NexusTheme.all) { candidate in
+                            ThemeSwatchButton(
+                                theme: candidate.appTheme,
+                                isSelected: candidate.id == workspace.themeId,
+                                action: { workspace.themeId = candidate.id }
+                            )
+                        }
+                    }
+
+                    SectionHeader(
+                        "Project",
+                        accessory: AnyView(
+                            Button("Change Directory…") {
+                                presentDirectoryPicker(current: workspace.projectDirectory) {
+                                    workspace.projectDirectory = $0
+                                }
+                            }
+                            .buttonStyle(SoftButton(size: .compact))
+                        )
+                    )
+
+                    Card {
+                        VStack(alignment: .leading, spacing: Space.sm) {
+                            LabeledLine(label: "Directory", value: workspace.projectDirectory.path)
+                            LabeledLine(label: "nexus", value: workspace.binaryPath ?? "not found")
+                            LabeledLine(
+                                label: "OMC",
+                                value: workspace.omc?.isAvailable == true
+                                    ? "watching \(workspace.omc?.workspace?.root.lastPathComponent ?? "")/.omc"
+                                    : "not used by this project"
+                            )
+                        }
+                    }
+                }
+                .padding(.horizontal, Space.xl)
+                .padding(.bottom, Space.xl)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 }
@@ -657,6 +670,31 @@ struct ThemeSwatch: View {
         .padding(4)
         .background(theme.color(\.surfaceSunken), in: RoundedRectangle(cornerRadius: Radius.card + 4, style: .continuous))
         .contentShape(Rectangle())
+    }
+}
+
+/// `ThemeSwatch` wrapped in a real control.
+///
+/// The swatch used to be tappable only via `.onTapGesture` on a plain
+/// `VStack` — that produces no `AXButton` role at all, so there was nothing
+/// for a screen reader to name and no way to reach it with the keyboard. This
+/// is strictly worse than an unnamed button: there is no element. Wrapping in
+/// a real `Button` with `.buttonStyle(.plain)` preserves the exact visual
+/// treatment `ThemeSwatch` already draws (including its `.contentShape` full-
+/// tile hit target) while adding a genuine `AXButton` role, keyboard focus and
+/// activation, and a proper name.
+struct ThemeSwatchButton: View {
+    let theme: AppTheme
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ThemeSwatch(theme: theme, isSelected: isSelected)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(theme.name), \(theme.isDark ? "dark" : "light") theme")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

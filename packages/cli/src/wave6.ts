@@ -509,6 +509,28 @@ function firstModel(registry: ProviderRegistry, providerId: string): string | un
 }
 
 /**
+ * Run a git flow's provider call (commit/review/explain/pr generation).
+ * `resolveGitProvider` only confirms the provider is REGISTERED — it can
+ * still be unauthenticated, offline, or rate-limited, and the adapter only
+ * discovers that once it actually tries to stream. Left uncaught, that
+ * exception propagates past this command's handler to `cli.runExit()`,
+ * whose default error rendering dumps a raw, ANSI-colored stack trace to
+ * STDOUT (not stderr) — unlike every other command's clean "provider X is
+ * not available" message, and it corrupts a `nexus pr | gh pr create
+ * --body-file -`-style pipe. Route it through the same clean, non-zero-exit
+ * error path every other command in this file already uses.
+ */
+async function runGitFlow<T>(command: string, io: Io, fn: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await fn();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    io.err(`nexus ${command}: ${message}\n`);
+    return undefined;
+  }
+}
+
+/**
  * Resolve the diff a git flow operates on: piped stdin wins (`git diff | nexus
  * review`); otherwise gather it from the repo (staged first, then the working
  * tree). Returns null (after messaging) when there is nothing to work with.
@@ -561,7 +583,10 @@ export async function cmdCommit(args: ParsedArgs, io: Io = defaultIo): Promise<n
     return 1;
   }
 
-  const msg = await generateCommitMessage(resolved.adapter, diffText, { model: resolved.model });
+  const msg = await runGitFlow("commit", io, () =>
+    generateCommitMessage(resolved.adapter, diffText, { model: resolved.model }),
+  );
+  if (!msg) return 1;
 
   if (output === "json") {
     io.out(`${JSON.stringify(msg)}\n`);
@@ -593,7 +618,10 @@ export async function cmdReview(args: ParsedArgs, io: Io = defaultIo): Promise<n
   const diffText = await resolveDiff(cwd, io, "review");
   if (diffText === null) return 1;
 
-  const review: ReviewResult = await reviewChanges(resolved.adapter, diffText, { model: resolved.model });
+  const review = await runGitFlow<ReviewResult>("review", io, () =>
+    reviewChanges(resolved.adapter, diffText, { model: resolved.model }),
+  );
+  if (!review) return 1;
   if (output === "json") {
     io.out(`${JSON.stringify({ summary: review.summary, comments: review.comments })}\n`);
     return 0;
@@ -616,7 +644,10 @@ export async function cmdExplain(args: ParsedArgs, io: Io = defaultIo): Promise<
   const diffText = await resolveDiff(cwd, io, "explain");
   if (diffText === null) return 1;
 
-  const explanation = await explainDiff(resolved.adapter, diffText, { model: resolved.model });
+  const explanation = await runGitFlow("explain", io, () =>
+    explainDiff(resolved.adapter, diffText, { model: resolved.model }),
+  );
+  if (explanation === undefined) return 1;
   if (output === "json") {
     io.out(`${JSON.stringify({ explanation })}\n`);
   } else {
@@ -665,7 +696,10 @@ export async function cmdPr(args: ParsedArgs, io: Io = defaultIo): Promise<numbe
     return 1;
   }
 
-  const pr = await generatePrDescription(resolved.adapter, input, { model: resolved.model });
+  const pr = await runGitFlow("pr", io, () =>
+    generatePrDescription(resolved.adapter, input, { model: resolved.model }),
+  );
+  if (!pr) return 1;
   if (output === "json") {
     io.out(`${JSON.stringify({ title: pr.title, body: pr.body })}\n`);
   } else {

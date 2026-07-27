@@ -201,4 +201,67 @@ final class SessionsTests: XCTestCase {
         XCTAssertEqual(command.arguments, ["replay", "s1", "-o", "ndjson"])
         XCTAssertEqual(command.workingDirectory, cwd)
     }
+
+    // MARK: - replayEvents (Sessions tab "Replay" wiring)
+    //
+    // `SessionsView`'s Replay button hands `replayEvents(for:)`'s result
+    // straight to `ConversationController.ingest(_:)` — these cover that it
+    // collects the real `UiEvent`s a `nexus replay … -o ndjson` process
+    // prints, in order, and drops nothing but genuine noise.
+
+    @MainActor
+    func testReplayEventsCollectsEveryEventFromTheProcessInOrder() async throws {
+        let binary = try fakeNexusBinary(printing: """
+        {"t":"prompt","lane":"main","id":"p0","text":"hi"}
+        {"t":"text","lane":"main","delta":"hello there"}
+        {"t":"done","lane":"main","finishReason":"stop"}
+        """)
+        let controller = SessionsController(client: NexusClient(binary: binary))
+
+        let events = await controller.replayEvents(for: "s1")
+
+        XCTAssertEqual(events.count, 3)
+        guard case .prompt(let prompt) = events[0] else {
+            return XCTFail("expected the first replayed event to be the prompt")
+        }
+        XCTAssertEqual(prompt.text, "hi")
+        guard case .text(let delta) = events[1] else {
+            return XCTFail("expected the second replayed event to be the text delta")
+        }
+        XCTAssertEqual(delta.delta, "hello there")
+        guard case .done = events[2] else {
+            return XCTFail("expected the third replayed event to be done")
+        }
+    }
+
+    @MainActor
+    func testReplayEventsFeedsConversationControllerIngestToRebuildTheTranscript() async throws {
+        // The real point of `replayEvents`: its output is exactly what
+        // `ConversationController.ingest(_:)` expects, so a replayed session
+        // renders through the SAME fold a live run uses — no parallel
+        // renderer.
+        let binary = try fakeNexusBinary(printing: """
+        {"t":"prompt","lane":"main","id":"p0","text":"hi"}
+        {"t":"text","lane":"main","delta":"hello there"}
+        """)
+        let controller = SessionsController(client: NexusClient(binary: binary))
+        let events = await controller.replayEvents(for: "s1")
+
+        let conversation = ConversationController(
+            client: NexusClient(binary: binary),
+            binary: binary
+        )
+        conversation.ingest(events)
+
+        XCTAssertFalse(conversation.view.lanes.isEmpty)
+    }
+
+    @MainActor
+    func testReplayEventsIsEmptyWhenTheProcessPrintsNothing() async throws {
+        let binary = try fakeNexusBinary(printing: "")
+        let controller = SessionsController(client: NexusClient(binary: binary))
+
+        let events = await controller.replayEvents(for: "s1")
+        XCTAssertTrue(events.isEmpty)
+    }
 }

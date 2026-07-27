@@ -217,6 +217,7 @@ private struct ProviderRow: View {
     @Binding var pastedCode: String
     @Binding var keyDraft: String
     let isSavingKey: Bool
+    @State private var confirmingSignOut = false
     let onSignIn: () -> Void
     let onCancelSignIn: () -> Void
     let onSubmitCode: () -> Void
@@ -341,6 +342,9 @@ private struct ProviderRow: View {
                 Image(systemName: provider.loggedIn ? "checkmark.circle.fill" : "xmark.circle")
                     .font(.system(size: 11))
                     .foregroundStyle(provider.loggedIn ? theme.color(\.successFg) : theme.color(\.textMuted))
+                    // The text beside it already says "detected"/"not
+                    // detected" — this glyph repeats that, it doesn't add to it.
+                    .accessibilityHidden(true)
                 Text(
                     provider.loggedIn
                         ? "Session detected — reuses the vendor CLI's own login."
@@ -355,11 +359,23 @@ private struct ProviderRow: View {
         }
     }
 
+    // Confirmed like every other action that requires re-authentication to
+    // undo: signing out revokes the live session, and getting back in means
+    // running the whole OAuth/API-key flow again, not a simple undo. Matches
+    // the gate already on "Delete task" and "Commit" (see `TasksView.swift:
+    // 373-375`, `GitView.swift:548-552`).
     private var signOutRow: some View {
         HStack {
             Spacer(minLength: 0)
-            Button("Sign out", role: .destructive, action: onSignOut)
-                .buttonStyle(SoftButton(tone: .danger, size: .compact))
+            Button("Sign out", role: .destructive) {
+                confirmingSignOut = true
+            }
+            .buttonStyle(SoftButton(tone: .danger, size: .compact))
+        }
+        .confirmationDialog("Sign out of \(provider.providerId)?", isPresented: $confirmingSignOut) {
+            Button("Sign Out", role: .destructive, action: onSignOut)
+        } message: {
+            Text("Revokes the current session. You'll need to sign in again to use \(provider.providerId).")
         }
     }
 }
@@ -413,7 +429,10 @@ private struct KindBadge: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: icon).font(.system(size: 8))
+            // `label` (e.g. "OAUTH", "API KEY") already names the kind this
+            // badge shows — the glyph is a visual accent on that same fact.
+            Image(systemName: icon).font(.system(size: 10))
+                .accessibilityHidden(true)
             Text(label.uppercased())
         }
         .font(Kind.micro)
@@ -432,6 +451,7 @@ private struct ErrorBanner: View {
         HStack(alignment: .top, spacing: Space.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.color(\.errorFg))
+                .accessibilityHidden(true)
             Text(message)
                 .font(Kind.caption)
                 .foregroundStyle(theme.color(\.textSecondary))

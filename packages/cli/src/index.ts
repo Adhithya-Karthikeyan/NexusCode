@@ -82,6 +82,11 @@ const FLAG_SPEC: FlagSpec = {
     "max-turns": [],
     "max-steps": [],
     role: ["r"],
+    // `--effort <off|low|medium|high>`: reasoning effort for ask/agent/chat/
+    // compare/race/consensus/chain (and plan, via the shared OODA path). Same
+    // vocabulary as the TUI's `/effort` picker — see `reasoningParamsFor` /
+    // `applyEffort` in commands.ts, the ONE place either surface builds it.
+    effort: [],
     parent: [],
     deps: [],
     cwd: [],
@@ -249,6 +254,10 @@ Options:
   -t, --tools             enable the agentic tool loop (ask/agent)
   -r, --role <name>       agent/plan: run the OODA framework as a specialized role
       --max-steps <n>     agent/plan: cap OODA iterations (default: role budget)
+      --effort <lvl>      ask/agent/chat/compare/race/consensus/chain: reasoning
+                          effort off|low|medium|high (default off). Warns on
+                          stderr and sends the request WITHOUT it — never
+                          silently — when the resolved provider can't honor it.
       --parent <id>       task add: parent task id (subtask)
       --deps <a,b>        task add: dependency task ids (comma-separated)
       --yolo              tool loop: full-access (no approval prompts)
@@ -289,6 +298,15 @@ class AskCommand extends HandlerCommand {
   static override paths = [["ask"], ["run"], ["q"]];
   static override usage = Command.Usage({
     description: "One-shot completion. Reads stdin when no prompt is given.",
+    details:
+      "--effort <off|low|medium|high> asks the provider to reason harder before " +
+      "answering (mapped to a thinking-token budget on budget-based providers, " +
+      "or sent as-is on providers with a native effort parameter). Default off. " +
+      "When the resolved provider cannot honor it, a clear warning prints to " +
+      "stderr and the request proceeds WITHOUT it — never silently.",
+    examples: [
+      ["Ask with high reasoning effort", "nexus ask -p mock --effort high 'explain this'"],
+    ],
   });
   protected handler(): Handler {
     return cmdAsk;
@@ -300,7 +318,7 @@ class AgentCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Agentic run: native tool loop, or the full OODA framework with --role.",
     details:
-      "Without --role, runs the fast native tool-execution loop. With --role <coder|reviewer|tester|planner|researcher|architect|doc-writer|security-reviewer|coordinator>, runs the OODA loop (Observe→Reason→Plan→Act→Evaluate→Repeat): plan drafting, reflection, retry/self-correction, and dynamic replanning — all on the engine bus. --max-steps caps OODA iterations. A --role run honors --resume <id> / --continue exactly like `chat --persistent --resume`: the prior conversation is rehydrated (text only; tool calls are not replayed), but the role always plans afresh against THIS invocation's prompt — resumed plan/task state is not a thing this framework tracks.",
+      "Without --role, runs the fast native tool-execution loop. With --role <coder|reviewer|tester|planner|researcher|architect|doc-writer|security-reviewer|coordinator>, runs the OODA loop (Observe→Reason→Plan→Act→Evaluate→Repeat): plan drafting, reflection, retry/self-correction, and dynamic replanning — all on the engine bus. --max-steps caps OODA iterations. A --role run honors --resume <id> / --continue exactly like `chat --persistent --resume`: the prior conversation is rehydrated (text only; tool calls are not replayed), but the role always plans afresh against THIS invocation's prompt — resumed plan/task state is not a thing this framework tracks. --effort <off|low|medium|high> applies to both paths (default off); a provider that cannot honor it gets a stderr warning and the request goes out without it, never silently. A --role run against a cli-subprocess agent (codex/claude-code) is refused before --effort is even evaluated — see the error for the two working routes.",
     examples: [
       ["Native tool loop", "nexus agent -p mock -m mock-tools 'read the config'"],
       ["OODA coder role", "nexus agent --role coder --max-steps 4 -p mock -m mock-tools 'add a hello function'"],
@@ -391,7 +409,7 @@ class CodeCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Drive a subprocess coding CLI (claude-code / codex) through the engine.",
     details:
-      "Runs a wrapped coding agent that edits files and runs shells; its file-edit/tool-result/approval events stream as UiEvents (diffs + tool activity on stderr). Degrades with a clear message when the CLI is not installed.",
+      "Runs a wrapped coding agent that edits files and runs shells; its file-edit/tool-result/approval events stream as UiEvents (diffs + tool activity on stderr). Degrades with a clear message when the CLI is not installed. --effort is always unsupported here: claude-code/codex run their own agent loop with no wire path for a reasoning-effort request, so any --effort prints a stderr warning and is never sent.",
     examples: [
       ["Run Claude Code on a task", "nexus code --agent claude-code 'fix the failing test'"],
       ["Run Codex", "nexus code -a codex 'add a README'"],
@@ -432,7 +450,11 @@ class ChatCommand extends HandlerCommand {
       "unanswered for 120s is denied by default (fail closed) rather than hanging the " +
       "process forever; cancelling the turn (SIGINT/SIGTERM) denies any of its pending " +
       "approvals immediately. In non-persistent (batch) mode there is no live channel " +
-      "to answer an approval, so `ask`'s network tier is denied outright instead.",
+      "to answer an approval, so `ask`'s network tier is denied outright instead.\n" +
+      "`--effort <off|low|medium|high>` sets reasoning effort for every turn in the " +
+      "session (default off, resolved once at startup — not per-line). When the " +
+      "resolved provider cannot honor it, a stderr warning prints and the turn " +
+      "proceeds without it — never silently.",
     examples: [
       ["Pipe a conversation", "printf 'hi\\nwhat did I say?\\n' | nexus chat -p mock"],
       ["Continue the last conversation", "nexus chat --continue"],
@@ -497,7 +519,13 @@ class MemoryCommand extends HandlerCommand {
 
 class CompareCommand extends HandlerCommand {
   static override paths = [["compare"]];
-  static override usage = Command.Usage({ description: "Fan a prompt out across -b providers." });
+  static override usage = Command.Usage({
+    description: "Fan a prompt out across -b providers.",
+    details:
+      "--effort <off|low|medium|high> applies to every -b lane (default off); a " +
+      "lane whose provider can't honor it gets its own stderr warning and runs " +
+      "without it — the other lanes are unaffected.",
+  });
   protected handler(): Handler {
     return cmdCompare;
   }
@@ -507,6 +535,10 @@ class RaceCommand extends HandlerCommand {
   static override paths = [["race"]];
   static override usage = Command.Usage({
     description: "Race -b providers; --mode first (fastest ok, cancels losers) | best (judge-ranked).",
+    details:
+      "--effort <off|low|medium|high> applies to every -b lane (default off); a " +
+      "lane whose provider can't honor it gets its own stderr warning and runs " +
+      "without it — the other lanes are unaffected.",
     examples: [
       ["Fastest healthy answer", "nexus race -b mock -b mock:mock-smart hi"],
       ["Judge-ranked best", "nexus race --mode best -b mock -b mock:mock-smart hi"],
@@ -521,6 +553,10 @@ class ConsensusCommand extends HandlerCommand {
   static override paths = [["consensus"]];
   static override usage = Command.Usage({
     description: "Fan across -b providers, then reconcile them into one answer via a judge.",
+    details:
+      "--effort <off|low|medium|high> applies to every -b lane (default off); a " +
+      "lane whose provider can't honor it gets its own stderr warning and runs " +
+      "without it — the other lanes are unaffected.",
     examples: [["Reconcile two lanes", "nexus consensus -b mock -b mock:mock-smart hi"]],
   });
   protected handler(): Handler {
@@ -532,6 +568,10 @@ class ChainCommand extends HandlerCommand {
   static override paths = [["chain"]];
   static override usage = Command.Usage({
     description: "Run staged with hand-offs. Default preset plan→edit→review over mock; override with --stages.",
+    details:
+      "--effort <off|low|medium|high> applies to every stage (default off); a " +
+      "stage whose provider can't honor it gets its own stderr warning and runs " +
+      "without it — the other stages are unaffected.",
     examples: [
       ["Default preset over mock", "nexus chain 'build a todo app'"],
       ["Explicit stages", "nexus chain --stages mock:mock-fast,mock:mock-smart 'plan then write'"],

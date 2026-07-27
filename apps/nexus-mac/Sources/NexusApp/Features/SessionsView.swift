@@ -112,6 +112,10 @@ struct SessionsView: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 26, weight: .light))
                 .foregroundStyle(theme.color(\.errorFg))
+                // The message text right below already says what's wrong —
+                // this glyph is decoration, not a second, unlabeled thing to
+                // announce.
+                .accessibilityHidden(true)
             Text(message)
                 .font(Kind.body)
                 .foregroundStyle(theme.color(\.textSecondary))
@@ -128,6 +132,7 @@ struct SessionsView: View {
         HStack(spacing: Space.xs) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 10))
+                .accessibilityHidden(true)
             Text(message)
                 .font(Kind.caption)
                 .lineLimit(1)

@@ -689,6 +689,8 @@ export async function cmdAsk(args: ParsedArgs, io: Io = defaultIo): Promise<numb
     io.err("nexus ask: no prompt (pass an argument or pipe stdin)\n");
     return 2;
   }
+  const effortResult = parseEffortFlag(args, io, "ask");
+  if ("code" in effortResult) return effortResult.code;
 
   const config = await loadEffectiveConfig();
   const runtime = await buildAuthedRuntime(config);
@@ -709,6 +711,7 @@ export async function cmdAsk(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   }
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
   const system = args.flags.get("system") ?? defaultSystemPrompt();
+  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "ask", io);
 
   const rawInput = userText(prompt);
   // Assemble before response-cache lookup so the signature covers the exact
@@ -736,7 +739,12 @@ export async function cmdAsk(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   }
 
   const template: RunTemplate = { adapterId: providerId, model };
-  if (assembledSystem !== undefined) template.params = { system: assembledSystem };
+  if (assembledSystem !== undefined || reasoning) {
+    template.params = {
+      ...(assembledSystem !== undefined ? { system: assembledSystem } : {}),
+      ...(reasoning ? { reasoning } : {}),
+    };
+  }
 
   // Response cache (CAG): a hit on an IDENTICAL request short-circuits the whole
   // provider dispatch and books the avoided tokens/cost as savings. Opt-in via
@@ -744,6 +752,10 @@ export async function cmdAsk(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   const responseCache = openResponseCache(config);
   const req: ChatRequest = { model, messages: input };
   if (assembledSystem !== undefined) req.system = assembledSystem;
+  // `reasoning` rides the cache signature too (see `signatureOf`) — an
+  // `--effort high` run must never replay an answer cached under a different
+  // (or no) effort level.
+  if (reasoning) req.reasoning = reasoning;
   if (responseCache) {
     const cached = await responseCache.get(req);
     if (cached) {
@@ -882,6 +894,81 @@ const EFFORT_BUDGET: Record<"low" | "medium" | "high", number> = {
   medium: 10000,
   high: 24000,
 };
+
+/**
+ * The `--effort` flag's vocabulary — identical to the TUI's `/effort` picker
+ * (`cmdTui`'s `activeEffort` below), so a headless run and an interactive pick
+ * are the same four values, never a different set that has to be translated.
+ */
+export type EffortLevel = "off" | "low" | "medium" | "high";
+
+function isEffortLevel(v: string): v is EffortLevel {
+  return v === "off" || v === "low" || v === "medium" || v === "high";
+}
+
+/**
+ * Build the `SamplingParams.reasoning` block for an effort level — the ONE
+ * place either the headless `--effort` flag or the TUI's `/effort` picker
+ * builds this shape (see `dispatchTurn` in `cmdTui`, which calls this same
+ * function), so the two surfaces can never drift apart. `"off"` clears
+ * reasoning entirely rather than sending a stale `enabled: true`.
+ */
+export function reasoningParamsFor(effort: EffortLevel): SamplingParams["reasoning"] | undefined {
+  if (effort === "off") return undefined;
+  return { enabled: true, effort, budgetTokens: EFFORT_BUDGET[effort] };
+}
+
+/**
+ * Parse and validate `--effort` up front — before any runtime/provider work,
+ * matching the existing "cheap validation first" ordering every command
+ * already uses for its prompt/positional checks. An unrecognized value is a
+ * usage error (exit 2), never silently coerced to "off"; an absent flag IS
+ * "off" (every command's unchanged default behavior).
+ */
+function parseEffortFlag(
+  args: ParsedArgs,
+  io: Io,
+  cmd: string,
+): { effort: EffortLevel } | { code: number } {
+  const raw = args.flags.get("effort");
+  if (raw === undefined) return { effort: "off" };
+  if (!isEffortLevel(raw)) {
+    io.err(`nexus ${cmd}: invalid --effort "${raw}" (expected off | low | medium | high)\n`);
+    return { code: 2 };
+  }
+  return { effort: raw };
+}
+
+/**
+ * Apply `--effort` against a RESOLVED provider id: build its `reasoning`
+ * params, or — when the provider cannot actually honor one (see
+ * `reasoningSupportedFor`, which this shares with the TUI's `/effort` picker)
+ * — warn clearly on stderr and return `undefined` so the request goes out
+ * WITHOUT it. This project's rule is "never a silent failure" (already applied
+ * to timed-out approvals, indeterminate verdicts, and unknown costs); silently
+ * accepting-and-dropping `--effort` would be the exact command-preview lie
+ * this feature exists to close, just moved one flag over. Omitting the param
+ * (rather than sending it anyway) also avoids handing an unsupported field to
+ * a provider that might reject the whole request over it.
+ */
+function applyEffort(
+  effort: EffortLevel,
+  providerId: string,
+  runtime: Runtime,
+  cmd: string,
+  io: Io,
+): SamplingParams["reasoning"] | undefined {
+  const reasoning = reasoningParamsFor(effort);
+  if (!reasoning) return undefined;
+  if (!reasoningSupportedFor(runtime, providerId)) {
+    io.err(
+      `nexus ${cmd}: provider "${providerId}" does not support reasoning effort — ` +
+        `"--effort ${effort}" is ignored for this request\n`,
+    );
+    return undefined;
+  }
+  return reasoning;
+}
 
 /**
  * Build the LSP server registry from config: the built-in defaults plus any extra

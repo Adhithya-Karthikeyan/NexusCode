@@ -11,7 +11,15 @@
  * caller's, expressed by choosing whether to consult the cache.
  */
 
-import type { ChatRequest, Message, Pricing, ToolChoice, ToolDef, Usage } from "@nexuscode/shared";
+import type {
+  ChatRequest,
+  Message,
+  Pricing,
+  ReasoningOptions,
+  ToolChoice,
+  ToolDef,
+  Usage,
+} from "@nexuscode/shared";
 import { hashKey } from "../keys.js";
 import { CacheAccounting } from "../accounting.js";
 import type { CacheBackend, CacheStats } from "../types.js";
@@ -26,6 +34,7 @@ export interface ResponseSignature {
   temperature?: number;
   maxTokens?: number;
   responseFormat?: unknown;
+  reasoning?: ReasoningOptions;
 }
 
 /** A cached model result. */
@@ -64,6 +73,11 @@ export function signatureOf(req: ChatRequest): ResponseSignature {
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(req.maxTokens !== undefined ? { maxTokens: req.maxTokens } : {}),
     ...(req.responseFormat !== undefined ? { responseFormat: req.responseFormat } : {}),
+    // A different reasoning effort/budget is a different sampling request — an
+    // `ask --effort high` must never replay an answer cached under `--effort
+    // off` (or vice versa). Omitted (not `undefined`-valued) when absent, same
+    // as every other optional field here, so a plain request's key is unchanged.
+    ...(req.reasoning !== undefined ? { reasoning: req.reasoning } : {}),
   };
 }
 

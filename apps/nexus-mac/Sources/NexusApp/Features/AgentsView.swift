@@ -575,6 +575,7 @@ private struct UnreadableNotice: View {
         HStack(spacing: Space.xs) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 9))
+                .accessibilityHidden(true)
             Text("Could not read \(paths.joined(separator: ", ")) — some values may be stale.")
                 .font(Kind.micro)
         }

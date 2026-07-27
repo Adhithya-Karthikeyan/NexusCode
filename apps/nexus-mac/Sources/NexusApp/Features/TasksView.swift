@@ -128,6 +128,7 @@ struct TasksView: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 26, weight: .light))
                 .foregroundStyle(theme.color(\.errorFg))
+                .accessibilityHidden(true)
             Text(message)
                 .font(Kind.body)
                 .foregroundStyle(theme.color(\.textSecondary))
@@ -224,6 +225,7 @@ private struct ErrorBanner: View {
         HStack(spacing: Space.xs) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 10))
+                .accessibilityHidden(true)
             Text(message)
                 .font(Kind.caption)
                 .lineLimit(2)

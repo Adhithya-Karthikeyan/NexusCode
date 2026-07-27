@@ -327,6 +327,34 @@ describe("wave 6 — git flows (against the mock provider)", () => {
   }, 20_000);
 });
 
+describe("wave 6 — git flows report a provider failure cleanly (never an uncaught stack trace)", () => {
+  // `resolveGitProvider` only confirms the provider is REGISTERED — `mock-flaky`
+  // passes that check and then genuinely throws on its one and only `stream()`
+  // call (these flows never retry), exercising exactly the path a real
+  // unauthenticated/offline provider would hit. Before the fix this propagated
+  // uncaught past `cli.runExit()`, which rendered a raw ANSI stack trace on
+  // STDOUT with exit 1 — the opposite of this codebase's "clean message on
+  // stderr" convention used by every other command.
+  for (const cmd of ["review", "explain", "commit", "pr"]) {
+    it(`nexus ${cmd} surfaces a thrown provider error as a clean stderr message, not a stdout stack trace`, async () => {
+      // A fresh, real diff every time — the shared REPO_DIR's working tree may
+      // already be clean/committed by an earlier test in this file, and a
+      // clean tree would short-circuit before ever reaching the provider.
+      writeFileSync(join(REPO_DIR, "app.ts"), `export const flakyProbe = ${Date.now()};\n`);
+      if (cmd === "commit") git(["add", "."]);
+      const r = await runCli([cmd, "-p", "mock-flaky", "-m", "mock-fast"], "", REPO_DIR);
+      expect(r.code).not.toBe(0);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain(`nexus ${cmd}: `);
+      expect(r.stderr).toContain("mock-flaky induced failure");
+      // The tell-tale signs of an unhandled exception leaking through clipanion's
+      // default renderer — must be absent.
+      expect(r.stderr).not.toContain("at async");
+      expect(r.stderr).not.toContain("Adapter Error");
+    }, 20_000);
+  }
+});
+
 describe("wave 6 — git flows see an auth-derived (OAuth-only, no static providers[] entry) provider", () => {
   // `resolveGitProvider` (shared by commit/review/explain/pr) used to build its
   // runtime with plain `buildRuntime`, so a provider the user is signed into

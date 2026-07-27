@@ -243,6 +243,59 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(c.isRunning)
     }
 
+    // MARK: - Resume / Replay (Sessions tab wiring)
+    //
+    // `reopen(sessionId:)` is the seam `SessionsView`'s Resume and Replay
+    // buttons share (see that file). These cover the three things it
+    // promises: the id sticks, a stale transcript doesn't linger, and a
+    // still-live backend from a DIFFERENT conversation doesn't keep answering
+    // underneath the newly-picked session.
+
+    func testReopenPointsAtTheGivenSessionId() {
+        let c = controller()
+        c.reopen(sessionId: "s_42")
+        XCTAssertEqual(c.sessionId, "s_42")
+    }
+
+    func testReopenClearsAnyExistingTranscript() {
+        let c = controller()
+        c.ingest([
+            .prompt(.init(lane: "main", id: "p0", text: "hi")),
+            .text(.init(lane: "main", delta: "answer")),
+        ])
+        XCTAssertFalse(c.view.lanes.isEmpty)
+
+        c.reopen(sessionId: "s_42")
+        XCTAssertTrue(c.view.lanes.isEmpty, "Resume/Replay must not show a stale transcript from whatever was open before")
+    }
+
+    func testReopenStopsALiveBackendSoTheNextSubmitStartsFreshAgainstTheNewSession() {
+        let c = controller()
+        c.mode = .ask
+        c.provider = "alpha"
+        c.submit("first")
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+
+        // Resuming a DIFFERENT session while this one is still live must not
+        // leave the old process running underneath the newly-set sessionId —
+        // otherwise the next message would silently keep talking to the old
+        // conversation instead of the one the user just picked.
+        c.reopen(sessionId: "s_other")
+        XCTAssertNil(c.activeBackendProvider)
+    }
+
+    func testReopenedSessionIdCarriesResumeOnTheNextSubmit() {
+        let c = controller()
+        c.reopen(sessionId: "s_5")
+
+        // Mirrors `testResumeIsThreadedSoFollowUpTurnsKeepContext` — this is
+        // the whole point of Resume: the CLI restores the model's context via
+        // `--resume`, not a replayed UI event log.
+        let args = c.plannedCommand(for: "again").arguments
+        XCTAssertTrue(args.contains("--resume"))
+        XCTAssertTrue(args.contains("s_5"))
+    }
+
     // MARK: - Provider switching (regression)
 
     func testSwitchingProviderRelaunchesTheBackend() async throws {
