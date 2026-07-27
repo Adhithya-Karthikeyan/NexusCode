@@ -241,6 +241,17 @@ public enum UiEvent: Sendable, Hashable {
         public struct Target: Sendable, Hashable, Codable {
             public let providerId: String
             public let modelId: String
+
+            /// Display form for this side of a switch — `"provider/model"`,
+            /// or bare `providerId` when `modelId` is empty.
+            ///
+            /// `modelId` decodes as `""`, not omitted, on an immediate
+            /// rejection (verified live against a real refused switch) —
+            /// this guards against a bare trailing "provider/" for that
+            /// case rather than assuming a model id is always present.
+            public var label: String {
+                modelId.isEmpty ? providerId : "\(providerId)/\(modelId)"
+            }
         }
 
         public let lane: String

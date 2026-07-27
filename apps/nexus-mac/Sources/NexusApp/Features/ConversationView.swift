@@ -122,9 +122,15 @@ struct ConversationView: View {
 
     private var laneOrder: [LaneState] { controller.view.orderedLanes }
 
+    /// Lane ids to actually render. See `ViewState.visibleLaneIds`'s doc for
+    /// why this is not simply `laneOrder`: a `switch` receipt can exist for a
+    /// lane with no `LaneState` at all, and must still render somewhere
+    /// rather than vanish behind the empty-state hero.
+    private var visibleLaneIds: [String] { controller.view.visibleLaneIds }
+
     @ViewBuilder
     private var transcript: some View {
-        if laneOrder.isEmpty {
+        if visibleLaneIds.isEmpty {
             // Bottom-anchored, not centered: `.fixedSize` collapses the
             // empty state to its own intrinsic height, and bottom-alignment
             // then settles it just above the composer, reading as one
@@ -157,14 +163,16 @@ struct ConversationView: View {
                     // whole turns is what made the transcript read as a solid
                     // wall of text rather than a sequence of distinct answers.
                     LazyVStack(alignment: .leading, spacing: 24) {
-                        ForEach(laneOrder) { lane in
-                            ForEach(lane.finalized) { turn in
-                                TurnView(turn: turn, showsReasoning: showsReasoning)
-                                    .id(turn.id)
-                            }
-                            if let live = lane.live {
-                                TurnView(turn: live, showsReasoning: showsReasoning, isStreaming: true)
-                                    .id(live.id)
+                        ForEach(visibleLaneIds, id: \.self) { laneId in
+                            ForEach(controller.view.timeline(forLane: laneId)) { entry in
+                                switch entry {
+                                case .turn(let turn, let isLive):
+                                    TurnView(turn: turn, showsReasoning: showsReasoning, isStreaming: isLive)
+                                        .id(turn.id)
+                                case .providerSwitch(let receipt):
+                                    SwitchReceiptView(receipt: receipt)
+                                        .id(receipt.id)
+                                }
                             }
                         }
                     }
@@ -192,8 +200,8 @@ struct ConversationView: View {
     }
 
     private var scrollAnchor: String? {
-        guard let lane = laneOrder.last else { return nil }
-        return lane.live?.id ?? lane.finalized.last?.id
+        guard let laneId = visibleLaneIds.last else { return nil }
+        return controller.view.timeline(forLane: laneId).last?.id
     }
 
     private static let suggestions: [(icon: String, text: String)] = [
@@ -1044,7 +1052,7 @@ private struct UsageReadout: View {
         HStack(spacing: Space.md) {
             Metric(label: "in", value: "\(view.lastUsage.inputTokens)")
             Metric(label: "out", value: "\(view.lastUsage.outputTokens)")
-            Metric(label: "turn cost", value: formatted(view.runUsd), emphasis: true)
+            Metric(label: "turn cost", value: turnCostText, emphasis: true)
             Spacer(minLength: 0)
             Metric(
                 label: "session total",
@@ -1052,6 +1060,17 @@ private struct UsageReadout: View {
             )
         }
         .foregroundStyle(theme.color(\.textMuted))
+    }
+
+    /// Display text for `view.currentTurnCost` — see that property's doc for
+    /// why this is a real three-way distinction and not just `formatted`
+    /// applied to an optional.
+    private var turnCostText: String {
+        switch view.currentTurnCost {
+        case .cached: return "cached"
+        case .unknown: return formatted(nil)
+        case .priced(let usd): return formatted(usd)
+        }
     }
 
     /// `nil` means genuinely unknown pricing (an unpriced model's turn) —
@@ -1427,6 +1446,120 @@ struct TurnView: View {
         .padding(Space.sm)
         .background(theme.color(\.errorBg))
         .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+    }
+}
+
+/// One `switch` control-line outcome, rendered inline in the transcript at
+/// the point it happened — chronologically merged with turns by
+/// `ViewState.timeline(forLane:)`, never a transient toast pinned to the
+/// composer: a blocked switch is real, permanent history exactly like a
+/// turn is, and must survive scrollback the same way.
+///
+/// Two registers, matching this file's existing vocabulary for "caveat over
+/// real content" vs "the thing itself failed" (`InlineBanner`/`ErrorState`
+/// in `DesignSystem.swift`): a REFUSED switch is unmissable — full-width,
+/// error-toned, `blockers` shown verbatim, because the specific reason is
+/// the entire value of a refusal a user would otherwise read as silence. An
+/// ACCEPTED switch is the opposite: the conversation underneath did not
+/// change shape, so this is one quiet line, not a card.
+struct SwitchReceiptView: View {
+    @Environment(\.nexusTheme) private var theme
+    let receipt: SwitchReceipt
+
+    var body: some View {
+        if receipt.accepted {
+            acceptedRow
+        } else {
+            blockedCard
+        }
+    }
+
+    // MARK: - Accepted
+
+    private var acceptedRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: Space.sm) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.color(\.textMuted))
+                // The exact wording `SwitchReceipt.preserved`'s doc comment
+                // asks for — honest about what carries over and what never
+                // did (tool-call history isn't in the transcript at ANY
+                // turn boundary, switch or not), rather than a bare "done"
+                // that implies more than it should.
+                Text("switched to \(receipt.to.label) — conversation and context carried over; tool-call history is not (never was, any turn boundary).")
+                    .font(Kind.caption)
+                    .foregroundStyle(theme.color(\.textMuted))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !receipt.warnings.isEmpty {
+                warningsList(receipt.warnings)
+            }
+        }
+        .padding(.leading, Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Blocked
+
+    private var blockedCard: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack(alignment: .top, spacing: Space.sm) {
+                Image(systemName: "exclamationmark.octagon.fill")
+                    .font(.system(size: 12))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Switch to \(receipt.to.label) blocked")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Staying on \(receipt.from.label).")
+                        .font(Kind.caption)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(theme.color(\.errorFg))
+
+            // Verbatim, one per line — never summarised into a generic
+            // "switch failed": the specific reason IS the value of a
+            // refusal (see `SwitchReceipt.blockers`'s doc).
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(receipt.blockers.enumerated()), id: \.offset) { _, blocker in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("•")
+                        Text(blocker).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .font(Kind.caption)
+            .foregroundStyle(theme.color(\.errorFg).opacity(0.9))
+
+            if !receipt.warnings.isEmpty {
+                warningsList(receipt.warnings)
+            }
+        }
+        .padding(Space.md)
+        .background(theme.color(\.errorBg))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(theme.color(\.errorBorder), lineWidth: 1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Shared
+
+    /// Non-fatal caveats either way (e.g. "requires compaction") — visible,
+    /// but deliberately calmer than `blockers`: smaller type, warning (not
+    /// error) tone, no bullet competing for attention.
+    @ViewBuilder
+    private func warningsList(_ warnings: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
+                Text(warning).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(Kind.micro)
+        .foregroundStyle(theme.color(\.warningFg).opacity(0.85))
+        .padding(.leading, Space.lg)
     }
 }
 

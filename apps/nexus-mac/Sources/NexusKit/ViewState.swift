@@ -304,6 +304,87 @@ public struct ViewState: Sendable, Hashable {
     public var activeLanes: [LaneState] {
         orderedLanes.filter(\.isStreaming)
     }
+
+    /// Lane ids a transcript view should render — `laneOrder` plus any lane a
+    /// `switch` receipt references that never otherwise produced a
+    /// `LaneState`.
+    ///
+    /// A `switch` control line is recorded even with zero prior activity on
+    /// its lane (`reduce`'s `.switch` case never calls `ensureLane` — see its
+    /// comment, and `testAnAcceptedSwitchWithNoPriorSessionEventDoesNotInventOne`).
+    /// A view that iterates `laneOrder` alone would then render nothing at
+    /// all for that receipt: exactly the "real event, silently dropped"
+    /// failure this property exists to close.
+    public var visibleLaneIds: [String] {
+        var ids = laneOrder
+        for receipt in switches where !ids.contains(receipt.lane) {
+            ids.append(receipt.lane)
+        }
+        return ids
+    }
+
+    /// One lane's turns and provider switches, merged into a single
+    /// chronological sequence.
+    ///
+    /// `Turn.startedTs` and `SwitchReceipt.ts` are both stamped from the SAME
+    /// monotonic ingest counter (the caller's `reduce(_:ts:)` argument —
+    /// never the wall clock), so sorting the two together by that value
+    /// interleaves them correctly and stays replay-deterministic. `laneId`
+    /// may have no `LaneState` at all (see `visibleLaneIds`), in which case
+    /// this is just that lane's switches.
+    public func timeline(forLane laneId: String) -> [TimelineEntry] {
+        let lane = lanes[laneId]
+        var entries = (lane?.finalized ?? []).map { TimelineEntry.turn($0, isLive: false) }
+        if let live = lane?.live {
+            entries.append(.turn(live, isLive: true))
+        }
+        entries.append(contentsOf: switches.filter { $0.lane == laneId }.map { .providerSwitch($0) })
+        return entries.sorted { $0.ts < $1.ts }
+    }
+
+    /// A turn's cost — THREE states, not two: unknown (no `usage` event has
+    /// landed for it), a cache hit (a CONFIRMED zero — no provider call
+    /// happened at all), or a priced result (which may itself be a genuine
+    /// $0 from a free provider).
+    ///
+    /// Reads the active lane's own turn rather than trusting `runUsd` alone:
+    /// a cache hit emits no `usage` event (see `Turn.cacheHit`'s doc), so
+    /// without this, a cached turn wouldn't read as "unknown" — it would
+    /// read as whatever the PREVIOUS priced turn happened to cost, silently
+    /// wrong rather than merely uninformative.
+    public var currentTurnCost: TurnCost {
+        if activeLanes.first?.live?.cacheHit == true { return .cached }
+        guard let runUsd else { return .unknown }
+        return .priced(runUsd)
+    }
+}
+
+/// One entry in a lane's rendered timeline — either a turn or a provider
+/// switch that happened between turns. See `ViewState.timeline(forLane:)`.
+public enum TimelineEntry: Sendable, Hashable, Identifiable {
+    case turn(Turn, isLive: Bool)
+    case providerSwitch(SwitchReceipt)
+
+    public var id: String {
+        switch self {
+        case .turn(let turn, _): return turn.id
+        case .providerSwitch(let receipt): return receipt.id
+        }
+    }
+
+    var ts: Double {
+        switch self {
+        case .turn(let turn, _): return turn.startedTs
+        case .providerSwitch(let receipt): return receipt.ts
+        }
+    }
+}
+
+/// See `ViewState.currentTurnCost`.
+public enum TurnCost: Sendable, Hashable {
+    case unknown
+    case cached
+    case priced(Double)
 }
 
 // MARK: - The fold

@@ -211,6 +211,31 @@ final class ViewStateTests: XCTestCase {
         XCTAssertEqual(state.lanes["main"]?.live?.cacheHit, false)
     }
 
+    func testCurrentTurnCostDistinguishesCachedFromAConfirmedZeroFromUnknown() {
+        var state = ViewState()
+        XCTAssertEqual(state.currentTurnCost, .unknown, "nothing has happened yet")
+
+        // A first, ordinary priced turn.
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "hi")), ts: 0)
+        state.reduce(
+            .usage(.init(lane: "main", inputTokens: 10, outputTokens: 5, cacheRead: nil, cacheWrite: nil, costUsd: 0.05)),
+            ts: 1
+        )
+        state.reduce(.done(.init(lane: "main", finishReason: "stop")), ts: 2)
+        XCTAssertEqual(state.currentTurnCost, .priced(0.05))
+
+        // A SECOND turn that hits the response cache — no `usage` event at
+        // all arrives for it (see the `Cache` MARK above).
+        state.reduce(.prompt(.init(lane: "main", id: "p1", text: "hi again")), ts: 3)
+        state.reduce(.text(.init(lane: "main", delta: "cached answer")), ts: 4)
+        state.reduce(.cache(.init(lane: "main", hit: true)), ts: 5)
+
+        // Without reading the live turn's OWN `cacheHit`, this would still
+        // report `.priced(0.05)` — the FIRST turn's cost, stale and silently
+        // wrong for a turn that made no provider call at all.
+        XCTAssertEqual(state.currentTurnCost, .cached)
+    }
+
     // MARK: - Provider switch (`t: "switch"`)
     //
     // `nexus chat --persistent`'s in-process provider/model switch. Fires
@@ -330,6 +355,91 @@ final class ViewStateTests: XCTestCase {
         )
         XCTAssertNil(state.session)
         XCTAssertEqual(state.switches.count, 1, "the switch itself is still recorded")
+    }
+
+    func testSwitchTargetLabelGuardsAnEmptyModelId() {
+        // On an immediate rejection `to.modelId` decodes as `""`, not
+        // omitted (verified live) — the label must not render a bare
+        // trailing "groq/" for that case.
+        XCTAssertEqual(switchTarget("groq", "").label, "groq")
+        XCTAssertEqual(switchTarget("groq", "llama-3.1-70b").label, "groq/llama-3.1-70b")
+    }
+
+    // MARK: - Transcript timeline (turns + switches merged)
+    //
+    // `ConversationView` renders one lane's history as turns and switches
+    // interleaved by `ts` — these mirror the invariants that merge relies on.
+
+    func testVisibleLaneIdsIncludesASwitchOnlyLane() {
+        // Mirrors `testAnAcceptedSwitchWithNoPriorSessionEventDoesNotInventOne`:
+        // a switch can be the ONLY thing that ever happened on a lane. A view
+        // iterating `laneOrder` alone would never render it.
+        var state = ViewState()
+        state.reduce(
+            .switch(.init(
+                lane: "main", from: switchTarget("mock", "mock-fast"), to: switchTarget("mock-flaky", "mock-fast"),
+                accepted: true, blockers: [], warnings: [], preserved: [], adaptations: [],
+                reason: "explicit switch requested by client"
+            )),
+            ts: 0
+        )
+        XCTAssertTrue(state.laneOrder.isEmpty, "no turn-bearing event ever created the lane")
+        XCTAssertEqual(state.visibleLaneIds, ["main"], "the switch's own lane must still be visible")
+    }
+
+    func testTimelineInterleavesASwitchBetweenTwoTurnsByTimestamp() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "hi")), ts: 0)
+        state.reduce(.text(.init(lane: "main", delta: "first answer")), ts: 1)
+        state.reduce(.done(.init(lane: "main", finishReason: "stop")), ts: 2)
+        state.reduce(
+            .switch(.init(
+                lane: "main", from: switchTarget("mock", "mock-fast"), to: switchTarget("mock-flaky", "mock-fast"),
+                accepted: true, blockers: [], warnings: [], preserved: [], adaptations: [],
+                reason: "explicit switch requested by client"
+            )),
+            ts: 3
+        )
+        state.reduce(.prompt(.init(lane: "main", id: "p1", text: "hi again")), ts: 4)
+        state.reduce(.text(.init(lane: "main", delta: "second answer")), ts: 5)
+
+        let timeline = state.timeline(forLane: "main")
+        XCTAssertEqual(timeline.count, 3, "one finalized turn, one switch, one live turn")
+
+        guard case .turn(let first, let firstIsLive) = timeline[0] else {
+            return XCTFail("expected a turn first")
+        }
+        XCTAssertEqual(first.text, "first answer")
+        XCTAssertFalse(firstIsLive)
+
+        guard case .providerSwitch(let receipt) = timeline[1] else {
+            return XCTFail("expected the switch between the two turns")
+        }
+        XCTAssertTrue(receipt.accepted)
+
+        guard case .turn(let second, let secondIsLive) = timeline[2] else {
+            return XCTFail("expected the live turn last")
+        }
+        XCTAssertEqual(second.text, "second answer")
+        XCTAssertTrue(secondIsLive)
+    }
+
+    func testTimelineForASwitchOnlyLaneIsJustTheSwitch() {
+        var state = ViewState()
+        state.reduce(
+            .switch(.init(
+                lane: "main", from: switchTarget("mock", "mock-fast"), to: switchTarget("groq", ""),
+                accepted: false, blockers: ["\"groq\" is not available (no usable credential)"],
+                warnings: [], preserved: [], adaptations: [], reason: "explicit switch requested by client"
+            )),
+            ts: 0
+        )
+        let timeline = state.timeline(forLane: "main")
+        XCTAssertEqual(timeline.count, 1)
+        guard case .providerSwitch(let receipt) = timeline[0] else {
+            return XCTFail("expected the switch")
+        }
+        XCTAssertFalse(receipt.accepted)
     }
 
     // MARK: - Multi-agent lanes
