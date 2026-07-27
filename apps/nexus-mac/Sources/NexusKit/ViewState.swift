@@ -214,6 +214,22 @@ public struct ViewState: Sendable, Hashable {
     /// run's pricing is genuinely unknown — distinct from a real free run.
     public var runUsd: Double?
     public var lastUsage: (inputTokens: Int, outputTokens: Int) = (0, 0)
+    /// Health per provider, derived PASSIVELY from run outcomes observed THIS
+    /// SESSION ONLY (a failure marks `.degraded`/`.down`, a success or
+    /// failover target marks `.ok`) — no persistence, no reason, no retry
+    /// time.
+    ///
+    /// This is a DIFFERENT signal from `ProviderCircuit`
+    /// (`NexusKit/Providers.swift`), the CLI's own cross-process, PERSISTED
+    /// circuit-breaker state surfaced in the provider picker: that one is
+    /// authoritative — it is what actually gates a real dispatch — and
+    /// carries a reason plus a retry time this passive signal cannot. They
+    /// are not wired to the same view today (`providerHealth` has no UI
+    /// consumer yet, so there is no on-screen place they could currently
+    /// contradict each other), but if one ever renders both for the same
+    /// provider, `ProviderCircuit` must win: it answers "would a request be
+    /// allowed right now", which is the question that actually matters,
+    /// where this is only a same-session breadcrumb that resets on relaunch.
     public var providerHealth: [String: ProviderHealth] = [:]
     public var notifications: [NotificationItem] = []
     public var streaming: Bool = false
