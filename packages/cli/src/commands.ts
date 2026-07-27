@@ -3851,6 +3851,14 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   const config = await loadEffectiveConfig();
   const effortResult = resolveEffortFlag(args, config, io, "chat");
   if ("code" in effortResult) return effortResult.code;
+  // Narrowed once, here, and closed over by name — not `effortResult.effort`
+  // again below. TS's control-flow narrowing from the guard above does not
+  // survive into `performSwitch`, a nested function declared further down in
+  // this same body: it conservatively re-widens `effortResult` back to the
+  // full `{effort} | {code}` union inside any closure, even though it is a
+  // `const` that provably never changes. Hoisting the narrowed value avoids
+  // relying on narrowing crossing a closure boundary at all.
+  const effort = effortResult.effort;
 
   const runtime = await buildAuthedRuntime(config);
   // Provider resolution mirrors `ask` / `tui` exactly: an explicit `-p` stays a
@@ -3879,7 +3887,7 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   // Re-derived on every switch too (see `performSwitch`) — a provider that
   // does not honor reasoning effort must not silently keep stale params from
   // whatever provider WAS active when `--effort` was first applied.
-  let reasoning = applyEffort(effortResult.effort, providerId, runtime, "chat", io);
+  let reasoning = applyEffort(effort, providerId, runtime, "chat", io);
   const output = parseOutput(args);
   // `--persistent`: hold the process open and read stdin INCREMENTALLY — one
   // line dispatched as a turn as soon as it arrives — instead of the default
@@ -4132,7 +4140,7 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
     // Re-applied for the NEW target — `applyEffort` already warns (and drops
     // the param rather than sending it) when the target does not honor
     // reasoning effort, exactly as it does on a fresh `chat` startup.
-    reasoning = applyEffort(effortResult.effort, providerId, runtime, "chat", io);
+    reasoning = applyEffort(effort, providerId, runtime, "chat", io);
 
     emit({
       t: "switch",
@@ -4500,13 +4508,24 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   // The preflight is pure (see `./model-switch.js`); these two adapters bind it to
   // the live dispatch state and commit an accepted switch exactly once, so the
   // `/model` and `/provider` paths can no longer drift apart.
-  const switchContext = (): SwitchContext => ({
+  //
+  // `transcript` comes from `runTui` at call time (there is no `session` here —
+  // `runTui` owns its own internal session/transcript, see G19 in
+  // CAPABILITIES.md for why that used to make this preflight blind to it) and
+  // is what lets `capabilityAssessment` (inside `preflightModelSwitch`/
+  // `preflightProviderSwitch`) see whether the target can accept what the
+  // conversation already contains — the same probe `performSwitch` builds
+  // from `session.transcript`, minus a `session` to build it from directly.
+  const switchContext = (transcript: readonly Message[]): SwitchContext => ({
     runtime,
     config,
     catalog,
     ...(continuity.providerCircuit ? { circuit: continuity.providerCircuit } : {}),
     ...(continuity.circuitTargetFor ? { circuitTargetFor: continuity.circuitTargetFor } : {}),
     from: { provider: activeProvider, model: activeModel },
+    transcript,
+    ...(system !== undefined ? { system } : {}),
+    ...(hasTools ? { tools: toolDefsFrom(toolRegistry) } : {}),
   });
   const applySwitch = (result: SwitchResult): SwitchResult => {
     if (result.accepted) {
@@ -4596,8 +4615,10 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
         );
         return rows;
       },
-      onModelChange: (m, p) => applySwitch(preflightModelSwitch(switchContext(), m, p)),
-      onProviderChange: (p) => applySwitch(preflightProviderSwitch(switchContext(), p)),
+      onModelChange: (m, p, transcript) =>
+        applySwitch(preflightModelSwitch(switchContext(transcript), m, p)),
+      onProviderChange: (p, transcript) =>
+        applySwitch(preflightProviderSwitch(switchContext(transcript), p)),
       // `/effort` picker: apply the chosen reasoning effort to the next turn, and
       // tell the TUI whether the active provider supports reasoning at all.
       onEffortChange: (e: string) => {

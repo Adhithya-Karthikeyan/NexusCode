@@ -19,8 +19,15 @@
  */
 
 import type { NexusConfig } from "@nexuscode/config";
-import type { ProviderCircuitStatus, ProviderCircuitTarget } from "@nexuscode/core";
+import {
+  assessSwitchTarget,
+  inferSwitchRequirements,
+  type ProviderCircuitStatus,
+  type ProviderCircuitTarget,
+  type ProviderSwitchAssessment,
+} from "@nexuscode/core";
 import type { Runtime } from "@nexuscode/runtime";
+import type { ChatRequest, Message, ToolDef } from "@nexuscode/shared";
 import { isProviderUsable, type ProviderModelChoice } from "./runtime.js";
 
 /**
@@ -263,6 +270,64 @@ export interface SwitchContext {
   circuitTargetFor?: ((candidate: SwitchCandidate) => ProviderCircuitTarget) | undefined;
   /** The provider/model in effect right now (used for the receipt). */
   from: { provider: string; model: string };
+  /**
+   * The session's short-term conversation memory AS IT STANDS right now
+   * (read-only) — what `assessSwitchTarget` needs to know whether the target
+   * can accept what the conversation already contains (tool calls/results,
+   * modalities used, …). There is no new turn yet at preflight time (unlike
+   * `chat --persistent`'s `{"type":"switch"}` control line, which at least
+   * has `session.transcript`), so this IS the probe, not a request built
+   * around one. Optional only so a caller with no live session (tests, a
+   * future non-conversational host) degrades to the pre-existing
+   * usable/advertised/circuit-only preflight rather than being forced to
+   * fabricate one.
+   */
+  transcript?: readonly Message[] | undefined;
+  /** The active system prompt, if any — folded into the same probe. */
+  system?: string | undefined;
+  /** Tools available to the NEXT turn, if any — folded into the same probe. */
+  tools?: ToolDef[] | undefined;
+}
+
+/**
+ * Assess whether `provider`/`model` can accept what this conversation already
+ * needs — the same `assessSwitchTarget` check `chat --persistent`'s explicit
+ * switch control line runs (`commands.ts`'s `performSwitch`), reused here so
+ * the TUI picker inherits every blocker it has, current and future, instead
+ * of maintaining a second list that will drift. Capability metadata is
+ * advisory: a provider whose capabilities can't be read degrades to `undefined`
+ * (skip the check) rather than blocking the switch on a read failure.
+ */
+function capabilityAssessment(
+  ctx: SwitchContext,
+  provider: string,
+  model: string,
+): ProviderSwitchAssessment | undefined {
+  if (ctx.transcript === undefined) return undefined;
+  let caps;
+  try {
+    caps = ctx.runtime.registry.capabilitiesOf(provider);
+  } catch {
+    return undefined;
+  }
+  const probeRequest: ChatRequest = {
+    model,
+    messages: [...ctx.transcript],
+    ...(ctx.system !== undefined ? { system: ctx.system } : {}),
+    ...(ctx.tools ? { tools: ctx.tools } : {}),
+  };
+  const sourcePrice =
+    ctx.runtime.pricing[ctx.from.model] ?? ctx.runtime.pricing[`${ctx.from.provider}/${ctx.from.model}`];
+  return assessSwitchTarget(provider, model, caps, inferSwitchRequirements(probeRequest), {
+    pricing: ctx.runtime.pricing,
+    ...(sourcePrice ? { sourcePrice } : {}),
+    ...(ctx.config.switching.maxCostMultiplier !== undefined
+      ? { maxCostMultiplier: ctx.config.switching.maxCostMultiplier }
+      : {}),
+    ...(ctx.config.switching.contextSafetyMarginTokens !== undefined
+      ? { contextSafetyMarginTokens: ctx.config.switching.contextSafetyMarginTokens }
+      : {}),
+  });
 }
 
 function accept(
@@ -270,14 +335,16 @@ function accept(
   provider: string,
   model: string,
   detail: string,
+  warnings: readonly string[] = [],
 ): SwitchResult {
+  const fullDetail = warnings.length > 0 ? `${detail}; ${warnings.join("; ")}` : detail;
   return {
     accepted: true,
     provider,
     model,
     contextMax: contextWindowFor(ctx.runtime, provider, model, ctx.catalog),
     reasoningSupported: reasoningSupportedFor(ctx.runtime, provider),
-    receipt: `${ctx.from.provider}/${ctx.from.model} → ${provider}/${model}; ${detail}`,
+    receipt: `${ctx.from.provider}/${ctx.from.model} → ${provider}/${model}; ${fullDetail}`,
   };
 }
 
@@ -296,7 +363,17 @@ export function preflightModelSwitch(
   }
   const blocked = circuitBlockedReason(target, model, ctx.circuit, ctx.circuitTargetFor);
   if (blocked) return { accepted: false, provider: target, reason: blocked };
-  return accept(ctx, target, model, "capability and availability preflight passed");
+  const assessment = capabilityAssessment(ctx, target, model);
+  if (assessment && !assessment.compatible) {
+    return { accepted: false, provider: target, reason: assessment.blockers.join("; ") };
+  }
+  return accept(
+    ctx,
+    target,
+    model,
+    "capability and availability preflight passed",
+    assessment?.warnings,
+  );
 }
 
 /** Preflight a `/provider` pick, landing on a model that provider really has. */
@@ -307,5 +384,15 @@ export function preflightProviderSwitch(ctx: SwitchContext, provider: string): S
   const model = resolveSwitchModel(ctx.runtime, provider, ctx.config, ctx.catalog);
   const blocked = circuitBlockedReason(provider, model, ctx.circuit, ctx.circuitTargetFor);
   if (blocked) return { accepted: false, provider, reason: blocked };
-  return accept(ctx, provider, model, "model, context and circuit state updated atomically");
+  const assessment = capabilityAssessment(ctx, provider, model);
+  if (assessment && !assessment.compatible) {
+    return { accepted: false, provider, reason: assessment.blockers.join("; ") };
+  }
+  return accept(
+    ctx,
+    provider,
+    model,
+    "model, context and circuit state updated atomically",
+    assessment?.warnings,
+  );
 }

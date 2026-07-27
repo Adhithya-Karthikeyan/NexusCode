@@ -2813,27 +2813,41 @@ evidence and proposes a design.
   it into `buildPowerSources`, matching `cmdAgent`. Worth auditing the same way across every command
   that assembles context, since the flag is global in the grammar but honoured ad hoc.
 
-### G19. The TUI's `/model` and `/provider` picker preflight never consults `assessSwitchTarget`
-- **Evidence:** `preflightModelSwitch` / `preflightProviderSwitch` (`packages/cli/src/model-switch
-  .ts:285-311`) check only whether the provider is usable, whether the model is advertised, and
-  whether the circuit is blocked. Neither calls `assessSwitchTarget` or `inferSwitchRequirements` —
-  confirmed by reading both functions in full and grepping the file for either name (zero hits). This
-  is a *different* preflight from `performSwitch`'s `{"type":"switch",…}` control line
-  (`commands.ts:4023`), which does call them and does get every blocker, including the
-  `hasToolHistory` one added alongside this entry.
-- **Consequence:** picking `/model` or `/provider` in the TUI is not just missing the
-  `hasToolHistory` blocker (§19) — it is missing ALL of `assessSwitchTarget`'s checks: modality
-  support, structured output, reasoning, file-edit/shell/git/approval-gate/MCP capability, context
-  window compaction (`adaptRequestForSwitch` is never called either, so no history compaction
-  happens on a switch to a smaller model), and the cost-multiplier guard. A user can switch, mid
-  tool-using conversation, straight into a provider that cannot accept any of it, entirely through
-  the TUI's own supported switch UI.
-- **Design:** thread `SwitchContext` a `ChatRequest`-shaped view of the live session (transcript +
-  active tools) and have both preflights build `inferSwitchRequirements`/`assessSwitchTarget` the
-  same way `performSwitch` already does, surfacing `assessment.blockers` as the rejection `reason`
-  instead of (or alongside) the current usable/advertised/circuit checks. Out of scope for the
-  `hasToolHistory` pass itself, which only changed `assessSwitchTarget` — this preflight needs its
-  own change to even call it.
+### G19. The TUI's `/model` and `/provider` picker preflight never consults `assessSwitchTarget` — **RESOLVED**
+- **Was:** `preflightModelSwitch` / `preflightProviderSwitch` (`packages/cli/src/model-switch.ts`)
+  checked only whether the provider was usable, whether the model was advertised, and whether the
+  circuit was blocked. Neither called `assessSwitchTarget` or `inferSwitchRequirements` at all — so
+  picking `/model` or `/provider` mid tool-using conversation could switch straight into a provider
+  unable to accept any of modality support, structured output, reasoning, tool-call history, or a
+  context window too small for what was already there, entirely through the TUI's own supported
+  switch UI. This was a *different* preflight from `performSwitch`'s `{"type":"switch",…}` control
+  line (`commands.ts`), which already called both and got every blocker.
+- **Fix:** `SwitchContext` gained an optional `transcript: readonly Message[]` (plus `system`/
+  `tools`) — the session's short-term conversation memory AS IT STANDS at preflight time, since a
+  picker choosing a target has no new turn to build a `ChatRequest` around, unlike `performSwitch`.
+  It comes from `runTui` (`packages/tui/src/bridge/runTui.ts`), which owns the only `session`/
+  `transcript` in scope here and threads it into `onModelChange`/`onProviderChange` as a new third/
+  second argument at the exact point those callbacks already fire — no new session, no fabricated
+  request. Both preflights now run `inferSwitchRequirements`/`assessSwitchTarget` against that probe
+  after the existing usable/advertised/circuit checks (which `assessSwitchTarget` still doesn't
+  cover, so those stay), rejecting with `assessment.blockers` as the reason when incompatible, or
+  folding `assessment.warnings` (e.g. context-window compaction) into the accepted `receipt` — a
+  warning is genuinely useful in an interactive picker where it would be noise in a control line, so
+  it is surfaced, not suppressed, and never conflated with an actual block. `transcript` is optional:
+  a caller with no live session (tests, a future non-conversational host) degrades to the
+  pre-existing usable/advertised/circuit-only preflight rather than being forced to fabricate one —
+  covered by its own test.
+- **Deliberately not done in this pass:** live compaction application. `performSwitch` calls
+  `adaptRequestForSwitch` and applies the result to `session.transcript` on accept; this preflight
+  only surfaces the warning text, it does not shrink `runTui`'s private `transcript` array (that
+  would need the preflight to accept a mutation callback into a currently pure, side-effect-free
+  function, a bigger change than "inherit the blockers"). The warning is honest about what it
+  describes (the target's window is smaller) without claiming an action that hasn't happened.
+- **Evidence:** `packages/cli/test/model-switch.test.ts` — 5 new tests: rejects a `/model` pick with
+  the tool-history blocker, rejects the equivalent `/provider` pick, accepts the same pick once the
+  transcript is empty, accepts-with-warning for a small-context-window target, and the no-transcript
+  fallback. `packages/tui`'s full suite (232 tests) and `packages/cli`'s full suite (426 tests) pass
+  unchanged otherwise.
 
 ---
 

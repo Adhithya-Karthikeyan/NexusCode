@@ -103,10 +103,25 @@ export interface RunTuiOptions {
    * back to the static `models` pool when absent or when it returns nothing.
    */
   listModelsFor?: (providerId: string) => Promise<readonly { model: string; hint?: string }[]>;
-  /** Live `/model` switch — re-point the per-turn dispatch at the picked model. */
-  onModelChange?: (model: string, provider: string) => ProviderSelectionResult | void;
-  /** Live `/provider` switch. */
-  onProviderChange?: (provider: string) => ProviderSelectionResult | void;
+  /**
+   * Live `/model` switch — re-point the per-turn dispatch at the picked model.
+   * `transcript` is the session's short-term conversation memory AS IT STANDS
+   * right now (read-only) — the host needs it to assess whether the target
+   * can actually accept what the conversation already contains (e.g. tool
+   * calls/results), the same way an explicit `chat --persistent` switch does.
+   * There is no new turn yet at preflight time, so this is the transcript
+   * itself, not a `ChatRequest` built around one.
+   */
+  onModelChange?: (
+    model: string,
+    provider: string,
+    transcript: readonly Message[],
+  ) => ProviderSelectionResult | void;
+  /** Live `/provider` switch. See `onModelChange`'s `transcript` doc. */
+  onProviderChange?: (
+    provider: string,
+    transcript: readonly Message[],
+  ) => ProviderSelectionResult | void;
   /** Live `/effort` switch — apply the picked reasoning effort to the next turn. */
   onEffortChange?: (effort: string) => void;
   /** Whether the active provider supports reasoning (drives the `/effort` picker). */
@@ -318,10 +333,10 @@ export async function runTui(engine: Engine, opts: RunTuiOptions): Promise<RunTu
     ...(opts.mcpServers !== undefined ? { mcpServers: opts.mcpServers } : {}),
     ...(opts.listModelsFor !== undefined ? { listModelsFor: opts.listModelsFor } : {}),
     ...(opts.onModelChange !== undefined
-      ? { onModelChange: (m: string, p: string) => trackSwitch(opts.onModelChange!(m, p)) }
+      ? { onModelChange: (m: string, p: string) => trackSwitch(opts.onModelChange!(m, p, transcript)) }
       : {}),
     ...(opts.onProviderChange !== undefined
-      ? { onProviderChange: (p: string) => trackSwitch(opts.onProviderChange!(p)) }
+      ? { onProviderChange: (p: string) => trackSwitch(opts.onProviderChange!(p, transcript)) }
       : {}),
     ...(opts.onEffortChange !== undefined ? { onEffortChange: opts.onEffortChange } : {}),
     ...(opts.reasoningSupported !== undefined ? { reasoningSupported: opts.reasoningSupported } : {}),

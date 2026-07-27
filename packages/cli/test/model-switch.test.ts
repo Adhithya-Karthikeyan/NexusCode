@@ -16,6 +16,7 @@ import { describe, it, expect } from "vitest";
 import { NexusConfig, type SecretStore } from "@nexuscode/config";
 import { buildRuntime } from "@nexuscode/runtime";
 import type { CallContext, ModelInfo, ProviderAdapter, TransportKind } from "@nexuscode/core";
+import type { Message } from "@nexuscode/shared";
 import { listModelsForProvider } from "../src/runtime.js";
 import {
   DEFAULT_CONTEXT_WINDOW,
@@ -258,6 +259,163 @@ describe("/provider switch preflight", () => {
     const { ctx } = await fixture();
     const result = preflightProviderSwitch(ctx(), "definitely-not-installed");
     expect(result.accepted).toBe(false);
+  });
+});
+
+/**
+ * GAPS G19 (`docs/CAPABILITIES.md`): the TUI picker used to check only
+ * provider-usable / model-advertised / circuit-blocked — none of
+ * `assessSwitchTarget`'s blockers (modality, tools, structured output,
+ * reasoning, context window, cost). These tests prove the picker now
+ * inherits them via `ctx.transcript`, the same way `chat --persistent`'s
+ * explicit switch control line already did (`commands.ts`'s `performSwitch`).
+ */
+describe("/model + /provider switch preflight — inherits assessSwitchTarget (GAPS G19)", () => {
+  const TOOL_USE_MSG: Message = {
+    role: "assistant",
+    content: [{ type: "tool_use", id: "call_1", name: "echo", input: {} }],
+  };
+  const TOOL_RESULT_MSG: Message = {
+    role: "tool",
+    toolCallId: "call_1",
+    content: [{ type: "text", text: "echoed" }],
+  };
+
+  function noToolsAdapter(id: string): ProviderAdapter {
+    return {
+      id,
+      label: id,
+      transport: "http-sdk",
+      capabilities: async () => ({
+        models: [{ id: "plain-model", contextWindow: 200_000 }],
+        streaming: true,
+        tools: false,
+        parallelToolCalls: false,
+        vision: false,
+        structuredOutput: false,
+        reasoning: false,
+        systemPrompt: true,
+        fileEdit: false,
+        shellExec: false,
+        git: false,
+        approvalGate: false,
+        mcp: false,
+        cancel: "abort-signal",
+      }),
+      chat: async () => {
+        throw new Error("unused");
+      },
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        throw new Error("unused");
+      },
+    };
+  }
+
+  async function fixtureWithPlainProvider() {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    await runtime.registry.register(noToolsAdapter("plain-only"), { skipHealth: true });
+    const catalog = new ModelCatalog();
+    return { runtime, config, catalog };
+  }
+
+  it("REJECTS a /model pick that can't accept tool-call history already in the conversation", async () => {
+    const { runtime, config, catalog } = await fixtureWithPlainProvider();
+    const ctx: SwitchContext = {
+      runtime,
+      config,
+      catalog,
+      from: { provider: "mock", model: "mock-fast" },
+      transcript: [TOOL_USE_MSG, TOOL_RESULT_MSG],
+    };
+    const result = preflightModelSwitch(ctx, "plain-model", "plain-only");
+    expect(result.accepted).toBe(false);
+    if (result.accepted) return;
+    expect(result.reason).toContain("plain-only");
+    expect(result.reason).toContain("stay on the current provider");
+    expect(result.reason).toContain("start a new conversation without that history");
+  });
+
+  it("REJECTS a /provider pick for the same reason", async () => {
+    const { runtime, config, catalog } = await fixtureWithPlainProvider();
+    const ctx: SwitchContext = {
+      runtime,
+      config,
+      catalog,
+      from: { provider: "mock", model: "mock-fast" },
+      transcript: [TOOL_USE_MSG, TOOL_RESULT_MSG],
+    };
+    const result = preflightProviderSwitch(ctx, "plain-only");
+    expect(result.accepted).toBe(false);
+    if (result.accepted) return;
+    expect(result.reason).toContain("tool-call history");
+  });
+
+  it("ACCEPTS the same pick when the conversation has no tool history yet", async () => {
+    const { runtime, config, catalog } = await fixtureWithPlainProvider();
+    const ctx: SwitchContext = {
+      runtime,
+      config,
+      catalog,
+      from: { provider: "mock", model: "mock-fast" },
+      transcript: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+    };
+    const result = preflightModelSwitch(ctx, "plain-model", "plain-only");
+    expect(result.accepted).toBe(true);
+  });
+
+  it("ACCEPTS with a visible WARNING (not a block) when the target needs history compaction", async () => {
+    // A target with a tiny context window: assessSwitchTarget warns rather
+    // than blocks — an interactive picker is exactly where that is useful
+    // ("this model has a smaller context window") rather than noise.
+    const { runtime, config, catalog } = await fixture();
+    const bigText = "x".repeat(4_000);
+    const ctx: SwitchContext = {
+      runtime,
+      config,
+      catalog,
+      from: { provider: "mock", model: "mock-fast" },
+      transcript: [{ role: "user", content: [{ type: "text", text: bigText }] }],
+    };
+    // `live-anthropic`'s curated model has a 200k window — plenty. Register a
+    // second, tiny-window variant of the same shape to force the warning.
+    await runtime.registry.register(
+      {
+        ...noToolsAdapter("tiny-window"),
+        capabilities: async () => ({
+          models: [{ id: "plain-model", contextWindow: 64 }],
+          streaming: true,
+          tools: true,
+          parallelToolCalls: false,
+          vision: false,
+          structuredOutput: false,
+          reasoning: false,
+          systemPrompt: true,
+          fileEdit: false,
+          shellExec: false,
+          git: false,
+          approvalGate: false,
+          mcp: false,
+          cancel: "abort-signal",
+        }),
+      },
+      { skipHealth: true },
+    );
+    const result = preflightModelSwitch(ctx, "plain-model", "tiny-window");
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) return;
+    expect(result.receipt).toContain("compaction");
+  });
+
+  it("degrades to the pre-existing usable/advertised/circuit-only preflight when no transcript is supplied (no live session)", async () => {
+    // Every pre-G19 test in this file omits `transcript` entirely and still
+    // passes unchanged — this test makes that contract explicit rather than
+    // leaving it implied by the rest of the file.
+    const { runtime, config, catalog } = await fixtureWithPlainProvider();
+    const ctx: SwitchContext = { runtime, config, catalog, from: { provider: "mock", model: "mock-fast" } };
+    const result = preflightModelSwitch(ctx, "plain-model", "plain-only");
+    expect(result.accepted).toBe(true);
   });
 });
 

@@ -1013,9 +1013,14 @@ where cards actually put text.
 ## D. Verification standard
 
 Nothing is marked ✅ without:
+0. **`npm run typecheck` clean — this is NOT implied by `npm run build`.**
+   `npm run build` uses tsup/esbuild, which does **not** typecheck across files.
+   An entire overnight session reported "build clean" as evidence of
+   correctness while `tsc --noEmit` had a real error sitting in `commands.ts`
+   the whole time. Build success is a weaker signal than it looks.
 1. `swift build` clean,
-2. `swift test` green (baseline 250),
-3. `npx vitest run` green (baseline ~2125),
+2. `swift test` green (baseline 353),
+3. `npx vitest run` green (baseline ~2260),
 4. for UI: a render at two window sizes with every region confirmed present —
    via the §C2 headless harness when no window server is available, or a real
    screenshot when one is.
