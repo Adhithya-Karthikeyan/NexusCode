@@ -160,8 +160,15 @@ private struct Sidebar: View {
         // native-looking material behind the traffic lights — and also the
         // standard way to drag your own content up into that dead zone, because
         // it applies to the entire subtree.
+        //
+        // `materials.sidebar` is the one of `AppTheme`'s three named material
+        // roles this view is actually in a position to honour (the other two,
+        // `.overlay` and `.composer`, belong to `Card` and the conversation
+        // input bar respectively) — a flat fill everywhere, sidebar included,
+        // was exactly what made this app read as a repainted terminal.
         .background(alignment: .top) {
-            theme.color(\.surfaceSunken).ignoresSafeArea()
+            themedFill(theme.color(\.surfaceSunken), treatment: theme.materials.sidebar, in: Rectangle())
+                .ignoresSafeArea()
         }
     }
 
@@ -476,15 +483,33 @@ struct SettingsView: View {
                     Text("Theme")
                         .font(Kind.title)
                         .foregroundStyle(theme.color(\.textPrimary))
-                    Text("The same \(NexusTheme.all.count) palettes the terminal ships — generated from the theme package, so both render identical colours.")
+                    Text("\(AppTheme.all.count) themes designed for this window — material, elevation and gradient a terminal palette can't express.")
                         .font(Kind.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                 }
 
                 LazyVGrid(columns: columns, spacing: Space.md) {
-                    ForEach(NexusTheme.all) { candidate in
+                    ForEach(AppTheme.all) { candidate in
                         ThemeSwatch(
                             theme: candidate,
+                            isSelected: candidate.id == workspace.themeId
+                        )
+                        .onTapGesture { workspace.themeId = candidate.id }
+                    }
+                }
+
+                SectionHeader(
+                    "Terminal palettes",
+                    subtitle: "The \(NexusTheme.all.count) palettes the CLI ships — same colours, rendered flat (no material, no elevation). Kept selectable for parity with the terminal, not because they suit a window."
+                )
+
+                LazyVGrid(columns: columns, spacing: Space.md) {
+                    // Routed through the same bridge the environment itself
+                    // uses (`NexusTheme.appTheme`) — one swatch type, one
+                    // picker, regardless of which catalogue a theme is from.
+                    ForEach(NexusTheme.all) { candidate in
+                        ThemeSwatch(
+                            theme: candidate.appTheme,
                             isSelected: candidate.id == workspace.themeId
                         )
                         .onTapGesture { workspace.themeId = candidate.id }
@@ -546,7 +571,7 @@ struct LabeledLine: View {
 /// the outer wrapper previews its `surfaceSunken` chrome, the inner tile its
 /// `surfaceRaised` card, exactly the two layers the real window uses.
 struct ThemeSwatch: View {
-    let theme: NexusTheme
+    let theme: AppTheme
     let isSelected: Bool
 
     private let chips: [KeyPath<ThemeTokens, String>] = [

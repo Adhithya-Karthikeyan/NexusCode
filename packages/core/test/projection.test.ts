@@ -36,6 +36,40 @@ describe("chunkToUiEvents — usage projection", () => {
   });
 });
 
+describe("chunkToUiEvents — unknown pricing is NOT the same as free (cost honesty)", () => {
+  it("a model with no pricing entry (costUsd/reportedCostUsd both absent) projects costUsd: null, never 0", () => {
+    // No `costUsd` and no `reportedCostUsd` — this is what a real paid call
+    // looks like when the model has no entry in the pricing table. Rendering
+    // it as `$0.00` would silently misrepresent a paid call as free.
+    const usage = { inputTokens: 100, outputTokens: 50 };
+    const events = chunkToUiEvents({ type: "usage", runId: "run_3", usage } as StreamChunk, "main");
+    const usageEvent = events.find((e) => e.t === "usage");
+    expect(usageEvent).toBeDefined();
+    expect(usageEvent && usageEvent.t === "usage" ? usageEvent.costUsd : "missing").toBeNull();
+  });
+
+  it("a priced model still projects its real computed cost, unchanged", () => {
+    const usage = { inputTokens: 100, outputTokens: 50, costUsd: 0.0042 };
+    const events = chunkToUiEvents({ type: "usage", runId: "run_4", usage } as StreamChunk, "main");
+    const usageEvent = events.find((e) => e.t === "usage");
+    expect(usageEvent && usageEvent.t === "usage" ? usageEvent.costUsd : null).toBeCloseTo(0.0042, 6);
+  });
+
+  it("a genuinely free provider (costUsd: 0) reads as zero, not conflated with unknown", () => {
+    const usage = { inputTokens: 100, outputTokens: 50, costUsd: 0 };
+    const events = chunkToUiEvents({ type: "usage", runId: "run_5", usage } as StreamChunk, "main");
+    const usageEvent = events.find((e) => e.t === "usage");
+    expect(usageEvent && usageEvent.t === "usage" ? usageEvent.costUsd : "missing").toBe(0);
+  });
+
+  it("a CLI-reported cost (reportedCostUsd) is still honored when costUsd itself is absent", () => {
+    const usage = { inputTokens: 100, outputTokens: 50, reportedCostUsd: 0.02 };
+    const events = chunkToUiEvents({ type: "usage", runId: "run_6", usage } as StreamChunk, "main");
+    const usageEvent = events.find((e) => e.t === "usage");
+    expect(usageEvent && usageEvent.t === "usage" ? usageEvent.costUsd : null).toBeCloseTo(0.02, 6);
+  });
+});
+
 describe("chunkToUiEvents — session event's sessionId (bug fix)", () => {
   const runStart = {
     type: "run-start",

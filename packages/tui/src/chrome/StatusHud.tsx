@@ -78,7 +78,11 @@ export function StatusHud({ view, cols, contextMax = 200000, forceCompact = fals
   const boltStyle = useTextStyle("warning.fg");
 
   const ctx = selectContext(view, contextMax);
-  const { sessionUsd, runUsd } = selectCost(view);
+  const { sessionUsd, runUsd, costIncomplete } = selectCost(view);
+  // Pricing-unknown mark: `sessionUsd` sums only priced runs, so a session that
+  // also had an unpriced run must not read as a complete, confident total.
+  const costMark = costIncomplete ? "*" : "";
+  const runLabel = runUsd == null ? "— run" : `$${runUsd.toFixed(2)} run`;
   const active = selectActiveHealth(view);
   const health = selectProviderHealth(view);
   const failover = selectFailover(view);
@@ -120,7 +124,10 @@ export function StatusHud({ view, cols, contextMax = 200000, forceCompact = fals
       <Box width={cols}>
         {contextSegment}
         <Text {...muted}>{sep}</Text>
-        <Text {...costStyle}>${sessionUsd.toFixed(2)}</Text>
+        <Text {...costStyle}>
+          ${sessionUsd.toFixed(2)}
+          {costMark}
+        </Text>
         {active ? (
           <Text>
             <Text {...muted}>{sep}</Text>
@@ -141,9 +148,12 @@ export function StatusHud({ view, cols, contextMax = 200000, forceCompact = fals
     <Box width={cols}>
       {contextSegment}
       <Text {...muted}>{sep}</Text>
-      <Text {...costStyle}>${sessionUsd.toFixed(2)} session</Text>
+      <Text {...costStyle}>
+        ${sessionUsd.toFixed(2)}
+        {costMark} session
+      </Text>
       <Text {...muted}>{sep}</Text>
-      <Text {...costOk}>${runUsd.toFixed(2)} run</Text>
+      <Text {...costOk}>{runLabel}</Text>
       {health.map((h) => (
         <Text key={h.provider}>
           <Text {...muted}>{sep}</Text>

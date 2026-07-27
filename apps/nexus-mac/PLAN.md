@@ -91,29 +91,53 @@ Fix by logging out / rebooting, or launch from Xcode.
   (gradient-forward) — on a model with elevation, materials, gradients, state
   layers and typographic intent.
 
-  ⚠️ **They are NOT wired, so from the user's seat NOTHING is fixed yet.** The
-  environment key is typed `NexusTheme`, `NexusApp.swift` resolves
-  `NexusTheme.named(…) ?? NexusTheme.all[0]`, and `RootView`'s picker iterates
-  the same 16 generated palettes. `AppTheme.all` is unreachable dead data. What
-  DOES execute is the `NexusTheme.appTheme` bridge, which derives a generic
-  `AppTheme` from any old flat palette — so real shadow and per-theme
-  hover/press ARE live today, using auto-derived rather than hand-tuned values,
-  with materials forced to `.solid` and typography to `.neutral`. In flight:
-  swap the env key to `AppTheme`, group hand-designed above terminal-derived,
-  default to Meridian, wire `pairId` for OS light/dark following.
+  ✅ **Now wired and selectable.** The environment key is `AppTheme`; the default
+  is **Meridian**; `WorkspaceModel.activeTheme` resolves through EITHER
+  catalogue (`AppTheme.named(id) ?? NexusTheme.named(id)?.appTheme`), so the 16
+  generated palettes are kept and still selectable, just routed through the
+  richer model. The picker shows two groups: the 7 designed for a window, then
+  the terminal palettes labelled as kept "for parity with the terminal, not
+  because they suit a window."
 
-  **Two measured contrast failures**, found only when the check was widened from
-  body/secondary text to the pairs components actually compose:
-  `accentFg`/`accentDefault` is **3.40 in Daylight** and **4.15 in Studio**
-  (floor 4.5) — that is exactly what `SoftButton`'s `.accent` tone renders, so a
-  primary button label is sub-AA in both light themes. The coverage was the gap,
-  not the palette. Body text passes everywhere (14.17–19.42), secondary too
-  (5.49–14.29).
+  `pairId` is real, not cosmetic: `ThemedRoot` reads the OS `colorScheme` and
+  injects `activeTheme.resolved(for:)`, then asserts `preferredColorScheme`
+  DOWNSTREAM of where the scheme was read, so there is no feedback loop. Pick
+  Meridian, put the Mac in Light Mode, the app renders Studio and flips back
+  live. Unpaired themes return `self` unchanged.
 
-  **Pre-existing and worth fixing anyway:** `CountPill` pairs `accentFg` on
-  `accentMuted`, which measures 1.50–3.70 across ALL seven new themes AND the
-  original 16 (paper-nexus 1.89, midnight 2.53). Not introduced here — a
-  standing legibility bug in what ships today.
+  Compatibility held better than expected: only 4 files had explicit
+  `NexusTheme` annotations needing a change, because every other Features file
+  uses `@Environment(\.nexusTheme)` with an inferred type and only calls
+  `.color(_:)`/`.hairline`, which `AppTheme` answers identically.
+
+  **Contrast — three failure patterns, all fixed, all measured.** Widening the
+  check from body/secondary text to the pairs components ACTUALLY compose is
+  what found every one of them; the coverage was the gap, not the palettes.
+  - `accentFg`/`accentDefault` (SoftButton `.accent`): Daylight 3.40→4.61,
+    Studio 4.15→4.63. Fixed by darkening the FILL via HSL lightness only, hue
+    and saturation held exactly, so it is still the same coral/blue.
+  - `warningFg`/`warningBg` and `errorFg`/`errorBg` — found only by asserting
+    every composed pair: Daylight warning 3.57→4.64, Studio warning 3.23→4.61,
+    errors nudged off the 4.44/4.50 line for margin. Darkened the Fg here
+    because the Bg is a near-white pastel with no headroom left — white against
+    the old `warningFg` only reaches 4.12, so lightening the bg could never work.
+  - `CountPill.accent` (`accentFg` on `accentMuted`, 1.50–3.70 everywhere):
+    fixed the COMPOSITION, not the tokens. No single existing token pairs
+    safely with `accentMuted` across all 23 themes, so
+    `Color.readableText(on:preferring:otherwise:)` now picks whichever of
+    `textPrimary`/`textInverse` actually reads, per theme, at render time.
+    All 7 new themes clear 4.5 (5.24–10.77) and 11 of the 16 old ones do too,
+    up from roughly none.
+
+  ⬜ **5 old generated themes still cannot reach 4.5** on that pair even with the
+  best available token — midnight 4.49, retroAmber 3.95, pastel 3.89, frost
+  3.50, forest 3.25. That is a token-level gap in `Generated/Themes.swift`
+  itself and needs a change at the generator, not in the app.
+
+  **Correction to an earlier note here:** `CountPill` was NOT purely
+  pre-existing. Shipping `nexus-noir` scored ~5.3 — fine — so for themes that
+  were passing it was a genuine regression the new themes introduced;
+  `paper-nexus` at 1.89 was already broken.
 - 🔄 **Layout/UX reads cheap and boring.** Research-first: a spec is being
   produced before any more building.
 - ✅ **OMC for every provider, not just Claude.** ANSWERED, by execution — see
@@ -199,9 +223,17 @@ and `permissionMode`. Provider-neutral by construction.
    the same command emits 7 `agent` events.
    **Lesson worth keeping: three green unit-test suites and a clean build still
    described a feature that did not work. Only running the binary found it.**
-   (Related trap: the narration goes to STDERR, so stdout ndjson was never
-   actually corrupted — running with `2>&1` made it look like it was, and
-   produced one wrong diagnosis before it was caught.)
+   Precise stream behaviour, measured to separate files rather than inferred:
+   - BEFORE the fix, `-o ndjson` sent the narration to STDERR. So stdout ndjson
+     was never actually corrupted, despite appearing so under `2>&1`.
+   - AFTER the fix, `-o ndjson` stderr is **completely empty** (`OUT: total=23
+     agent=7 / ERR: total=0 agent=0`). ndjson is ONE structured stream.
+   - `-o text` is unchanged: one narration line per phase on stderr.
+
+   ⚠️ **This exact trap bit twice, in two different shapes** — once via `2>&1`
+   merging the streams, once via `2>&1 >/dev/null` under zsh MULTIOS. When a
+   claim is about WHICH stream something is on, redirect to separate files and
+   count. Do not reason about redirection operators.
 2. ✅ **Delegation is implemented but unreachable** — now reachable, opt-in, and
    `runner.ts` was NOT touched. `delegatingEvaluate` (exported from
    `packages/agent/src/index.ts`) triggers on ONE specific signal: the tool
@@ -468,8 +500,69 @@ source — not guessed.
 ## C. Known bugs
 
 - 🔄 `--resume` receives a run id, not a session id → context lost every turn.
-- ⬜ `nexus ask -p mock -m mock-tools` hangs indefinitely (found earlier; the
-  agent tool-loop appears not to terminate on that provider). CLI-side.
+- 🔴 **THE CLI HANGS. Top priority — it now reproduces in the test suite.**
+
+  `npx vitest run packages/cli`: **4 files failed, 7 tests failed, 349 passed,
+  2166 SECONDS** for a suite that normally runs in 35-42s. Durations:
+
+  ```
+  × roles > every listed role is actually runnable by `agent --role`   1011476ms
+  × mcp  > mcp call invokes a discovered tool ...                       932030ms
+  × wave6 > trace renders spans for a recorded mock run                 177055ms
+  × #6   > `nexus git diff` maps to the same clear guidance             176455ms
+  × providers list > shows the new compat + azure providers             176342ms
+  × config > set then get round-trips a value                           176169ms
+  × ask   > -o json emits a single valid JSON object                        521ms
+  ```
+
+  The 521ms one is a DIFFERENT bug — an ordinary assertion failure from the
+  cost-accounting change, not a hang. The other six are hangs, and **four cluster
+  at ~176,000ms**, which looks like a fixed ceiling rather than six independent
+  stalls. Finding what that constant is may be the most informative clue.
+
+  The 16.9-minute one spawns `agent --role X` for all 9 roles — a direct match
+  for the bare-CLI observation: the same command has both succeeded (23 stdout
+  lines, 7 agent events) and hung with stdout+stderr redirected to **FILES**
+  (so not a blocked pipe), both **0 bytes after 7 minutes, process still alive**.
+
+  Ruled out, with evidence — do not re-derive:
+  - NOT a blocked pipe (output went to files).
+  - NOT the `tsup` dist race below — that exits(1) with an ESM stack trace; this
+    never exits and never writes.
+  - NOT machine load — `packages/core/test/projection.test.ts` runs in **0.6s**
+    on this machine, and `npm run build` exits 0.
+
+  Probably the same bug as the longstanding `nexus ask -p mock -m mock-tools`
+  hang; both involve `mock-tools`. Whether the tool loop is REQUIRED to
+  reproduce is genuinely untested. A prime unexamined candidate: a stdin read
+  that never receives EOF — the hanging invocations were given no stdin, which
+  fits "zero output, still alive" exactly.
+
+  **A silent indefinite hang is never acceptable, whatever the root cause.**
+  Even if the trigger is environmental, the CLI must fail loudly.
+- ✅ **Full-suite flakiness — root-caused and fixed.** It was never vitest
+  scheduling, timeouts, pool sizing, or shared fixtures (every integration file
+  already used per-file `mkdtempSync` dirs; vitest shares ONE fork pool across
+  all ~44 projects, so there was no oversubscription to cap). The real
+  mechanism: **`tsup`'s "clean output folder" step deletes and rewrites each
+  package's `dist/*.js` non-atomically.** Every integration test spawns the real
+  built `nexus` binary, which resolves ~20 workspace imports through Node's ESM
+  loader; if any package's `dist/` is mid-rewrite during that resolution the
+  child hard-crashes before running — empty stdout, raw ESM stack trace, exit 1.
+  That is exactly the `expect(code).toBe(0)` → `1` signature, why a DIFFERENT
+  test fails each run, and why isolated subsets stay green.
+
+  Proved causally, not by correlation: racing a `npm run build` loop against 20
+  concurrent CLI spawns failed **9/20 (45%)** unpatched and **0/20 across 6
+  rounds** patched. Fix is `spawnCli()`, which fingerprints this exact race
+  (empty stdout AND an ESM-loader stderr signature) and RE-SPAWNS — never
+  re-asserts — up to 3× with 150/400/900ms backoff. Any other failure returns
+  untouched on the first attempt, so no assertion is ever retried and nothing is
+  weakened. 5/5 full-suite runs green with load samples bracketing each run.
+  ⬜ Durable follow-up: make `tsup` writes atomic (temp-dir + rename) across the
+  workspace. Correctly scoped OUT while every package is being live-edited.
+  ⬜ 9 spawn-based test files were left unpatched (they drive long-lived
+  streaming processes with custom readiness detection) — vulnerability unknown.
 - ⬜ Directory picker opened on launch once, unreproduced — watch for it.
 
 ## C2. Visual verification WITHOUT a window — use this
@@ -635,6 +728,33 @@ isolation and clean on a full re-run. Not a regression; worth hardening.
    + provider + model + approval + reasoning and needs a narrow-window pass.
 5. App icon; window restoration; accessibility labels.
 6. ~~Model picker at narrow width~~ — resolved (scroll cue added).
+
+### Verification hygiene — every one of these cost real time today
+
+- **`timeout` does not exist on macOS** (it is `gtimeout` via coreutils). A
+  command wrapped in `timeout` **silently does not run at all and reports
+  success**. This produced a confident wrong conclusion.
+- **Never pipe a long-running command through `tail`.** The failure detail you
+  need is discarded and you have to re-run — I lost a 46-minute suite run and a
+  16-minute test run this way, twice. Redirect to a file and grep it.
+- **For any claim about which STREAM output lands on, redirect stdout and stderr
+  to SEPARATE FILES and count bytes.** `2>&1` and `2>&1 >/dev/null` under zsh
+  MULTIOS each produced a wrong diagnosis in this session.
+- **A green test suite is not evidence the feature works.** Three passing unit
+  suites and a clean build described an `agent` event stream that emitted
+  nothing, because the CLI intercepted the chunks before the projection saw
+  them. Run the binary; read its real output.
+- **Discriminate "slow" from "broken" with a cheap control.** Both toolchains
+  appeared ~100× slow at one point; a single pure test file running in 0.6s
+  proved the machine was fine and the slowness was specific hanging tests.
+- **Do not fan out more parallel agents than the box can carry.** Six concurrent
+  agents running full builds and suites drove load average to 47, starved
+  unrelated work, and corrupted the measurements of the very agent that was
+  characterising load-induced flakiness. Coordinate build/test windows instead.
+- **An agent can die mid-task and leave compiling but unverified code in the
+  tree.** Three did today (API errors). `npm run build` exiting 0 says only that
+  it compiles. Re-audit everything such an agent touched, including the parts
+  that look finished.
 
 ### Notes for whoever picks this up
 - `nexus chat` had NO `-o` support before this session; ndjson for chat is new.

@@ -374,6 +374,113 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(rows.map(\.title), ["explore"])
     }
 
+    // MARK: - Role runs (`nexus agent --role …`)
+
+    private func agentStep(
+        lane: String = "main", _ phase: String, step: Int = 0, role: String = "coder", data: JSONValue? = nil
+    ) -> UiEvent {
+        .agent(.init(lane: lane, phase: phase, role: role, step: step, text: "narration", data: data))
+    }
+
+    func testRoleRunRowExposesRolePhaseStepAndProgress() throws {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p", text: "build the thing")), ts: 0)
+        state.reduce(agentStep("step-start", step: 0, role: "coder"), ts: 1)
+        state.reduce(agentStep("delegate", step: 1, role: "coder", data: .object(["role": .string("reviewer")])), ts: 2)
+        state.reduce(agentStep("progress", step: 1, role: "coder", data: .object(["percent": .number(40)])), ts: 3)
+
+        let row = try XCTUnwrap(AgentRowBuilder.roleRuns(from: state).first)
+        XCTAssertEqual(row.origin, .roleRun)
+        XCTAssertEqual(row.title, "coder")
+        XCTAssertTrue(row.isRunning)
+        XCTAssertNil(row.verdict, "still running -> no verdict yet")
+        XCTAssertEqual(row.subtitle, "progress · step 1")
+        XCTAssertEqual(row.detail, "40% progress · delegated: reviewer")
+    }
+
+    func testRoleRunDoesNotAlsoAppearAsAPlainLaneRow() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p", text: "go")), ts: 0)
+        state.reduce(agentStep("plan"), ts: 1)
+
+        let rows = AgentRowBuilder.combined(state: state, snapshot: OMCSnapshot())
+        XCTAssertTrue(rows.contains { $0.origin == .roleRun })
+        XCTAssertFalse(rows.contains { $0.origin == .lane }, "a role run's lane must not double-count as a plain lane row")
+        XCTAssertTrue(AgentRowBuilder.lanesExcludingRoleRuns(from: state).isEmpty)
+    }
+
+    func testAnOrdinaryChatTurnProducesNoRoleRunRow() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p", text: "hi")), ts: 0)
+        state.reduce(.text(.init(lane: "main", delta: "hello")), ts: 1)
+
+        XCTAssertTrue(AgentRowBuilder.roleRuns(from: state).isEmpty)
+        // An ordinary chat turn keeps rendering as a plain lane, unaffected.
+        XCTAssertEqual(AgentRowBuilder.lanesExcludingRoleRuns(from: state).map(\.origin), [.lane])
+    }
+
+    func testFourVerdictStatesMapToFourVisiblyDistinctRowStates() throws {
+        func finishedRow(_ verdictData: JSONValue) throws -> AgentRow {
+            var state = ViewState()
+            state.reduce(.prompt(.init(lane: "main", id: "p", text: "go")), ts: 0)
+            state.reduce(agentStep("stop", step: 1, data: verdictData), ts: 1)
+            state.reduce(.done(.init(lane: "main", finishReason: "stop")), ts: 2)
+            return try XCTUnwrap(AgentRowBuilder.roleRuns(from: state).first)
+        }
+
+        var running = ViewState()
+        running.reduce(.prompt(.init(lane: "main", id: "p", text: "go")), ts: 0)
+        running.reduce(agentStep("plan"), ts: 1)
+        let runningRow = try XCTUnwrap(AgentRowBuilder.roleRuns(from: running).first)
+
+        let metRow = try finishedRow(.object(["stopReason": .string("goal-met"), "verdict": .string("met")]))
+        let unmetRow = try finishedRow(.object(["stopReason": .string("goal-unmet"), "verdict": .string("unmet")]))
+        // No declared success criteria -> nothing to verify against. This is
+        // the honest "we don't know" outcome, not a crash and not a soft fail.
+        let indeterminateRow = try finishedRow(.object(["stopReason": .string("max-steps")]))
+
+        XCTAssertTrue(runningRow.isRunning)
+        XCTAssertNil(runningRow.verdict)
+
+        XCTAssertFalse(metRow.isRunning)
+        XCTAssertEqual(metRow.verdict, .met)
+
+        XCTAssertFalse(unmetRow.isRunning)
+        XCTAssertEqual(unmetRow.verdict, .unmet)
+
+        XCTAssertFalse(indeterminateRow.isRunning)
+        XCTAssertEqual(indeterminateRow.verdict, .indeterminate)
+
+        // The assertion that matters most: an unverified run must never read
+        // as either a success or a failure.
+        XCTAssertNotEqual(indeterminateRow.verdict, metRow.verdict)
+        XCTAssertNotEqual(indeterminateRow.verdict, unmetRow.verdict)
+
+        // Running + the three verdicts are four pairwise-distinct signatures —
+        // exactly the four states the card must render differently.
+        let signatures = [runningRow, metRow, unmetRow, indeterminateRow].map {
+            "\($0.isRunning)-\($0.verdict?.rawValue ?? "running")"
+        }
+        XCTAssertEqual(Set(signatures).count, 4)
+    }
+
+    func testCombinedStillReturnsLanesAndOmcAgentsExactlyAsBeforeWhenNoRoleRunIsPresent() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "anthropic", id: "p", text: "x")), ts: 0)
+        state.reduce(.prompt(.init(lane: "openai", id: "p", text: "x")), ts: 1)
+        state.reduce(.done(.init(lane: "openai", finishReason: "stop")), ts: 2)
+
+        var snapshot = OMCSnapshot()
+        snapshot.registry = OMCAgentRegistry(agents: [
+            OMCAgent(agentId: "a1", agentType: "executor", startedAt: Date(), completedAt: nil, status: .running),
+        ])
+
+        let rows = AgentRowBuilder.combined(state: state, snapshot: snapshot)
+        XCTAssertEqual(Set(rows.map(\.origin)), [.lane, .omc])
+        XCTAssertEqual(rows.filter { $0.origin == .lane }.count, 2)
+        XCTAssertEqual(rows.filter { $0.origin == .omc }.count, 1)
+    }
+
     // MARK: - Modes
 
     func testOnlyFanOutModesAreMultiLane() {

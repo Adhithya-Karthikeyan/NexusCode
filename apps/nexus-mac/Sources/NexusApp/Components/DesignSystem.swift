@@ -106,6 +106,26 @@ extension AppTheme {
     }
 }
 
+/// Either a flat colour fill or a vibrancy material for `shape` — NEVER both
+/// layered. A `Material` blurs whatever is directly behind it; filling a
+/// shape with a flat colour and then a material on top of that (what `Card`,
+/// `Sidebar` and the composer all did on first pass) blurs the opaque
+/// colour — which renders as a flat tinted scrim, never as translucency, and
+/// is why a theme's `materials` roles did nothing visible: the material was
+/// there, it just had nothing but its own backing colour to show through.
+/// A free function rather than a `View` modifier so it drops directly into
+/// any `.background { }` closure — including one that still needs its own
+/// `.ignoresSafeArea()` or `.clipShape()` applied afterward, which a
+/// self-contained modifier can't compose with as cleanly.
+@ViewBuilder
+func themedFill<S: Shape>(_ color: Color, treatment: SurfaceTreatment, in shape: S) -> some View {
+    if let material = treatment.material {
+        shape.fill(material)
+    } else {
+        shape.fill(color)
+    }
+}
+
 /// A raised card. The single elevation primitive — views should not roll their
 /// own background+border+shadow combinations.
 ///
@@ -113,11 +133,22 @@ extension AppTheme {
 /// hand: `elevated` selects level 2 (an overlay-like surface — a card that
 /// must float above an already-raised one, such as a popover's content) over
 /// level 1 (a card resting directly on the base surface). Level 2 also picks
-/// up that theme's `materials.overlay` treatment and its per-level shadow, so
-/// a theme like Basalt or Vantage that rejects shadows in favour of the
-/// colour ladder alone renders one, and a theme like Nightfall that wants
-/// real glass on its overlays renders that instead — neither is special-cased
-/// here.
+/// up that theme's `materials.overlay` treatment and its per-level shadow.
+///
+/// Shadow is guarded on `shadowOpacity > 0` rather than trusted to degrade
+/// gracefully at `opacity(0)`: the house rule above (`hairline`'s doc
+/// comment) is that depth on a near-black canvas comes from the surface
+/// ladder and a border, NOT a shadow — a shadow there reads as grey smudge.
+/// The 16 terminal-generated themes were never designed with shadow in mind
+/// at all, so `NexusTheme.appTheme`'s generic bridge (`AppTheme.swift`) gives
+/// every one of them `shadowOpacity: 0` at every level when dark, full stop.
+/// Some of the seven HAND-designed themes here choose non-zero shadow on a
+/// dark base anyway — Cinder and Nightfall specifically, both explicitly
+/// "glass-forward, showcase" themes where a soft shadow under real material
+/// reads as depth rather than smudge (verified by rendering both through the
+/// headless harness, not assumed). Basalt and Vantage, by contrast, chose
+/// `shadowOpacity: 0` at every level on purpose — this file makes neither
+/// choice; the theme does.
 struct Card<Content: View>: View {
     @Environment(\.nexusTheme) private var theme
     var padding: CGFloat = Space.lg
@@ -135,19 +166,27 @@ struct Card<Content: View>: View {
                 // `.continuous` curvature: the squircle every native control
                 // uses. A plain `cornerRadius` reads subtly wrong beside system
                 // chrome.
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(step.surfaceColor)
-                    .overlay {
-                        if let material = treatment.material {
-                            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(material)
-                        }
-                    }
+                themedFill(step.surfaceColor, treatment: treatment, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             }
             .overlay {
+                // Full-strength, level-specific `chromeBorder*` rather than a
+                // single flat `hairline` — level 2's border is deliberately
+                // stronger than level 1's, which is the ONLY depth cue a
+                // shadow-free theme (Basalt, Vantage) has to distinguish the
+                // two. `opacity(0.85)` restores hairline's "blends with
+                // whatever's around it" quality without collapsing that
+                // per-level distinction back to one flat line.
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(step.borderColor, lineWidth: 1)
+                    .strokeBorder(step.borderColor.opacity(0.85), lineWidth: 1)
             }
-            .shadow(color: .black.opacity(step.shadowOpacity), radius: step.shadowRadius, y: step.shadowRadius * 0.3)
+            .shadow(color: shadow.color, radius: shadow.radius, y: shadow.y)
+    }
+
+    /// Guarded on `shadowOpacity > 0` rather than trusted to draw nothing at
+    /// `opacity(0)` — an explicit `.clear`/zero-radius no-op, not an assumed one.
+    private var shadow: (color: Color, radius: CGFloat, y: CGFloat) {
+        guard step.shadowOpacity > 0 else { return (.clear, 0, 0) }
+        return (.black.opacity(step.shadowOpacity), step.shadowRadius, step.shadowRadius * 0.3)
     }
 }
 

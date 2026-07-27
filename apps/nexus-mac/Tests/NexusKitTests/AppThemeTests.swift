@@ -154,10 +154,20 @@ final class AppThemeTests: XCTestCase {
 
     func testNexusThemeAllStillWorks() {
         // Guards against a regression in this task's own additive changes:
-        // the existing 16-theme picker must be completely unaffected.
+        // the 16 generated palettes stay fully intact and selectable — this
+        // task added a second catalogue, it did not remove the first one.
         XCTAssertEqual(NexusTheme.all.count, 16)
         XCTAssertNotNil(NexusTheme.named(NexusTheme.defaultThemeId))
-        XCTAssertEqual(ThemeKey.defaultValue.id, NexusTheme.defaultThemeId)
+    }
+
+    func testEnvironmentDefaultsToAHandDesignedTheme() {
+        // `\.nexusTheme` now resolves to `AppTheme`, and its default is a
+        // hand-designed theme (Meridian), not a generated one. A default
+        // nobody changes is what most users will actually see, so shipping
+        // seven good themes behind an unchanged terminal-derived default
+        // would have fixed nothing from the user's seat.
+        XCTAssertEqual(ThemeKey.defaultValue.id, AppTheme.defaultThemeId)
+        XCTAssertNotNil(AppTheme.all.first { $0.id == ThemeKey.defaultValue.id })
     }
 
     // MARK: - Composed pairs (what a component actually renders)

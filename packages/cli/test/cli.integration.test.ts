@@ -987,9 +987,13 @@ describe("nexus roles (machine-readable role catalog)", () => {
   it("reports the fields that differentiate a role, and never the system prompt", async () => {
     const r = await runCli(["roles", "-o", "json"]);
     const doc = JSON.parse(r.stdout.trim()) as {
-      roles: { id: string; tools: string[]; maxSteps: number; permissionMode: string }[];
+      roles: { id: string; description: string; tools: string[]; maxSteps: number; permissionMode: string }[];
     };
     for (const role of doc.roles) {
+      // A human-facing one-liner — what a picker shows next to the bare id —
+      // present for every role, distinct from the (never-emitted) system prompt.
+      expect(typeof role.description).toBe("string");
+      expect(role.description.trim().length).toBeGreaterThan(0);
       expect(Array.isArray(role.tools)).toBe(true);
       expect(role.tools.length).toBeGreaterThan(0);
       expect(role.maxSteps).toBeGreaterThan(0);
@@ -1031,6 +1035,10 @@ describe("nexus roles (machine-readable role catalog)", () => {
     expect(r.stdout).toMatch(/coder\s+workspace-write/);
     expect(r.stdout).toMatch(/reviewer\s+read-only/);
     for (const role of AGENT_ROLES) expect(r.stdout).toContain(role);
+    // The description line: what the role picker needs to tell roles apart —
+    // not just a bare id and a tool list.
+    expect(r.stdout).toContain("Implements code changes to satisfy a plan");
+    expect(r.stdout).toContain("Reviews a change for correctness, clarity, and risk");
   }, 20_000);
 });
 

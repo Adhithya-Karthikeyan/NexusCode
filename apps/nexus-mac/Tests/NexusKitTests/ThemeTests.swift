@@ -15,7 +15,11 @@ final class ThemeTests: XCTestCase {
 
     func testDefaultThemeResolves() {
         XCTAssertNotNil(NexusTheme.named(NexusTheme.defaultThemeId))
-        XCTAssertEqual(ThemeKey.defaultValue.id, NexusTheme.defaultThemeId)
+        // `ThemeKey.defaultValue` is `AppTheme`, not `NexusTheme` — the app
+        // renders through the richer model unconditionally, and its default
+        // is a hand-designed theme (see `AppThemeTests` for that contract).
+        // This file's own concern is narrower: that the terminal catalogue's
+        // `defaultThemeId` still resolves to a real theme in `NexusTheme.all`.
     }
 
     func testThemeIdsAreUnique() {

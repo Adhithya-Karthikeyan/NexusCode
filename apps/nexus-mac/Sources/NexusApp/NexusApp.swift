@@ -12,12 +12,10 @@ struct NexusMacApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            ThemedRoot()
                 .environment(workspace)
-                .environment(\.nexusTheme, workspace.activeTheme)
                 .frame(minWidth: 900, minHeight: 560)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .preferredColorScheme(workspace.activeTheme.isDark ? .dark : .light)
         }
         // `.unified(showsTitle: false)` collapsed the title-bar row and left the
         // sidebar column with no top safe area, drawing its header under the
@@ -47,6 +45,39 @@ struct NexusMacApp: App {
     }
 }
 
+/// Resolves the selected theme against the OS's actual light/dark setting
+/// before anything below it renders, so a paired theme (Meridian↔Studio,
+/// Cinder↔Daylight) follows System Appearance the way a native app does,
+/// instead of staying locked to whichever brightness was active when it was
+/// picked. An unpaired theme (Basalt, Vantage, Nightfall) has no sibling to
+/// switch to, so `resolved(for:)` returns it unchanged in either scheme —
+/// that theme simply doesn't follow the OS, which is the correct behaviour
+/// for a theme that was never designed with a light/dark counterpart.
+///
+/// `@Environment(\.colorScheme)` read here is the OS's own truth: nothing
+/// above this view calls `.preferredColorScheme`, so SwiftUI hasn't been told
+/// to override it yet. The resolved theme's `isDark` is what gets asserted
+/// downstream via `.preferredColorScheme` below — so native chrome (title
+/// bar, scrollbars, the traffic lights) always matches what this window is
+/// actually showing, never the raw OS setting when they disagree (i.e. an
+/// unpaired dark theme picked while the Mac is in Light Mode). Reading
+/// `colorScheme` and asserting it are deliberately two different steps so
+/// this doesn't feed back into itself.
+private struct ThemedRoot: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(\.colorScheme) private var systemScheme
+
+    private var resolvedTheme: AppTheme {
+        workspace.activeTheme.resolved(for: systemScheme)
+    }
+
+    var body: some View {
+        RootView()
+            .environment(\.nexusTheme, resolvedTheme)
+            .preferredColorScheme(resolvedTheme.isDark ? .dark : .light)
+    }
+}
+
 /// Top-level app state: which project, which theme, which tab, and the
 /// controllers that talk to the CLI and to OMC.
 @MainActor
@@ -54,7 +85,11 @@ struct NexusMacApp: App {
 final class WorkspaceModel {
     var tab: WorkspaceTab = .chat
 
-    var themeId: String = NexusTheme.defaultThemeId {
+    /// An id from EITHER catalogue: one of the 7 hand-designed `AppTheme`s or
+    /// one of the 16 generated `NexusTheme`s. `activeTheme` below resolves
+    /// whichever one it turns out to be through the same `AppTheme` model, so
+    /// nothing downstream needs to know which catalogue the user picked from.
+    var themeId: String = AppTheme.defaultThemeId {
         didSet { defaults.set(themeId, forKey: Keys.theme) }
     }
 
@@ -92,14 +127,23 @@ final class WorkspaceModel {
         projectDirectory = ProjectLocation.resolve(
             remembered: defaults.string(forKey: Keys.project)
         )
-        if let saved = defaults.string(forKey: Keys.theme), NexusTheme.named(saved) != nil {
+        if let saved = defaults.string(forKey: Keys.theme),
+           AppTheme.named(saved) != nil || NexusTheme.named(saved) != nil {
             themeId = saved
         }
         attach()
     }
 
-    var activeTheme: NexusTheme {
-        NexusTheme.named(themeId) ?? NexusTheme.all[0]
+    /// Resolves `themeId` through whichever catalogue actually defines it,
+    /// preferring a hand-designed theme when (implausibly) both did. A
+    /// generated palette comes back through `NexusTheme.appTheme` — the same
+    /// richer model either way, so `ThemedRoot` never needs to branch on
+    /// which catalogue answered.
+    var activeTheme: AppTheme {
+        AppTheme.named(themeId)
+            ?? NexusTheme.named(themeId)?.appTheme
+            ?? AppTheme.named(AppTheme.defaultThemeId)
+            ?? AppTheme.all[0]
     }
 
     /// Point the window at another project. Rebuilds the CLI client and restarts

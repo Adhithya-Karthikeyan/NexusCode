@@ -300,10 +300,11 @@ class AgentCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Agentic run: native tool loop, or the full OODA framework with --role.",
     details:
-      "Without --role, runs the fast native tool-execution loop. With --role <coder|reviewer|tester|planner|researcher|architect|doc-writer|security-reviewer|coordinator>, runs the OODA loop (Observe→Reason→Plan→Act→Evaluate→Repeat): plan drafting, reflection, retry/self-correction, and dynamic replanning — all on the engine bus. --max-steps caps OODA iterations.",
+      "Without --role, runs the fast native tool-execution loop. With --role <coder|reviewer|tester|planner|researcher|architect|doc-writer|security-reviewer|coordinator>, runs the OODA loop (Observe→Reason→Plan→Act→Evaluate→Repeat): plan drafting, reflection, retry/self-correction, and dynamic replanning — all on the engine bus. --max-steps caps OODA iterations. A --role run honors --resume <id> / --continue exactly like `chat --persistent --resume`: the prior conversation is rehydrated (text only; tool calls are not replayed), but the role always plans afresh against THIS invocation's prompt — resumed plan/task state is not a thing this framework tracks.",
     examples: [
       ["Native tool loop", "nexus agent -p mock -m mock-tools 'read the config'"],
       ["OODA coder role", "nexus agent --role coder --max-steps 4 -p mock -m mock-tools 'add a hello function'"],
+      ["Resume a role run", "nexus agent --role researcher --resume s_1234 -p mock -m mock-tools 'what did we find?'"],
     ],
   });
   protected handler(): Handler {
@@ -327,7 +328,7 @@ class RolesCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "List the OODA agent roles `agent --role` / `plan --role` accept.",
     details:
-      "Prints each role with the sandbox class it runs under, its OODA step budget, and its tool allowlist — enough for a client to pick a role and warn before running one that can write files. `-o json` emits `{\"roles\":[{id,tools,maxSteps,permissionMode}]}`, derived from the same registry `--role` resolves against (so it can never list a role that is not runnable). The role's system prompt is intentionally not included.",
+      "Prints each role with a one-line description of what it is FOR, the sandbox class it runs under, its OODA step budget, and its tool allowlist — enough for a client to pick a role and warn before running one that can write files. `-o json` emits `{\"roles\":[{id,description,tools,maxSteps,permissionMode}]}`, derived from the same registry `--role` resolves against (so it can never list a role that is not runnable). The role's system prompt is intentionally not included.",
     examples: [
       ["List the roles", "nexus roles"],
       ["Machine-readable catalog", "nexus roles -o json"],

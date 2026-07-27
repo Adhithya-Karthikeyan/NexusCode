@@ -34,7 +34,12 @@ interface CliResult {
   stderr: string;
 }
 
-function runCli(args: string[], input = "", cwd = WORK_DIR): Promise<CliResult> {
+function runCli(
+  args: string[],
+  input = "",
+  cwd = WORK_DIR,
+  extraEnv: Record<string, string> = {},
+): Promise<CliResult> {
   return spawnCli(BIN, args, {
     cwd,
     input,
@@ -45,6 +50,7 @@ function runCli(args: string[], input = "", cwd = WORK_DIR): Promise<CliResult> 
       // History ENABLED at a temp db (traces.ndjson lands beside it).
       NEXUS_HISTORY_DB: HISTORY_DB,
       NEXUS_VAULT_PASSPHRASE: "test-passphrase",
+      ...extraEnv,
     },
   });
 }
@@ -305,6 +311,31 @@ describe("wave 6 — git flows (against the mock provider)", () => {
     const r = await runCli(["pr", "-p", "mock", "-m", "mock-fast", "--base", "HEAD~1"], "", REPO_DIR);
     expect(r.code).toBe(0);
     expect(r.stdout.length).toBeGreaterThan(0);
+  }, 20_000);
+});
+
+describe("wave 6 — git flows see an auth-derived (OAuth-only, no static providers[] entry) provider", () => {
+  // `resolveGitProvider` (shared by commit/review/explain/pr) used to build its
+  // runtime with plain `buildRuntime`, so a provider the user is signed into
+  // ONLY via `nexus login` (no static config entry) was invisible and every
+  // git flow errored `provider "anthropic" is not available (try -p mock)` —
+  // even though `nexus ask -p anthropic` worked. Fixed by switching to
+  // `buildAuthedRuntime` (see `packages/cli/src/wave6.ts`). One flow
+  // (`explain`) is exercised here; all four share the same helper function, so
+  // this one test covers the fix for all of them. `ANTHROPIC_API_KEY` stands
+  // in for a resolved credential — the same branch a stored OAuth token takes
+  // (see the `cli.integration.test.ts` "default 'anthropic' entry" tests).
+  it('`nexus explain -p anthropic` gets PAST the "not available" gate for a signed-in-only anthropic', async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-w6-fresh-")), "cfg");
+    const diff = execFileSync("git", ["diff"], { cwd: REPO_DIR }).toString();
+    const r = await runCli(["explain", "-p", "anthropic"], diff, WORK_DIR, {
+      NEXUS_CONFIG_DIR: freshConfigDir,
+      ANTHROPIC_API_KEY: "sk-ant-test-fake-key-for-registration-only",
+    });
+    // The bug's exact error string. Whatever anthropic does next (succeed,
+    // or fail on the live call with an invalid test key) is NOT under test
+    // here — only that the provider was recognized as available at all.
+    expect(r.stderr).not.toContain("is not available");
   }, 20_000);
 });
 

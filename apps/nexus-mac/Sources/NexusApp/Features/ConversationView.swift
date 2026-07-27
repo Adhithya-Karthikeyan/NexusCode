@@ -2,6 +2,14 @@ import SwiftUI
 import AppKit
 import NexusKit
 
+/// The comfortable reading measure the transcript AND the composer are both
+/// capped to. One shared constant, not two repeated `660`s: the composer sits
+/// directly beneath the transcript column and IS where the next message in
+/// it will appear, so drifting the two independently is how you get a
+/// composer floating ~165pt away from the text it's replying to — measured,
+/// not hypothetical, at the default 1280pt window before this existed.
+private let readingColumnWidth: CGFloat = 660
+
 /// The conversation surface: transcript, controls, composer.
 ///
 /// Every control here resolves to a flag on a `nexus` command — the mode picker
@@ -129,7 +137,7 @@ struct ConversationView: View {
                     // back to its own start on a wide window, the "comfortable
                     // measure" every typographic source agrees on regardless
                     // of house style.
-                    .frame(maxWidth: 660, alignment: .leading)
+                    .frame(maxWidth: readingColumnWidth, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
                 .onChange(of: controller.view.eventCount) {
@@ -220,6 +228,16 @@ struct ConversationView: View {
             .foregroundStyle(theme.color(\.textMuted))
         }
         .padding(Space.md)
+        // Capped to `readingColumnWidth` — the SAME measure the transcript
+        // above it is capped to, so the composer sits directly under the
+        // text it's replying to instead of floating in its own gutter. Only
+        // the CONTENT is capped; the sunken background band and top divider
+        // stay full-bleed on purpose. A full-width toolbar/input BAND is
+        // ordinary chrome (menu bars and browser toolbars span the window
+        // constantly); it's the INPUT ITSELF drifting out of alignment with
+        // the column above it that read as two unrelated layouts stacked.
+        .frame(maxWidth: readingColumnWidth, alignment: .leading)
+        .frame(maxWidth: .infinity)
         .background(theme.color(\.surfaceSunken))
         .overlay(alignment: .top) {
             Rectangle().fill(theme.color(\.chromeDivider)).frame(height: 1)
@@ -229,6 +247,12 @@ struct ConversationView: View {
     /// The centrepiece control: an elevated card that visibly lights up on
     /// focus, so it reads as the one place input goes rather than one field
     /// among several.
+    ///
+    /// This is `AppTheme.materials.composer`'s one consumer — the surface
+    /// name literally describes this view. A theme that wants the input bar
+    /// to read as glass (Cinder, Nightfall) gets that; one that wants it
+    /// perfectly flat (Basalt, Vantage — no material anywhere, by design)
+    /// gets exactly the plain fill this already was.
     private var composerCard: some View {
         HStack(alignment: .bottom, spacing: Space.sm) {
             TextField("Message NexusCode…", text: $draft, axis: .vertical)
@@ -243,7 +267,9 @@ struct ConversationView: View {
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm + 2)
-        .background(theme.color(\.surfaceRaised))
+        .background {
+            themedFill(theme.color(\.surfaceRaised), treatment: theme.materials.composer, in: Rectangle())
+        }
         .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
@@ -547,7 +573,7 @@ struct PickerOption: Identifiable, Equatable {
         self.kind = kind
     }
 
-    fileprivate func dotColor(theme: NexusTheme) -> Color? {
+    fileprivate func dotColor(theme: AppTheme) -> Color? {
         guard let kind else { return nil }
         return providerDotColor(kind: kind, theme: theme).opacity(available ? 1 : 0.4)
     }
@@ -584,7 +610,7 @@ extension PickerOption {
 /// Maps a provider kind onto its themed status-dot color, falling back to the
 /// generic "custom" token for anything unrecognized (local models, future
 /// providers) instead of guessing or hardcoding a color.
-private func providerDotColor(kind: String, theme: NexusTheme) -> Color {
+private func providerDotColor(kind: String, theme: AppTheme) -> Color {
     switch kind.lowercased() {
     case "anthropic": return theme.color(\.providerAnthropic)
     case "openai": return theme.color(\.providerOpenai)
@@ -599,7 +625,7 @@ private func providerDotColor(kind: String, theme: NexusTheme) -> Color {
 
 /// The dot color for the currently selected provider id, looked up in the
 /// loaded provider list rather than re-deriving a kind from the id string.
-private func providerDotColor(for id: String?, in providers: [PickerOption], theme: NexusTheme) -> Color? {
+private func providerDotColor(for id: String?, in providers: [PickerOption], theme: AppTheme) -> Color? {
     guard let id, let match = providers.first(where: { $0.id == id }) else { return nil }
     return match.dotColor(theme: theme)
 }
@@ -994,26 +1020,38 @@ struct TurnView: View {
 
     @ViewBuilder
     private var answerBlock: some View {
-        innerContent
-            .padding(.leading, Space.md)
-            // The one differentiator: a quiet accent rule in the left
-            // gutter, present only on the assistant's answer — never a card,
-            // never an avatar.
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(theme.color(\.accentDefault).opacity(0.35))
-                    .frame(width: 2)
-            }
-            .overlay(alignment: .topTrailing) {
-                if hoveringAnswer && !turn.text.isEmpty {
+        // The copy button used to sit in a `.topTrailing` overlay, which
+        // worked while the card's own `Space.md` padding kept it clear of
+        // the text. Now that the card is gone, that overlay had nothing to
+        // hold it off the corner and it landed directly on top of the first
+        // line — an H1 or a long opening sentence would run right under it.
+        // A hover-revealed row below the content, not an overlay on top of
+        // it, can never occlude a glyph, at the cost of a small reflow when
+        // it appears — an accepted trade for "never covers real text".
+        VStack(alignment: .leading, spacing: 4) {
+            innerContent
+                .padding(.leading, Space.md)
+                // The one differentiator: a quiet accent rule in the left
+                // gutter, present only on the assistant's answer — never a
+                // card, never an avatar.
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(theme.color(\.accentDefault).opacity(0.35))
+                        .frame(width: 2)
+                }
+
+            if hoveringAnswer && !turn.text.isEmpty {
+                HStack {
+                    Spacer(minLength: 0)
                     copyButton
                 }
             }
-            .onHover { hovering in
-                hoveringAnswer = hovering
-                if !hovering { copied = false }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onHover { hovering in
+            hoveringAnswer = hovering
+            if !hovering { copied = false }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var copyButton: some View {

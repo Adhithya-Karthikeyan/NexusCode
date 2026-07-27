@@ -13,7 +13,16 @@ import type { AgentDefinition, AgentRole } from "./types.js";
 
 /** The tunable part of a role preset, before prompt assembly. */
 interface RolePreset {
+  /** The role's framing sentence(s), fed into the assembled system prompt as `{{description}}`. Addresses the model directly ("You are the X…"). */
   description: string;
+  /**
+   * A short, plain-words, THIRD-PERSON summary of what the role is for —
+   * distinct from `description` above. This is human-facing copy (surfaced on
+   * {@link AgentDefinition.description} for `nexus roles` / a picker UI), not
+   * part of the prompt fed to the model, so it never mentions tools (the
+   * picker shows those separately) and never addresses the agent as "you".
+   */
+  summary: string;
   capabilities: string[];
   conventions: string[];
   allowedTools: string[];
@@ -47,6 +56,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   coordinator: {
     description:
       "You are the coordinator. You decompose the objective into a plan, act on the parts you can, and delegate specialized subtasks to sub-agents.",
+    summary: "Breaks an objective into a plan and delegates specialized subtasks to other roles.",
     capabilities: [
       "Break an objective into ordered, dependency-aware tasks.",
       "Delegate a subtask to the best-suited specialized agent.",
@@ -60,6 +70,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   planner: {
     description:
       "You are the planner. You turn a fuzzy objective into a concrete, verifiable, dependency-ordered task plan.",
+    summary: "Turns a fuzzy objective into a concrete, dependency-ordered task plan.",
     capabilities: [
       "Produce a minimal task DAG that covers the objective.",
       "Identify risks and the definition of done for each task.",
@@ -72,6 +83,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   coder: {
     description:
       "You are the coder. You implement changes to satisfy the plan, editing files and running commands as needed.",
+    summary: "Implements code changes to satisfy a plan, and verifies them.",
     capabilities: [
       "Read, search, patch, and write files within the workspace.",
       "Run shell commands to build and verify.",
@@ -84,6 +96,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   reviewer: {
     description:
       "You are the reviewer. You read the change and report correctness, clarity, and risk findings. You never modify files.",
+    summary: "Reviews a change for correctness, clarity, and risk without modifying anything.",
     capabilities: [
       "Read and search the codebase to assess a change.",
       "Report findings ranked by severity.",
@@ -96,6 +109,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   tester: {
     description:
       "You are the tester. You design and run tests that exercise the change and report pass/fail with evidence.",
+    summary: "Designs and runs tests to verify a change, reporting pass/fail with evidence.",
     capabilities: ["Read code and tests.", "Run the test suite via the shell."],
     conventions: ["Prefer running existing tests before writing new ones."],
     allowedTools: ["fs_read", "fs_search", "fs_write", "shell_exec"],
@@ -105,6 +119,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   researcher: {
     description:
       "You are the researcher. You gather and synthesize the information needed to act, citing where each fact came from.",
+    summary: "Gathers and summarizes the information needed to act, with sources cited.",
     capabilities: ["Read and search the codebase.", "Summarize findings for the coordinator."],
     conventions: ["Attribute every claim to a source."],
     allowedTools: ["fs_read", "fs_search"],
@@ -114,6 +129,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   architect: {
     description:
       "You are the architect. You design the structure and interfaces before implementation, weighing trade-offs.",
+    summary: "Designs structure and interfaces before implementation, weighing trade-offs.",
     capabilities: ["Read the codebase.", "Produce an interface/dependency design."],
     conventions: ["Favor additive, contract-stable designs."],
     allowedTools: ["fs_read", "fs_search"],
@@ -123,6 +139,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   "doc-writer": {
     description:
       "You are the doc-writer. You produce clear, accurate documentation for the change.",
+    summary: "Writes clear, accurate documentation for a change.",
     capabilities: ["Read the code being documented.", "Write documentation files."],
     conventions: ["Document behavior, not implementation trivia."],
     allowedTools: ["fs_read", "fs_search", "fs_write"],
@@ -132,6 +149,7 @@ const ROLE_PRESETS: Record<AgentRole, RolePreset> = {
   "security-reviewer": {
     description:
       "You are the security reviewer. You hunt for vulnerabilities and unsafe patterns and report them by severity. You never modify files.",
+    summary: "Hunts for vulnerabilities and unsafe patterns, ranked by severity, without modifying anything.",
     capabilities: [
       "Read and search the codebase for security issues.",
       "Report vulnerabilities ranked by severity with a remediation.",
@@ -184,6 +202,7 @@ function assemblePrompt(engine: PromptEngine, role: string, preset: RolePreset):
 function definitionFrom(engine: PromptEngine, role: string, preset: RolePreset): AgentDefinition {
   const def: AgentDefinition = {
     role,
+    description: preset.summary,
     systemPrompt: assemblePrompt(engine, role, preset),
     allowedTools: [...preset.allowedTools],
     maxSteps: preset.maxSteps,

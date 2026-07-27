@@ -25,9 +25,18 @@ export function selectModel(v: ViewState): { model: string; provider: string } {
   return { model: "—", provider: "—" };
 }
 
-/** Session + run cost for `<CostMeter>` (§3.7). */
-export function selectCost(v: ViewState): { sessionUsd: number; runUsd: number } {
-  return { sessionUsd: v.totals.costUsd, runUsd: v.runUsd };
+/**
+ * Session + run cost for `<CostMeter>` (§3.7). `runUsd: null` means the most
+ * recent run's pricing is genuinely unknown. `costIncomplete` means
+ * `sessionUsd` is a partial sum — at least one run this session had no known
+ * price, so the total must not be presented as confident/complete.
+ */
+export function selectCost(v: ViewState): {
+  sessionUsd: number;
+  runUsd: number | null;
+  costIncomplete: boolean;
+} {
+  return { sessionUsd: v.totals.costUsd, runUsd: v.runUsd, costIncomplete: v.totals.costIncomplete };
 }
 
 /**

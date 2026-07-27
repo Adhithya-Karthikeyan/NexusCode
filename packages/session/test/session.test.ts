@@ -106,8 +106,52 @@ describe("SessionStore listing & metadata", () => {
     expect(s.inputTokens).toBe(100);
     expect(s.outputTokens).toBe(50);
     expect(s.costUsd).toBeCloseTo(0.0012, 6);
+    expect(s.costIncomplete).toBe(false);
     expect(s.eventCount).toBeGreaterThan(0);
     expect(s.createdAt).toBeGreaterThan(0);
+  });
+
+  it("a session with one unpriced run reports costIncomplete: true (not a silent $0)", () => {
+    seedCodingSession({ secret: "sk-abcdef0123456789abcdef" });
+    // A second run in the same session, from a model with no pricing entry —
+    // real tokens spent, but no known cost.
+    store.summarize({
+      runId: "run-2",
+      sessionId: SESSION,
+      turnId: "turn-2",
+      adapterId: "anthropic",
+      model: "claude-opus-5",
+      status: "ok",
+      text: "done",
+      toolCalls: [],
+      diffs: [],
+      usage: { inputTokens: 40, outputTokens: 10 }, // no costUsd — unpriced
+      finishReason: "stop",
+    });
+    const s = store.getSession(SESSION)!;
+    // The known cost is still surfaced, not discarded …
+    expect(s.costUsd).toBeCloseTo(0.0012, 6);
+    // … but the total must say it's incomplete, not read as confident/final.
+    expect(s.costIncomplete).toBe(true);
+  });
+
+  it("an all-mock (genuinely free) session reads costUsd: 0 with costIncomplete: false", () => {
+    store.summarize({
+      runId: "run-mock",
+      sessionId: "sess-mock",
+      turnId: "turn-mock",
+      adapterId: "mock",
+      model: "mock-fast",
+      status: "ok",
+      text: "hi",
+      toolCalls: [],
+      diffs: [],
+      usage: { inputTokens: 10, outputTokens: 5, costUsd: 0 },
+      finishReason: "stop",
+    });
+    const s = store.getSession("sess-mock")!;
+    expect(s.costUsd).toBe(0);
+    expect(s.costIncomplete).toBe(false);
   });
 
   it("names and renames a session", () => {

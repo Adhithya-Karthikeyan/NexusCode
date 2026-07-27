@@ -111,7 +111,14 @@ export interface UsageTotals {
   outputTokens: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Sum of the `usage` events with KNOWN pricing only — see {@link UsageTotals.costIncomplete}. */
   costUsd: number;
+  /**
+   * True once at least one `usage` event this session had `costUsd: null`
+   * (no pricing data for that model) — `costUsd` above is then a PARTIAL sum,
+   * not the session's true spend, and must be shown as such.
+   */
+  costIncomplete: boolean;
 }
 
 /** The full derived view — the single input to every selector. */
@@ -121,8 +128,11 @@ export interface ViewState {
   lanes: Readonly<Record<string, LaneState>>;
   laneOrder: readonly string[];
   totals: UsageTotals;
-  /** Cost attributed to the most recent `usage` event (the "run"). */
-  runUsd: number;
+  /**
+   * Cost attributed to the most recent `usage` event (the "run"). `null` when
+   * that run's pricing is genuinely unknown — distinct from a real free run.
+   */
+  runUsd: number | null;
   /** Tokens of the most recent request (context sizing for the HUD gauge). */
   lastUsage: { inputTokens: number; outputTokens: number };
   providerHealth: Readonly<Record<string, ProviderHealth>>;
@@ -137,8 +147,8 @@ export const initialViewState: ViewState = Object.freeze({
   route: null,
   lanes: {},
   laneOrder: [],
-  totals: { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 },
-  runUsd: 0,
+  totals: { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, costIncomplete: false },
+  runUsd: null,
   lastUsage: { inputTokens: 0, outputTokens: 0 },
   providerHealth: {},
   notifications: [],
@@ -333,7 +343,10 @@ export function reduceEvent(state: ViewState, ev: UiEvent, ts: number): ViewStat
         outputTokens: state.totals.outputTokens + ev.outputTokens,
         cacheRead: state.totals.cacheRead + (ev.cacheRead ?? 0),
         cacheWrite: state.totals.cacheWrite + (ev.cacheWrite ?? 0),
-        costUsd: state.totals.costUsd + ev.costUsd,
+        // A partial sum over only the priced runs — `costIncomplete` below is
+        // what tells a consumer this is not the session's true total.
+        costUsd: state.totals.costUsd + (ev.costUsd ?? 0),
+        costIncomplete: state.totals.costIncomplete || ev.costUsd == null,
       };
       return {
         ...state,

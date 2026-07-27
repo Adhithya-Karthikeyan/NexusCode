@@ -307,6 +307,13 @@ public extension NexusTheme {
     /// doesn't hand-author — even though none of them were designed with
     /// elevation, material, or gradient in mind. Prefer `AppTheme.all` for
     /// anything that wants the deliberate design pass.
+    ///
+    /// Shadow is zero at every level when `isDark`: these 16 tokens sets were
+    /// never designed with a shadow in mind, so guessing a blanket opacity
+    /// for all of them is exactly how a near-black canvas ends up with a grey
+    /// smudge halo (the documented reason `DesignSystem.swift`'s `hairline`
+    /// exists at all). A light theme's shadow is the standard, uncontroversial
+    /// technique — kept.
     var appTheme: AppTheme {
         AppTheme(
             id: id,
@@ -316,9 +323,9 @@ public extension NexusTheme {
             pairId: pairId,
             elevation: ElevationLadder(
                 level0: ElevationStep(surface: tokens.surfaceSunken, border: tokens.chromeBorderSubtle, shadowOpacity: 0, shadowRadius: 0),
-                level1: ElevationStep(surface: tokens.surfaceRaised, border: tokens.chromeBorder, shadowOpacity: isDark ? 0.16 : 0.06, shadowRadius: 6),
-                level2: ElevationStep(surface: tokens.surfaceOverlay, border: tokens.chromeBorderStrong, shadowOpacity: isDark ? 0.24 : 0.10, shadowRadius: 12),
-                level3: ElevationStep(surface: tokens.surfaceOverlay, border: tokens.chromeBorderFocus, shadowOpacity: isDark ? 0.32 : 0.14, shadowRadius: 20)
+                level1: ElevationStep(surface: tokens.surfaceRaised, border: tokens.chromeBorder, shadowOpacity: isDark ? 0 : 0.06, shadowRadius: isDark ? 0 : 6),
+                level2: ElevationStep(surface: tokens.surfaceOverlay, border: tokens.chromeBorderStrong, shadowOpacity: isDark ? 0 : 0.10, shadowRadius: isDark ? 0 : 12),
+                level3: ElevationStep(surface: tokens.surfaceOverlay, border: tokens.chromeBorderFocus, shadowOpacity: isDark ? 0 : 0.14, shadowRadius: isDark ? 0 : 20)
             ),
             materials: MaterialUsage(sidebar: .solid, overlay: .solid, composer: .solid),
             gradients: GradientSet(

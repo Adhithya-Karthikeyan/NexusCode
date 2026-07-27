@@ -23,11 +23,21 @@ export function costTier(spentUsd: number, cap?: number): CostTier {
 
 export interface CostMeterProps {
   sessionUsd: number;
-  runUsd?: number;
+  /**
+   * `undefined` hides the `· $run` segment entirely (see `showRun`); `null`
+   * shows it as "unpriced" — the run happened but has no known cost, which
+   * must never render as `$0.00 run` (indistinguishable from a real free run).
+   */
+  runUsd?: number | null;
   /** Spend cap; drives the tier ramp + the `▲ cap` degrade notice. */
   cap?: number;
   /** Show the `· $run` segment. Default true when `runUsd` is provided. */
   showRun?: boolean;
+  /**
+   * True when `sessionUsd` is a PARTIAL sum — at least one run this session
+   * had unknown pricing — so it must not read as a confident, complete total.
+   */
+  costIncomplete?: boolean;
   measure?: (s: string) => number;
 }
 
@@ -36,6 +46,7 @@ export function CostMeter({
   runUsd,
   cap,
   showRun = true,
+  costIncomplete = false,
   measure,
 }: CostMeterProps): React.JSX.Element {
   const tier = costTier(sessionUsd, cap);
@@ -46,14 +57,18 @@ export function CostMeter({
   const style = tier === "crit" ? crit : tier === "warn" ? warn : ok;
   const overCap = cap !== undefined && cap > 0 && sessionUsd >= cap;
   const hasRun = showRun && runUsd !== undefined;
+  const runLabel = runUsd == null ? "unpriced run" : `$${runUsd.toFixed(2)} run`;
 
   return (
     <Text>
-      <Text {...style}>${sessionUsd.toFixed(2)} session</Text>
+      <Text {...style}>
+        ${sessionUsd.toFixed(2)}
+        {costIncomplete ? "*" : ""} session
+      </Text>
       {hasRun ? (
         <Text>
           <Text {...muted}> · </Text>
-          <Text {...ok}>${(runUsd ?? 0).toFixed(2)} run</Text>
+          <Text {...ok}>{runLabel}</Text>
         </Text>
       ) : null}
       {overCap ? (

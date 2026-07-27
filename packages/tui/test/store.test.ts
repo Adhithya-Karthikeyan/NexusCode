@@ -70,11 +70,47 @@ describe("event-log reducer", () => {
       { t: "usage", lane: "main", inputTokens: 1000, outputTokens: 200, costUsd: 0.1 },
       { t: "usage", lane: "main", inputTokens: 84000, outputTokens: 200, costUsd: 0.31 },
     ]);
-    expect(selectCost(v)).toEqual({ sessionUsd: expect.closeTo(0.41, 5), runUsd: 0.31 });
+    expect(selectCost(v)).toEqual({
+      sessionUsd: expect.closeTo(0.41, 5),
+      runUsd: 0.31,
+      costIncomplete: false,
+    });
     const ctx = selectContext(v, 200000);
     expect(ctx.used).toBe(84200);
     expect(ctx.max).toBe(200000);
     expect(ctx.pct).toBeCloseTo(0.421, 3);
+  });
+
+  it("an unpriced run reports runUsd as null, never $0", () => {
+    // costUsd: null means "no pricing data for this model" — genuinely
+    // unknown, not a free run. Collapsing it to 0 is the bug this guards.
+    const v = reduceEvents([
+      session,
+      { t: "usage", lane: "main", inputTokens: 500, outputTokens: 100, costUsd: null },
+    ]);
+    expect(selectCost(v)).toEqual({ sessionUsd: 0, runUsd: null, costIncomplete: true });
+  });
+
+  it("a mixed session (one priced, one unpriced run) flags costIncomplete instead of a confident total", () => {
+    const v = reduceEvents([
+      session,
+      { t: "usage", lane: "main", inputTokens: 1000, outputTokens: 200, costUsd: 0.1 },
+      { t: "usage", lane: "main", inputTokens: 500, outputTokens: 100, costUsd: null },
+    ]);
+    const cost = selectCost(v);
+    // The 0.1 known cost is still surfaced (not discarded) …
+    expect(cost.sessionUsd).toBeCloseTo(0.1, 5);
+    // … but flagged as a PARTIAL total, not the session's true spend.
+    expect(cost.costIncomplete).toBe(true);
+    expect(cost.runUsd).toBeNull();
+  });
+
+  it("a genuinely free run (costUsd: 0) reads as zero, not conflated with unknown", () => {
+    const v = reduceEvents([
+      session,
+      { t: "usage", lane: "main", inputTokens: 500, outputTokens: 100, costUsd: 0 },
+    ]);
+    expect(selectCost(v)).toEqual({ sessionUsd: 0, runUsd: 0, costIncomplete: false });
   });
 
   it("derives provider health passively from outcomes", () => {

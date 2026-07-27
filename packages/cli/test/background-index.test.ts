@@ -172,3 +172,74 @@ describe("cmdIndex — child-side fork-bomb guard", () => {
     expect(mockedSpawn).not.toHaveBeenCalled();
   }, 20_000);
 });
+
+describe("cmdIndex — rag.embedderProvider sees an auth-derived (OAuth-only) provider", () => {
+  // `resolveRagEmbedder` used to build its runtime with plain `buildRuntime`,
+  // so a `rag.embedderProvider` the user is signed into ONLY via `nexus login`
+  // (no static `providers[]` config entry) was reported "not available" and
+  // silently degraded to the offline hashing embedder — even though the
+  // provider genuinely exists and is signed in. Fixed by switching to
+  // `buildAuthedRuntime` (see `packages/cli/src/commands.ts`).
+  const dirs: string[] = [];
+  const savedEnv: Record<string, string | undefined> = {};
+
+  function setEnv(name: string, value: string): void {
+    if (!(name in savedEnv)) savedEnv[name] = process.env[name];
+    process.env[name] = value;
+  }
+
+  afterEach(() => {
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    for (const k of Object.keys(savedEnv)) delete savedEnv[k];
+    while (dirs.length) {
+      const d = dirs.pop()!;
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('a signed-in-only "anthropic" embedder provider is recognized as available (falls back for the RIGHT reason — no embeddings API — not "not available")', async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "nx-idx-cfg2-"));
+    dirs.push(configDir);
+    const dataDir = mkdtempSync(join(tmpdir(), "nx-idx-data2-"));
+    dirs.push(dataDir);
+    const repoDir = mkdtempSync(join(tmpdir(), "nx-idx-repo2-"));
+    dirs.push(repoDir);
+    writeFileSync(join(repoDir, "a.txt"), "hello world, index me\n");
+
+    // No static `providers: [{ id: "anthropic", ... }]` entry — ONLY the
+    // ANTHROPIC_API_KEY env var below stands in for a resolved credential
+    // (the same branch a stored OAuth token takes at runtime-build time).
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({ rag: { embedder: "provider", embedderProvider: "anthropic" } }),
+    );
+
+    setEnv("NEXUS_CONFIG_DIR", configDir);
+    setEnv("NEXUS_DATA_DIR", dataDir);
+    setEnv("NEXUSCODE_DATA_DIR", dataDir);
+    setEnv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-registration-only");
+
+    const args: ParsedArgs = {
+      positionals: [repoDir],
+      flags: new Map([["output", "json"]]),
+      multi: new Map(),
+      unknown: [],
+      bools: new Set(),
+    };
+    let stderr = "";
+    const io = { out: () => {}, err: (s: string) => (stderr += s) };
+
+    const code = await cmdIndex(args, io);
+
+    expect(code).toBe(0);
+    // The bug's exact message must be gone …
+    expect(stderr).not.toContain('provider "anthropic" not available');
+    // … replaced by the honest, DIFFERENT reason: anthropic has no embeddings
+    // API, so the safe hashing fallback is still correct — just for the right
+    // reason, proving the provider itself was recognized.
+    expect(stderr).toContain('provider "anthropic" has no embeddings API');
+  }, 20_000);
+});

@@ -3,11 +3,15 @@ import NexusKit
 
 /// What is working right now — the app's most distinctive screen.
 ///
-/// Two genuinely different kinds of concurrency share this screen, and the
+/// THREE genuinely different kinds of concurrency share this screen, and the
 /// split is kept explicit rather than blurred:
 ///
 ///  - **Provider lanes** — several models answering the SAME prompt in a
 ///    compare/race run, read from the live `nexus` event stream.
+///  - **NexusCode agent runs** — `nexus agent --role …`, ONE agent iterating
+///    on its own output through a verified Observe → Plan → Act → Reflect →
+///    Evaluate loop. Provider-agnostic: the identical loop runs on anthropic,
+///    mock, or any registered adapter.
 ///  - **OMC subagents** — specialised agents doing SEPARATE work, read from
 ///    oh-my-claudecode's on-disk session state.
 ///
@@ -21,9 +25,17 @@ struct AgentsView: View {
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
+    /// Excludes any lane currently driving a role run — that lane surfaces
+    /// once, below, in `roleRuns` instead. Without this filter the same lane
+    /// would render twice under two different origins.
     private var lanes: [AgentRow] {
         guard let view = workspace.conversation?.view else { return [] }
-        return AgentRowBuilder.lanes(from: view).runningFirst()
+        return AgentRowBuilder.lanesExcludingRoleRuns(from: view).runningFirst()
+    }
+
+    private var roleRuns: [AgentRow] {
+        guard let view = workspace.conversation?.view else { return [] }
+        return AgentRowBuilder.roleRuns(from: view).runningFirst()
     }
 
     private var omcAgents: [AgentRow] {
@@ -37,24 +49,32 @@ struct AgentsView: View {
 
     /// The header strip needs something to report even before any agent has
     /// run this session — HUD facts (model, cost) exist from the moment OMC
-    /// is attached — so it is gated on more than just the two row lists.
-    private var hasReadout: Bool { !lanes.isEmpty || !omcAgents.isEmpty || hud != nil }
+    /// is attached — so it is gated on more than just the three row lists.
+    private var hasReadout: Bool { !lanes.isEmpty || !roleRuns.isEmpty || !omcAgents.isEmpty || hud != nil }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.lg) {
                 if hasReadout {
-                    HeaderStrip(lanes: lanes, omcAgents: omcAgents, hud: hud)
+                    HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud)
                 }
 
-                if lanes.isEmpty && omcAgents.isEmpty {
+                if lanes.isEmpty && roleRuns.isEmpty && omcAgents.isEmpty {
                     HeroEmptyState(
                         icon: "person.3.sequence",
                         title: "Nothing running",
-                        message: "Provider lanes appear here during a Compare or Race run. OMC subagents appear whenever oh-my-claudecode spawns them in this project."
+                        message: "Provider lanes appear here during a Compare or Race run. NexusCode's own agent runs (`nexus agent --role`) and OMC subagents appear here too, whenever they run in this project."
                     )
                     .frame(minHeight: 380)
                 } else {
+                    if !roleRuns.isEmpty {
+                        AgentSection(
+                            title: "NexusCode Agent Runs",
+                            subtitle: "nexus agent --role … — one agent iterating through Observe → Plan → Act → Reflect → Evaluate",
+                            rows: roleRuns,
+                            now: now
+                        )
+                    }
                     if !lanes.isEmpty {
                         AgentSection(
                             title: "Provider Lanes",
@@ -105,18 +125,20 @@ private extension Array where Element == AgentRow {
 }
 
 /// The control-room readout: total activity, split by origin, plus live
-/// session facts once OMC's HUD file is available. This is the one place the
-/// two kinds of concurrency are counted side by side — never merged, just
+/// session facts once OMC's HUD file is available. This is the one place all
+/// three kinds of concurrency are counted side by side — never merged, just
 /// tallied next to each other.
 private struct HeaderStrip: View {
     @Environment(\.nexusTheme) private var theme
     let lanes: [AgentRow]
+    let roleRuns: [AgentRow]
     let omcAgents: [AgentRow]
     let hud: OMCSessionHUD?
 
     private var laneRunning: Int { lanes.filter(\.isRunning).count }
+    private var roleRunRunning: Int { roleRuns.filter(\.isRunning).count }
     private var omcRunning: Int { omcAgents.filter(\.isRunning).count }
-    private var totalRunning: Int { laneRunning + omcRunning }
+    private var totalRunning: Int { laneRunning + roleRunRunning + omcRunning }
 
     /// Amber past 80%, red past 95% — the same thresholds for every percentage
     /// readout in the strip, so "does this number mean trouble" reads at a
@@ -143,6 +165,10 @@ private struct HeaderStrip: View {
                     CountPill(
                         text: "\(laneRunning) lane\(laneRunning == 1 ? "" : "s")",
                         tone: laneRunning > 0 ? .accent : .neutral
+                    )
+                    CountPill(
+                        text: "\(roleRunRunning) agent\(roleRunRunning == 1 ? "" : "s")",
+                        tone: roleRunRunning > 0 ? .accent : .neutral
                     )
                     CountPill(
                         text: "\(omcRunning) omc",
@@ -284,6 +310,9 @@ private struct AgentCard: View {
                                 .foregroundStyle(theme.color(\.textPrimary))
                                 .lineLimit(1)
                             OriginBadge(origin: row.origin)
+                            if let verdict = row.verdict {
+                                VerdictBadge(verdict: verdict)
+                            }
                         }
                         Text(row.subtitle)
                             .font(Kind.caption)
@@ -324,24 +353,82 @@ private struct AgentCard: View {
 
 /// The one badge that answers "which kind of concurrency is this" on every
 /// single card — deliberately a different chip colour per origin (info blue
-/// for a lane, neutral chrome for OMC) rather than a shared style, since the
-/// whole point is that the two must never blur together.
+/// for a lane, the theme's secondary accent for a NexusCode role run, neutral
+/// chrome for OMC) rather than a shared style, since the whole point is that
+/// the three must never blur together.
 private struct OriginBadge: View {
     @Environment(\.nexusTheme) private var theme
     let origin: AgentRow.Origin
 
+    private var text: String {
+        switch origin {
+        case .lane: return "LANE"
+        case .roleRun: return "AGENT"
+        case .omc: return "OMC"
+        }
+    }
+
+    private var colors: (bg: Color, fg: Color) {
+        switch origin {
+        case .lane: return (theme.color(\.infoBg), theme.color(\.infoFg))
+        // `accentSecondary` exists precisely for "an alternate tag family, a
+        // secondary badge" (see `AccentSystem`'s doc comment) — the theme's
+        // primary accent already means "running" everywhere else on this
+        // screen (`StatusDot`, the header's count pills), so borrowing it here
+        // would blur "this is a role run" into "this is active".
+        case .roleRun: return (theme.color(\.surfaceOverlay), theme.accentSecondary)
+        case .omc: return (theme.color(\.surfaceOverlay), theme.color(\.textMuted))
+        }
+    }
+
     var body: some View {
-        Text(origin == .lane ? "LANE" : "OMC")
+        Text(text)
             .font(Kind.micro)
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)
-            .background(
-                origin == .lane ? theme.color(\.infoBg) : theme.color(\.surfaceOverlay),
-                in: Capsule()
-            )
-            .foregroundStyle(
-                origin == .lane ? theme.color(\.infoFg) : theme.color(\.textMuted)
-            )
+            .background(colors.bg, in: Capsule())
+            .foregroundStyle(colors.fg)
+    }
+}
+
+/// The agent loop's three-valued outcome, shown next to the origin badge once
+/// a role run has stopped (absent while running — `StatusDot`'s pulse already
+/// owns that signal).
+///
+/// `.indeterminate` gets its own colour and its own word — "unverified" —
+/// deliberately distinct from both `.met` ("verified", success green) and
+/// `.unmet` ("not met", error red): collapsing it into either would silently
+/// break the loop's core honesty guarantee (see `AgentVerdict`). The warning
+/// treatment mirrors `UnreadableNotice` below — a caveat about what could be
+/// confirmed, not an incident — so it reads as its own thing rather than a
+/// soft failure.
+private struct VerdictBadge: View {
+    @Environment(\.nexusTheme) private var theme
+    let verdict: AgentVerdict
+
+    private var text: String {
+        switch verdict {
+        case .met: return "verified"
+        case .unmet: return "not met"
+        case .indeterminate: return "unverified"
+        }
+    }
+
+    private var colors: (bg: Color, fg: Color) {
+        switch verdict {
+        case .met: return (theme.color(\.successBg), theme.color(\.successFg))
+        case .unmet: return (theme.color(\.errorBg), theme.color(\.errorFg))
+        case .indeterminate: return (theme.color(\.warningBg), theme.color(\.warningFg))
+        }
+    }
+
+    var body: some View {
+        Text(text)
+            .font(Kind.micro)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(colors.bg, in: Capsule())
+            .foregroundStyle(colors.fg)
     }
 }
 

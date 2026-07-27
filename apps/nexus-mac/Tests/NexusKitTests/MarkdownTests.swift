@@ -265,8 +265,12 @@ final class MarkdownTests: XCTestCase {
         for _ in 0..<50 { _ = parse(longMessage) }
         let elapsed = Date().timeIntervalSince(start)
 
+        // Measured ~0.055s on dev hardware; 2.0s was a 36x-loose bound that
+        // would only ever catch genuine quadratic blowup. 0.3s still leaves
+        // ~5.5x headroom for slower CI machines without being so loose it
+        // stops meaning anything.
         XCTAssertLessThan(
-            elapsed, 2.0,
+            elapsed, 0.3,
             "50 parses of a \(longMessage.count)-char message took \(elapsed)s — too slow for per-token reparsing"
         )
     }

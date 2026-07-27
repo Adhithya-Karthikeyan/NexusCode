@@ -103,7 +103,8 @@ export interface SlashCommandDeps {
     contextUsed?: number;
     contextMax?: number;
     sessionCost?: number;
-    runCost?: number;
+    /** `null` when the last run's pricing is genuinely unknown (not free). */
+    runCost?: number | null;
     /** Current session/trace identifier accepted by `nexus trace <id>`. */
     traceTarget?: string;
     mcpServers?: { name: string; hint?: string }[];
@@ -272,7 +273,11 @@ export function buildSlashCommands(deps: SlashCommandDeps): SlashCommandSpec[] {
       pickerTitle: "Cost",
       optionsProvider: () => [
         { label: "session", value: "session", hint: `$${(info.sessionCost ?? 0).toFixed(2)}` },
-        { label: "last run", value: "run", hint: `$${(info.runCost ?? 0).toFixed(2)}` },
+        {
+          label: "last run",
+          value: "run",
+          hint: info.runCost == null ? "unpriced" : `$${info.runCost.toFixed(2)}`,
+        },
       ],
     },
     {

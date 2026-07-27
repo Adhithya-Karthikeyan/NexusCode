@@ -33,6 +33,15 @@ export type AgentRole =
 export interface AgentDefinition {
   /** Stable role name, e.g. `"reviewer"`. */
   role: string;
+  /**
+   * One plain-words line describing what the role is FOR — e.g. "Reviews a
+   * change for correctness, clarity, and risk without modifying anything."
+   * Written for a human choosing between roles (a picker UI, `nexus roles`),
+   * not for the model: it is a distinct field from `systemPrompt`, never
+   * derived from it. Optional so a caller-built custom `AgentDefinition`
+   * (not one of the shipped presets) is not forced to supply one.
+   */
+  description?: string;
   /** The system prompt (assembled via the PromptEngine). */
   systemPrompt: string;
   /** Tool-name allowlist. `["*"]` grants every registered tool. */

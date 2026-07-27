@@ -33,6 +33,20 @@ struct MarkdownView: View {
                     isFirst: index == 0,
                     trailingCaret: isStreaming && index == parsed.count - 1
                 )
+                // `.equatable()` is what makes re-parsing on every streamed
+                // token affordable: `MarkdownParser.parse` runs fresh each
+                // render (1.1ms measured for a 10.6k-char message — not the
+                // bottleneck), but naively that also rebuilds an
+                // `AttributedString` for every UNCHANGED earlier block on
+                // every single frame (measured 11.1ms for 60 blocks — most of
+                // a 16ms budget). Only the LAST block actually differs
+                // mid-stream; `ForEach`'s `id: \.offset` gives each position
+                // stable identity, and since `MarkdownBlock` is structurally
+                // `Equatable`, SwiftUI can skip re-invoking `body` — and so
+                // skip rebuilding `InlineText.attributed` — for every block
+                // whose content, `isFirst` and `trailingCaret` didn't
+                // actually change from the previous render.
+                .equatable()
             }
             // A non-empty `text` that is pure whitespace mid-token (e.g. the
             // instant after a trailing "\n" arrives, before more text does)
@@ -51,11 +65,23 @@ struct MarkdownView: View {
 /// surrounding `VStack` happens to default to — a typeset document has more
 /// air above a heading than below it (it belongs with what follows, not what
 /// precedes), and more air around a rule than a paragraph.
-private struct MarkdownBlockView: View {
+private struct MarkdownBlockView: View, Equatable {
     @Environment(\.nexusTheme) private var theme
     let block: MarkdownBlock
     let isFirst: Bool
     var trailingCaret: Bool = false
+
+    // Manual, not synthesized: `@Environment` storage isn't `Equatable`, so
+    // auto-synthesis isn't available. Comparing only the three real inputs
+    // is also exactly right, not just a workaround — a genuine theme change
+    // still re-renders normally, because SwiftUI tracks the `@Environment`
+    // read inside `body` independently of this check; `.equatable()` only
+    // short-circuits re-invoking `body` when a PARENT re-render produced a
+    // structurally identical view for the same `ForEach` identity, which is
+    // exactly the "only the tail block changed" case during streaming.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.block == rhs.block && lhs.isFirst == rhs.isFirst && lhs.trailingCaret == rhs.trailingCaret
+    }
 
     var body: some View {
         content.padding(.top, spacingBefore)
@@ -98,6 +124,11 @@ private struct MarkdownBlockView: View {
     @ViewBuilder
     private func inlineWithCaret<V: View>(@ViewBuilder _ inline: () -> V) -> some View {
         if trailingCaret {
+            // 3pt, not `Space.xs` (4pt): the caret should read as glued to
+            // the last character it's riding the baseline of, not spaced
+            // from it like two separate controls — a typographic detail
+            // rather than a "gap between UI elements" the `Space` scale is
+            // for, so it's deliberately a hair tighter than any `Space` stop.
             HStack(alignment: .lastTextBaseline, spacing: 3) {
                 inline()
                 StreamingCaret()
@@ -112,7 +143,7 @@ private struct MarkdownBlockView: View {
     @ViewBuilder
     private func trailingCaretWrapper<V: View>(@ViewBuilder _ block: () -> V) -> some View {
         if trailingCaret {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Space.xs) {
                 block()
                 StreamingCaret()
             }
@@ -124,11 +155,18 @@ private struct MarkdownBlockView: View {
     private var spacingBefore: CGFloat {
         guard !isFirst else { return 0 }
         switch block {
-        case .heading: return Space.lg + 4
+        case .heading: return Self.headingTopSpacing
         case .thematicBreak: return Space.lg
         default: return Space.md
         }
     }
+
+    /// Roughly 1.6x the ordinary inter-block gap (`Space.md`) — a heading
+    /// needs noticeably more air above it than below, so it reads as bound
+    /// to the content that follows rather than floating between two
+    /// paragraphs. `Space` has no stop that lands here directly, so this is
+    /// named and derived rather than a bare `Space.lg + 4` at the call site.
+    private static let headingTopSpacing = Space.lg + 4
 }
 
 // MARK: - Heading
@@ -147,18 +185,35 @@ private struct HeadingText: View {
     let level: Int
     let inline: String
 
+    /// Mirrors `Kind.title`/`headline`/`bodyEmphasis`/`section`'s own
+    /// (size, weight) pairs. `DesignSystem.swift` is off-limits while
+    /// `app-themes` is mid-wiring the theme system through it, and `Font` is
+    /// opaque — there's no API to read a point size back out of an existing
+    /// `Kind.*` value — so these are named to make the correspondence to
+    /// each `Kind` stop explicit rather than restating unlabeled numbers.
+    private enum Scale {
+        static let h1: (size: CGFloat, weight: Font.Weight) = (15, .semibold)  // Kind.title
+        static let h2: (size: CGFloat, weight: Font.Weight) = (13, .semibold)  // Kind.headline
+        static let h3: (size: CGFloat, weight: Font.Weight) = (13, .medium)    // Kind.bodyEmphasis
+        static let h4: (size: CGFloat, weight: Font.Weight) = (11, .semibold)  // Kind.section
+    }
+
     var body: some View {
         switch level {
         case 1:
-            InlineText(inline, size: 15, weight: .semibold, lineSpacing: 2, color: theme.color(\.textPrimary))
+            let s = Scale.h1
+            InlineText(inline, size: s.size, weight: s.weight, lineSpacing: 2, color: theme.color(\.textPrimary))
         case 2:
-            InlineText(inline, size: 13, weight: .semibold, lineSpacing: 2, color: theme.color(\.textPrimary))
+            let s = Scale.h2
+            InlineText(inline, size: s.size, weight: s.weight, lineSpacing: 2, color: theme.color(\.textPrimary))
         case 3:
-            InlineText(inline, size: 13, weight: .medium, lineSpacing: 2, color: theme.color(\.textMuted))
+            let s = Scale.h3
+            InlineText(inline, size: s.size, weight: s.weight, lineSpacing: 2, color: theme.color(\.textMuted))
                 .tracking(0.5)
                 .textCase(.uppercase)
         default:
-            InlineText(inline, size: 11, weight: .semibold, lineSpacing: 2, color: theme.color(\.textMuted))
+            let s = Scale.h4
+            InlineText(inline, size: s.size, weight: s.weight, lineSpacing: 2, color: theme.color(\.textMuted))
                 .tracking(0.7)
                 .textCase(.uppercase)
         }
@@ -175,7 +230,7 @@ private struct ListView: View {
     let list: MarkdownList
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.xs + 2) {
+        VStack(alignment: .leading, spacing: Space.sm) {
             ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
                 ListItemRow(
                     marker: list.ordered ? "\(list.start + index)." : "•",
@@ -205,7 +260,7 @@ private struct ListItemRow: View {
             // — every extra nesting level is one more marker+content column.
             VStack(alignment: .leading, spacing: Space.sm) {
                 ForEach(Array(item.blocks.enumerated()), id: \.offset) { index, block in
-                    MarkdownBlockView(block: block, isFirst: index == 0)
+                    MarkdownBlockView(block: block, isFirst: index == 0).equatable()
                 }
             }
         }
@@ -227,7 +282,7 @@ private struct BlockquoteView: View {
 
             VStack(alignment: .leading, spacing: Space.sm) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                    MarkdownBlockView(block: block, isFirst: index == 0)
+                    MarkdownBlockView(block: block, isFirst: index == 0).equatable()
                 }
             }
             // Quoted text reads as muted commentary, not the primary voice —
@@ -246,7 +301,7 @@ private struct MarkdownCodeBlockView: View {
     let code: MarkdownCodeBlock
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Space.xs) {
             if let language = code.language {
                 Text(language.uppercased())
                     .font(Kind.micro)
@@ -324,24 +379,43 @@ private struct InlineText: View {
 
     private func styled(_ input: AttributedString) -> AttributedString {
         var result = input
-        let baseColor = color ?? contextColor ?? theme.color(\.textSecondary)
+        // `textPrimary`, not `textSecondary` — carried over from the old
+        // plain-`Text(turn.text)` path, where secondary made some sense as a
+        // "this is machine output" cue. It doesn't for a typeset answer:
+        // washing out the ENTIRE body of every long-form reply is the
+        // opposite of what "make it readable" asked for. Headings already
+        // pass their own explicit `color:`, so this only affects the
+        // fallback body/list/blockquote path.
+        let baseColor = color ?? contextColor ?? theme.color(\.textPrimary)
         let linkColor = theme.color(\.textLink)
 
         for run in result.runs {
             let range = run.range
             if let intent = run.inlinePresentationIntent {
                 if intent.contains(.code) {
-                    // `Kind.monoSmall` (10.5pt monospaced) on `surfaceInset` —
-                    // the same size `Chip`/`Metric` use and the same surface
-                    // token the fenced `CodeBlock` sits on, so inline code
-                    // reads as "the same kind of thing" as a real code block,
-                    // just smaller, rather than body text that merely
-                    // switched fonts. A per-run background can't carry its
-                    // own padding (`Text` concatenation has no `.padding`),
-                    // so this is a tight highlight, not a padded pill —
-                    // still a real, unmistakable departure from body copy.
-                    result[range].font = Kind.monoSmall
-                    result[range].backgroundColor = theme.color(\.surfaceInset)
+                    // Scaled relative to the CONTEXT it's in, not pinned to
+                    // one flat size — `Kind.monoSmall` (10.5pt) was fine for
+                    // 13pt body text but tiny and off-baseline inside a 15pt
+                    // H1. One step down from the surrounding size, floored at
+                    // the documented 10pt minimum, keeps it legibly smaller
+                    // than its context everywhere without ever going
+                    // unreadable.
+                    result[range].font = .system(size: max(size - 2, 10), design: .monospaced)
+                    // `surfaceInset` on `surfaceBase` measured 1.02-1.07:1 —
+                    // both this theme's near-black surface tokens are only a
+                    // couple of RGB steps apart, so ANY flat surface-ladder
+                    // token reads as invisible here (verified: `surfaceRaised`
+                    // 1.12:1, `surfaceOverlay` 1.24:1 — none of them fix it).
+                    // A translucent wash of `textPrimary` — the color THIS
+                    // theme already chose to contrast maximally against its
+                    // own surface — composites to ~2.4:1 against the page on
+                    // nexus-noir and ~1.9:1 on paper-nexus, a real, measured,
+                    // multiple-times improvement, and it's theme-adaptive by
+                    // construction rather than a hardcoded hex tuned to one
+                    // palette. Code text itself stays comfortably legible
+                    // against the resulting chip (6.8:1 nexus-noir, 8.1:1
+                    // paper-nexus — both well clear of the 4.5:1 AA floor).
+                    result[range].backgroundColor = theme.color(\.textPrimary).opacity(0.3)
                 } else {
                     var runFont = Font.system(size: size, weight: intent.contains(.stronglyEmphasized) ? .bold : weight)
                     if intent.contains(.emphasized) { runFont = runFont.italic() }

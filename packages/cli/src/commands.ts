@@ -526,7 +526,7 @@ function dimErr(s: string): string {
  * paid call's cost as free. Never coerce with `?? 0` at a call site; go
  * through this instead.
  */
-function formatCostUsd(costUsd: number | null | undefined): string {
+export function formatCostUsd(costUsd: number | null | undefined): string {
   return costUsd == null ? "unpriced" : `$${costUsd.toFixed(6)}`;
 }
 
@@ -538,7 +538,7 @@ function formatCostUsd(costUsd: number | null | undefined): string {
  * precedents (a timed-out approval is not a refusal; an `indeterminate` agent
  * verdict is not a success) — an incomplete cost total must say so.
  */
-function costIsIncomplete(runs: readonly RunResult[]): boolean {
+export function costIsIncomplete(runs: readonly RunResult[]): boolean {
   const priced = runs.filter((r) => r.usage.costUsd != null || r.usage.reportedCostUsd != null).length;
   return priced > 0 && priced < runs.length;
 }
@@ -1265,6 +1265,11 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
  * answer on stdout) exactly like every other command. Fully offline-verifiable
  * with `-p mock -m mock-tools`. Shared by `agent --role`, `plan`, and (via role
  * presets) any future role-driven command.
+ *
+ * Honors `--resume <id>` / `--continue` the same way `chat --persistent` does
+ * (see {@link resolveResumeTarget}): the prior conversation is rehydrated and
+ * threaded ahead of this prompt; the role's plan is always drafted fresh
+ * against this run's own goal (see the resume block below for why).
  */
 async function runAgentOoda(
   args: ParsedArgs,
@@ -1404,7 +1409,36 @@ async function runAgentOoda(
     ...continuity,
     ...(obs.emit ? { emit: obs.emit } : {}),
   });
-  const session = await engine.openSession();
+  // `--resume <id>` / `--continue`: rehydrate a prior conversation into this role
+  // run, through the SAME resolver + provider-neutral `engine.openSession({
+  // resume })` `chat --persistent --resume` uses — not a second mechanism. That
+  // makes cross-provider resume and the "no stored transcript" / "history
+  // disabled" / "storePrompts off" degradations behave identically here, caveat
+  // included: a resumed session's tool calls are not replayed, only its text.
+  //
+  // What resumes is the CONVERSATION. What deliberately does NOT resume is
+  // plan/task state: `store` below is a fresh `:memory:` TaskStore on every
+  // invocation, never keyed by session id, and nothing in engine resume
+  // rehydrates it. So a resumed role run reasons over the restored conversation
+  // but plans afresh against ITS OWN goal — this invocation's prompt — exactly
+  // like a first-time run. That is deliberate, not a gap: the goal a role run
+  // pursues is whatever it was just asked to do, not a plan some earlier
+  // process step happened to be mid-way through.
+  const resumeId = await resolveResumeTarget(args, config, historyDb, io, "agent");
+  const session = await engine.openSession(resumeId !== undefined ? { resume: resumeId } : {});
+  if (resumeId !== undefined) {
+    const restored = session.transcript.length;
+    io.err(
+      restored > 0
+        ? `[resume] ${session.id} — restored ${restored} message${restored === 1 ? "" : "s"} ` +
+            `(text only; tool calls are not replayed)\n`
+        : `nexus agent: no stored transcript to resume for session "${resumeId}" ` +
+            `(nothing stored, or no completed exchange yet) — starting a fresh conversation\n`,
+    );
+  }
+  // Print unconditionally, exactly like `chat`: without the id there is nothing
+  // a caller could pass back into a future `--resume`.
+  io.err(`[session] ${session.id}\n`);
   const turn = session.newTurn({ messages: userText(prompt) });
 
   const onSigint = (): void => {
@@ -1418,6 +1452,11 @@ async function runAgentOoda(
       goal: { objective: prompt },
       maxSteps,
       gate,
+      // The threaded transcript (prior turns + this prompt) — `AgentRunOptions.input`
+      // is the loop's ACTUAL seed message array; `ctx` from `turn.context()` does not
+      // carry it. Without this the loop always fell back to a bare `userText(goal.objective)`
+      // and silently dropped any resumed (or even same-process re-threaded) history.
+      input: turn.input,
     });
 
     if (output !== "json") {
@@ -1554,6 +1593,8 @@ export async function cmdPlan(args: ParsedArgs, io: Io = defaultIo): Promise<num
 /** One role as reported by `nexus roles` (see {@link cmdRoles}). */
 interface RoleListing {
   id: string;
+  /** One plain-words line describing what the role is FOR (a picker label; never the system prompt). */
+  description?: string;
   /** Tool-name allowlist; `["*"]` means every registered tool. */
   tools: string[];
   /** Hard cap on OODA iterations for this role. */
@@ -1582,10 +1623,11 @@ interface RoleListing {
  * resolves against, so the catalog cannot drift from what is actually runnable.
  *
  * The assembled system prompt is deliberately NOT emitted: it is long, a picker
- * has no use for it, and it would dominate any log this output lands in. The
- * per-role prose `description` is not emitted either — not by choice, but
- * because it is baked into the prompt and never surfaced on `AgentDefinition`;
- * exposing it would mean changing `@nexuscode/agent`.
+ * has no use for it, and it would dominate any log this output lands in. Its
+ * one-line human-facing `description` IS emitted — it is a distinct field on
+ * `AgentDefinition` (`@nexuscode/agent`), populated for every shipped preset,
+ * never derived by slicing the prompt — because a nine-id list with a tool
+ * array is not something a person can choose between.
  */
 export async function cmdRoles(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const output = parseOutput(args);
@@ -1600,6 +1642,7 @@ export async function cmdRoles(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       // Mirrors runAgentOoda's own fallback, so what is listed is what is applied.
       permissionMode: def.permissionMode ?? "read-only",
     };
+    if (def.description !== undefined) listing.description = def.description;
     if (def.model !== undefined) listing.model = def.model;
     if (def.adapterId !== undefined) listing.adapterId = def.adapterId;
     return listing;
@@ -1615,6 +1658,7 @@ export async function cmdRoles(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     io.out(
       `${r.id.padEnd(width)}  ${r.permissionMode.padEnd(15)} ${String(r.maxSteps).padStart(2)} steps  ${tools}\n`,
     );
+    if (r.description) io.out(`${"".padEnd(width)}  ${r.description}\n`);
   }
   return 0;
 }
@@ -2950,24 +2994,30 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
  * is the only setting that writes what you typed to disk. When it is off — or
  * when nothing was ever stored — this says so on stderr and returns undefined,
  * so the user is never handed a half-restored conversation and told it is theirs.
+ *
+ * Shared by `chat` and `agent --role`/`plan` (via {@link runAgentOoda}) — one
+ * resolver, so a role run and a chat turn resume identically instead of a
+ * second mechanism drifting from this one. `label` only changes which command
+ * name the messages above blame (`"chat"` by default).
  */
 async function resolveResumeTarget(
   args: ParsedArgs,
   config: NexusConfig,
   historyDb: string,
   io: Io,
+  label = "chat",
 ): Promise<string | undefined> {
   const explicit = args.flags.get("resume");
   const wantsLatest = args.bools.has("continue");
   if (explicit === undefined && !wantsLatest) return undefined;
 
   if (!config.history.enabled) {
-    io.err("nexus chat: history is disabled, so there is nothing to resume\n");
+    io.err(`nexus ${label}: history is disabled, so there is nothing to resume\n`);
     return undefined;
   }
   if (!config.history.storePrompts) {
     io.err(
-      "nexus chat: cannot resume — your prompts are not stored on disk " +
+      `nexus ${label}: cannot resume — your prompts are not stored on disk ` +
         "(history.storePrompts is off, the default).\n" +
         "  Enable it with: nexus config set history.storePrompts true\n" +
         "  Conversations started AFTER that can be resumed; earlier ones cannot.\n",
@@ -2978,7 +3028,7 @@ async function resolveResumeTarget(
 
   const latest = await latestStoredSession(historyDb);
   if (!latest) {
-    io.err("nexus chat: no stored conversation to continue yet\n");
+    io.err(`nexus ${label}: no stored conversation to continue yet\n`);
     return undefined;
   }
   return latest;

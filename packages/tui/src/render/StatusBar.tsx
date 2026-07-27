@@ -121,14 +121,16 @@ export function StatusBar({
     providerOverride ?? (selected.provider !== "—" ? selected.provider : fallbackProvider ?? "—");
   const providerStyle = useTextStyle(providerToken(provider === "—" ? "custom" : provider));
   const ctx = selectContext(view, contextMax);
-  const { sessionUsd } = selectCost(view);
+  const { sessionUsd, costIncomplete } = selectCost(view);
   const sep = ` ${caps.unicode ? "·" : "-"} `;
 
   const nodeGlyph = glyph(caps, "node");
   const shownModel = clampModel(model, caps.unicode);
   const providerLabel = provider !== "—" ? `${glyph(caps, "dotFilled")}${providerLetter(provider)} ` : "";
   const ctxLabel = `${formatTokens(ctx.used)}/${formatTokens(ctx.max)}`;
-  const costLabel = `$${sessionUsd.toFixed(2)}`;
+  // `*` marks a partial total: the session also had a run with unknown pricing,
+  // so `sessionUsd` (a sum of only the priced runs) is not the true spend.
+  const costLabel = `$${sessionUsd.toFixed(2)}${costIncomplete ? "*" : ""}`;
   const healthLabel = view.streaming ? `${glyph(caps, "streaming")} streaming` : `${glyph(caps, "ok")} ready`;
 
   // Plain-text lengths for the fixed segments, used only to decide which
