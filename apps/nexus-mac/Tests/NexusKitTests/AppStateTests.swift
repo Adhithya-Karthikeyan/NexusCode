@@ -491,6 +491,30 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(openai.subtitle, "finished · stop")
     }
 
+    /// The Agents screen's disclosure control reads real tool-call data off
+    /// the row, not a re-derived count — this is what makes "expand this
+    /// card" honest rather than decorative.
+    func testLaneRowCarriesItsToolCallsForExpansion() throws {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "anthropic", id: "p", text: "x")), ts: 0)
+        state.reduce(.toolCall(.init(lane: "anthropic", id: "c1", name: "bash", args: nil)), ts: 1)
+        state.reduce(.toolCall(.init(lane: "anthropic", id: "c2", name: "read_file", args: nil)), ts: 2)
+
+        let row = try XCTUnwrap(AgentRowBuilder.lanes(from: state).first { $0.title == "anthropic" })
+        XCTAssertEqual(row.toolCalls.map(\.name), ["bash", "read_file"])
+        XCTAssertTrue(row.hasExpandableDetail)
+    }
+
+    func testLaneRowWithNoToolCallsHasNothingToExpand() throws {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "plain", id: "p", text: "x")), ts: 0)
+        state.reduce(.text(.init(lane: "plain", delta: "hi")), ts: 1)
+
+        let row = try XCTUnwrap(AgentRowBuilder.lanes(from: state).first)
+        XCTAssertTrue(row.toolCalls.isEmpty)
+        XCTAssertFalse(row.hasExpandableDetail, "a lane with nothing to show must not offer a disclosure control")
+    }
+
     func testLaneRowSurfacesFailure() throws {
         var state = ViewState()
         state.reduce(.prompt(.init(lane: "gemini", id: "p", text: "x")), ts: 0)
@@ -543,6 +567,60 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(rows.map(\.title), ["explore"])
     }
 
+    /// A real, two-agent mission timeline (shape taken from `omc-mission.json`):
+    /// each row's `timeline` must contain only ITS OWN events, newest first —
+    /// the other agent's events must never leak in just because they share a
+    /// mission file.
+    private func twoAgentMissionState() throws -> OMCMissionState {
+        let raw = """
+        {
+          "missions": [{
+            "id": "m1", "name": "session", "objective": "do the thing", "status": "running",
+            "workerCount": 2,
+            "taskCounts": {"total": 2, "pending": 0, "blocked": 0, "inProgress": 1, "completed": 1, "failed": 0},
+            "agents": [
+              {"name": "nexus-surface:a1", "role": "nexus-surface", "ownership": "agent-a", "status": "running"},
+              {"name": "omc-surface:a2", "role": "omc-surface", "ownership": "agent-b", "status": "done"}
+            ],
+            "timeline": [
+              {"id": "e1", "at": "2026-07-26T17:54:34.000Z", "kind": "completion", "agent": "nexus-surface:a1", "detail": "completed"},
+              {"id": "e2", "at": "2026-07-26T17:54:44.000Z", "kind": "completion", "agent": "omc-surface:a2", "detail": "completed"},
+              {"id": "e3", "at": "2026-07-26T18:03:42.000Z", "kind": "update", "agent": "nexus-surface:a1", "detail": "started again"}
+            ]
+          }]
+        }
+        """
+        return try JSONDecoder().decode(OMCMissionState.self, from: Data(raw.utf8))
+    }
+
+    func testOmcRowCarriesOnlyItsOwnMissionTimelineSliceNewestFirst() throws {
+        var snapshot = OMCSnapshot()
+        snapshot.missions = try twoAgentMissionState()
+        snapshot.registry = OMCAgentRegistry(agents: [
+            OMCAgent(agentId: "agent-a", agentType: "nexus-surface", startedAt: Date(), completedAt: nil, status: .running),
+        ])
+
+        let row = try XCTUnwrap(AgentRowBuilder.omcAgents(from: snapshot).first)
+        // Two of the three timeline events belong to this agent; the third
+        // (agent-b's) must not appear.
+        XCTAssertEqual(row.timeline.map(\.id), ["e3", "e1"], "must be this agent's own events only, newest first")
+        XCTAssertTrue(row.hasExpandableDetail)
+    }
+
+    func testOmcRowOutsideAnyTrackedMissionHasNoTimelineAndNothingToExpand() throws {
+        var snapshot = OMCSnapshot()
+        snapshot.registry = OMCAgentRegistry(agents: [
+            OMCAgent(agentId: "lone", agentType: "explore", startedAt: Date(), completedAt: nil, status: .running),
+        ])
+        // `snapshot.missions` deliberately left nil — a real, common case
+        // (agents/OMC subagent tracking runs even when the mission file
+        // doesn't exist yet, e.g. before the first delegation).
+
+        let row = try XCTUnwrap(AgentRowBuilder.omcAgents(from: snapshot).first)
+        XCTAssertTrue(row.timeline.isEmpty)
+        XCTAssertFalse(row.hasExpandableDetail, "an OMC agent outside any tracked mission must not offer a disclosure control")
+    }
+
     // MARK: - Role runs (`nexus agent --role …`)
 
     private func agentStep(
@@ -565,6 +643,24 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(row.verdict, "still running -> no verdict yet")
         XCTAssertEqual(row.subtitle, "progress · step 1")
         XCTAssertEqual(row.detail, "40% progress · delegated: reviewer")
+    }
+
+    /// Same guarantee as the lane row above, for the OODA loop's own step
+    /// history — real `AgentStep`s off the turn, not a re-summarized copy.
+    func testRoleRunRowCarriesItsStepHistoryForExpansion() throws {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p", text: "build the thing")), ts: 0)
+        state.reduce(agentStep("step-start", step: 0, role: "coder"), ts: 1)
+        state.reduce(agentStep("plan", step: 0, role: "coder"), ts: 2)
+        state.reduce(agentStep("progress", step: 1, role: "coder", data: .object(["percent": .number(40)])), ts: 3)
+
+        let row = try XCTUnwrap(AgentRowBuilder.roleRuns(from: state).first)
+        XCTAssertEqual(row.steps.map(\.phase), ["step-start", "plan", "progress"])
+        XCTAssertTrue(row.hasExpandableDetail)
+        // A role run without at least one step never reaches `roleRuns(from:)`
+        // at all (`turn.isAgentRun` guards on a non-empty `agentSteps`), so
+        // there is no "role run with nothing to expand" case to cover here —
+        // unlike a lane, which can legitimately have zero tool calls.
     }
 
     func testRoleRunDoesNotAlsoAppearAsAPlainLaneRow() {

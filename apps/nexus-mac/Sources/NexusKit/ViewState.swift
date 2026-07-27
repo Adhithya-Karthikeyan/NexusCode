@@ -197,6 +197,38 @@ public struct NotificationItem: Sendable, Hashable, Identifiable {
     public var id: String { "\(kind.rawValue)-\(lane)-\(ts)-\(title)" }
 }
 
+/// The outcome of one `nexus chat --persistent` in-process provider/model
+/// switch request — accepted (with a receipt) or refused (with `blockers`),
+/// NEVER a silent no-op; the CLI emits exactly one of these per request. Kept
+/// as its OWN structured type rather than flattened into a
+/// `NotificationItem` string, deliberately: `blockers`/`warnings`/
+/// `preserved`/`adaptations` are each doing different work, and a view
+/// rendering this needs the structure to get `preserved`'s caveat right (see
+/// its doc below) — the same reasoning `AgentStep` keeps its own structured
+/// `data` rather than only the paired `reasoning` prose.
+public struct SwitchReceipt: Sendable, Hashable, Identifiable {
+    public let lane: String
+    public let from: UiEvent.Switch.Target
+    public let to: UiEvent.Switch.Target
+    public let accepted: Bool
+    public let blockers: [String]
+    public let warnings: [String]
+    /// What the switch machinery claims survived. Read literally, NOT as a
+    /// blanket "nothing was lost": this is a fixed 4-item list describing
+    /// what the TRANSCRIPT AS IT EXISTS carries forward, not a claim that
+    /// tool-call history survives — it never did, switch or not (see
+    /// `UiEvent.Switch.preserved`'s doc for the full reasoning). A view MUST
+    /// NOT render an accepted switch as lossless on the strength of this list.
+    public let preserved: [String]
+    public let adaptations: [String]
+    public let reason: String
+    public let ts: Double
+
+    /// Derived from position in the log, never a fresh `UUID()` — same
+    /// determinism requirement as every other derived id in this file.
+    public var id: String { "switch-\(lane)-\(ts)" }
+}
+
 /// The derived projection every view reads.
 ///
 /// A faithful port of `packages/tui/src/store/viewState.ts`. Kept a pure
@@ -232,6 +264,11 @@ public struct ViewState: Sendable, Hashable {
     /// where this is only a same-session breadcrumb that resets on relaunch.
     public var providerHealth: [String: ProviderHealth] = [:]
     public var notifications: [NotificationItem] = []
+    /// Every `switch` request this session, accepted or refused, in order —
+    /// append-only, like `notifications`, and for the same reason: a refused
+    /// switch is exactly as much a real event as an accepted one, not a
+    /// non-event to be dropped.
+    public var switches: [SwitchReceipt] = []
     public var streaming: Bool = false
     public var eventCount: Int = 0
 
@@ -247,6 +284,7 @@ public struct ViewState: Sendable, Hashable {
             && lhs.lastUsage == rhs.lastUsage
             && lhs.providerHealth == rhs.providerHealth
             && lhs.notifications == rhs.notifications
+            && lhs.switches == rhs.switches
             && lhs.streaming == rhs.streaming
             && lhs.eventCount == rhs.eventCount
     }
@@ -433,6 +471,34 @@ extension ViewState {
             // doc) — `totals`/`runUsd` are deliberately untouched here, not
             // zeroed. The turn itself is the only thing that changes.
             withLiveTurn(e.lane, ts: ts) { $0.cacheHit = e.hit }
+            eventCount += 1
+
+        case .switch(let e):
+            // Recorded either way — a refused switch is exactly as real an
+            // event as an accepted one (see `SwitchReceipt`'s doc).
+            switches.append(
+                SwitchReceipt(
+                    lane: e.lane, from: e.from, to: e.to, accepted: e.accepted,
+                    blockers: e.blockers, warnings: e.warnings, preserved: e.preserved,
+                    adaptations: e.adaptations, reason: e.reason, ts: ts
+                )
+            )
+            if e.accepted, let current = session {
+                // The dispatch target genuinely changed in-process — keep
+                // `session` truthful so the rest of the app (the status
+                // bar's "model" readout) does not show a stale
+                // provider/model after a real switch. Mirrors the CLI's own
+                // `providerId = targetProvider; model = resolvedModel;`
+                // reassignment in `performSwitch`
+                // (`packages/cli/src/commands.ts`). `id`/`ts` stay the
+                // session's own — this is an update to WHO is serving it,
+                // not a new session.
+                session = SessionInfo(id: current.id, provider: e.to.providerId, model: e.to.modelId, ts: current.ts)
+                // Only the NEW target's health is touched — moving TO a
+                // provider by choice says nothing bad about the one left
+                // behind, unlike `.failover` below, which is error-driven.
+                setHealth(e.to.providerId, .ok, "ok", ts)
+            }
             eventCount += 1
 
         case .failover(let e):

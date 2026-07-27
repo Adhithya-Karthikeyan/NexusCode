@@ -6,7 +6,7 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, promises as fsPromises, rmSync } from "node:fs";
+import { existsSync, promises as fsPromises, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { repoMap, detectLanguage } from "@nexuscode/fileintel";
@@ -130,6 +130,13 @@ import {
   writeUserConfig,
 } from "./config-io.js";
 import { historyList, historyShow, latestStoredSession, openHistory } from "./history.js";
+import {
+  JobRegistry,
+  NEXUS_JOB_CHILD_ENV,
+  killJob,
+  launchBackgroundJob,
+  runDetachedJob,
+} from "./jobs-registry.js";
 import { buildObservability, loadTraceSpans, type ObservabilityRuntime } from "./observability.js";
 import { attachMcpTools, startMcpSession } from "./mcp.js";
 import {
@@ -1844,6 +1851,74 @@ function renderPlanTree(tasks: Task[], io: Io): void {
   walk(undefined, 0);
 }
 
+/**
+ * Order plan tasks so every parent and dependency is created before the task
+ * that references it — {@link TaskStore.create} validates `parentId` and each
+ * `deps` id already exists, and the drafted plan's own creation order (by
+ * `createdAt` in the `:memory:` store) is not guaranteed to satisfy that.
+ * References to an id OUTSIDE the plan itself are left in place (best effort);
+ * {@link persistPlan} drops those at write time, mirroring how the OODA loop's
+ * own `applyPlanDirectives` tolerates already-resolved/missing edges rather
+ * than throwing.
+ */
+function orderPlanForPersist(tasks: Task[]): Task[] {
+  const ids = new Set(tasks.map((t) => t.id));
+  const prereqsOf = (t: Task): Set<string> => {
+    const set = new Set<string>();
+    if (t.parentId !== undefined && ids.has(t.parentId)) set.add(t.parentId);
+    for (const d of t.deps) if (ids.has(d)) set.add(d);
+    return set;
+  };
+  const ordered: Task[] = [];
+  const done = new Set<string>();
+  const remaining = [...tasks];
+  let progressed = true;
+  while (remaining.length > 0 && progressed) {
+    progressed = false;
+    for (let i = 0; i < remaining.length; i++) {
+      const t = remaining[i] as Task;
+      if ([...prereqsOf(t)].every((id) => done.has(id))) {
+        ordered.push(t);
+        done.add(t.id);
+        remaining.splice(i, 1);
+        i--;
+        progressed = true;
+      }
+    }
+  }
+  // A cycle here should be impossible (the source store rejects them on
+  // create) — but never silently drop tasks; append whatever is left.
+  ordered.push(...remaining);
+  return ordered;
+}
+
+/**
+ * Copy a freshly drafted plan — still living only in the OODA run's own
+ * `:memory:` store (see `runAgentOoda`) — into the durable store `nexus task
+ * list` (and the app's Tasks tab) reads. Preserves ids, parent/child
+ * structure, and dependency edges; this durable copy IS the plan, not a
+ * re-derived summary of it. Returns the created tasks, in the order created.
+ */
+function persistPlan(plan: Task[]): Task[] {
+  const store = openTaskStore();
+  const created: Task[] = [];
+  for (const t of orderPlanForPersist(plan)) {
+    const parentId = t.parentId !== undefined && store.get(t.parentId) ? t.parentId : undefined;
+    const deps = t.deps.filter((d) => store.get(d) !== undefined);
+    created.push(
+      store.create({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        deps,
+        ...(parentId !== undefined ? { parentId } : {}),
+        ...(t.notes !== undefined ? { notes: t.notes } : {}),
+      }),
+    );
+  }
+  return created;
+}
+
 export async function cmdPlan(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const output = parseOutput(args);
   const prompt = await readPrompt(args);
@@ -1855,10 +1930,28 @@ export async function cmdPlan(args: ParsedArgs, io: Io = defaultIo): Promise<num
   const role = args.flags.get("role") ?? "planner";
   const res = await runAgentOoda(args, io, role, prompt);
   if (!res.result) return res.code;
+
+  // Persisted into the durable store BY DEFAULT (`--no-persist` opts out): a
+  // plan that only exists for this process's lifetime can never be listed via
+  // `nexus task list`, and the app's Tasks tab can never show it either (GAPS
+  // G3) — which defeats the point of drafting one. The OODA run itself still
+  // plans against its own `:memory:` store (see `runAgentOoda`); this copies
+  // the SETTLED result out, ids and parent/dependency edges intact.
+  const noPersist = args.bools.has("no-persist");
+  const persisted = !noPersist && res.result.plan.length > 0 ? persistPlan(res.result.plan) : [];
+
   if (output === "text") {
     io.out(`plan for: ${prompt}\n\n`);
     if (res.result.plan.length > 0) renderPlanTree(res.result.plan, io);
     else io.out("(no tasks drafted)\n");
+    if (persisted.length > 0) {
+      io.err(
+        `[plan] persisted ${persisted.length} task${persisted.length === 1 ? "" : "s"} to the durable store — see 'nexus task list'\n`,
+      );
+      for (const t of persisted) io.err(`  ${t.id}  ${t.title}\n`);
+    } else if (noPersist && res.result.plan.length > 0) {
+      io.err("[plan] --no-persist: not written to the durable store\n");
+    }
     renderAgentTrailer(res.result, io);
   }
   return res.code;
@@ -2070,9 +2163,24 @@ export async function cmdJobs(args: ParsedArgs, io: Io = defaultIo): Promise<num
   const output = parseOutput(args);
 
   if (sub === "list") {
-    // Background jobs are tracked per-process by the ProcessManager; a fresh CLI
-    // invocation has none. `jobs run` launches one within a single invocation.
-    io.out(output === "json" ? "[]\n" : "no background jobs\n");
+    // Backgrounded jobs (`jobs run --background`) are cross-invocation: a
+    // persisted registry under the data dir, liveness re-probed on every read
+    // (GAPS G4 — this used to unconditionally report empty). A job that only
+    // ever ran in the foreground (plain `jobs run`) is never in here — by the
+    // time that command returns it has already finished, so there is nothing
+    // left to list; that is not this gap.
+    const jobs = new JobRegistry().list();
+    if (output === "json") {
+      io.out(`${JSON.stringify(jobs)}\n`);
+      return 0;
+    }
+    if (jobs.length === 0) {
+      io.out("no background jobs\n");
+      return 0;
+    }
+    for (const j of jobs) {
+      io.out(`${j.id}  [${j.status}]  pid=${j.pid}  ${[j.command, ...j.args].join(" ")}\n`);
+    }
     return 0;
   }
 
@@ -2085,6 +2193,32 @@ export async function cmdJobs(args: ParsedArgs, io: Io = defaultIo): Promise<num
     }
     const [command, ...rest] = argv;
     const cwd = args.flags.get("cwd") ?? process.cwd();
+
+    // We ARE the detached worker `launchBackgroundJob` re-launched for job
+    // `id` (env marker, never set by a human) — do the real spawn-and-wait
+    // and keep this process alive for the job's lifetime; never fork again.
+    const detachedId = process.env[NEXUS_JOB_CHILD_ENV];
+    if (detachedId) {
+      await runDetachedJob({ id: detachedId, command: command as string, args: rest, cwd });
+      return 0;
+    }
+
+    if (args.bools.has("background")) {
+      const launched = await launchBackgroundJob({ command: command as string, args: rest, cwd });
+      const pid = launched.record?.pid;
+      if (output === "json") {
+        io.out(
+          `${JSON.stringify({ id: launched.id, background: true, pid: pid ?? null, command, args: rest })}\n`,
+        );
+      } else {
+        io.out(
+          `[job] ${launched.id} started in the background${pid !== undefined ? ` (pid ${pid})` : ""} — ` +
+            `see 'nexus jobs list' / 'nexus jobs logs ${launched.id}'\n`,
+        );
+      }
+      return 0;
+    }
+
     const manager = new ProcessManager({ cwd });
     const history = new CommandHistory();
     const job = manager.spawn({ command: command as string, args: rest, cwd });
@@ -2117,6 +2251,70 @@ export async function cmdJobs(args: ParsedArgs, io: Io = defaultIo): Promise<num
       io.err(`[job] ${info.status} exit=${info.exitCode ?? "null"}${info.signal ? ` signal=${info.signal}` : ""}\n`);
     }
     return info.status === "exited" && (info.exitCode ?? 1) === 0 ? 0 : 1;
+  }
+
+  if (sub === "logs") {
+    const id = args.positionals[1];
+    if (!id) {
+      io.err("nexus jobs logs <id>\n");
+      return 2;
+    }
+    const rec = new JobRegistry().getProbed(id);
+    if (!rec) {
+      io.err(`no background job "${id}"\n`);
+      return 1;
+    }
+    let log = "";
+    try {
+      log = readFileSync(rec.logFile, "utf8");
+    } catch {
+      /* nothing captured yet (job just launched) — report an empty log, not an error */
+    }
+    if (output === "json") {
+      io.out(`${JSON.stringify({ id: rec.id, status: rec.status, exitCode: rec.exitCode, log })}\n`);
+    } else {
+      io.out(log);
+    }
+    return 0;
+  }
+
+  if (sub === "kill") {
+    const id = args.positionals[1];
+    if (!id) {
+      io.err("nexus jobs kill <id>\n");
+      return 2;
+    }
+    const registry = new JobRegistry();
+    const outcome = await killJob(id, registry);
+    if (!outcome.ok) {
+      if (outcome.reason === "not-found") {
+        io.err(`no background job "${id}"\n`);
+        return 1;
+      }
+      if (outcome.reason === "not-running") {
+        if (output === "json") {
+          io.out(`${JSON.stringify({ id, ok: false, reason: outcome.reason, status: outcome.record.status })}\n`);
+        } else {
+          io.err(`nexus jobs kill: "${id}" is not running (status: ${outcome.record.status})\n`);
+        }
+        return 1;
+      }
+      // identity-mismatch: the pid we recorded no longer matches what is running
+      // there (command/start-time mismatch — most likely pid reuse). Refusing to
+      // signal it is the one hard safety rule here; see jobs-registry.ts.
+      if (output === "json") {
+        io.out(`${JSON.stringify({ id, ok: false, reason: outcome.reason })}\n`);
+      } else {
+        io.err(
+          `nexus jobs kill: refusing to signal pid ${outcome.record.pid} for "${id}" — ` +
+            `the process there no longer matches what was recorded (likely pid reuse); not signaling it\n`,
+        );
+      }
+      return 1;
+    }
+    if (output === "json") io.out(`${JSON.stringify({ id, ok: true, status: outcome.record.status })}\n`);
+    else io.out(`[job] ${id} killed\n`);
+    return 0;
   }
 
   if (sub === "history") {
@@ -2152,7 +2350,7 @@ export async function cmdJobs(args: ParsedArgs, io: Io = defaultIo): Promise<num
     return 0;
   }
 
-  io.err(`nexus jobs: unknown subcommand "${sub}" (use: list | run | history | pty)\n`);
+  io.err(`nexus jobs: unknown subcommand "${sub}" (use: list | run | logs | kill | history | pty)\n`);
   return 2;
 }
 

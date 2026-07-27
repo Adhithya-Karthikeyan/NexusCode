@@ -20,12 +20,12 @@ final class UiEventDecodingTests: XCTestCase {
 
     func testDecodesEveryEventVariant() throws {
         let events = UiEventDecoder.decodeStream(try fixture("events"))
-        XCTAssertEqual(events.count, 20, "every fixture line must decode to an event")
+        XCTAssertEqual(events.count, 21, "every fixture line must decode to an event")
 
         let types = Set(events.map(\.wireType))
         for expected in [
             "session", "route", "prompt", "agent", "reasoning", "text", "tool_call",
-            "tool_result", "diff", "approval", "usage", "failover", "cache", "done", "error",
+            "tool_result", "diff", "approval", "usage", "failover", "cache", "switch", "done", "error",
         ] {
             XCTAssertTrue(types.contains(expected), "no \(expected) event decoded")
         }
@@ -212,6 +212,51 @@ final class UiEventDecodingTests: XCTestCase {
         XCTAssertEqual(events.map(\.wireType), ["text", "cache", "done"])
         XCTAssertEqual(events.map(\.lane), ["main", "main", "main"], "lane must survive on every event, not just cache")
         XCTAssertTrue(events.allSatisfy { if case .unknown = $0 { return false }; return true })
+    }
+
+    // MARK: - Provider switch (`t: "switch"`)
+    //
+    // Bytes captured live driving a real `nexus chat --persistent -p mock -m
+    // mock-fast -o ndjson` process over a FIFO with `{"type":"switch",…}`
+    // control lines (no prior turn needed — `performSwitch` reads the CLI's
+    // own closure-held `providerId`/`model`, set at startup). Two real runs:
+    //   accepted: {"type":"switch","provider":"mock-flaky"}          (mock → mock-flaky, both usable)
+    //   refused:  {"type":"switch","provider":"groq"}                (needs a key this sandbox lacks)
+    // produced exactly the two lines below — nothing hand-typed.
+
+    func testAcceptedSwitchDecodesWithItsFixedPreservedList() throws {
+        let line = #"""
+        {"t":"switch","lane":"main","from":{"providerId":"mock","modelId":"mock-fast"},"to":{"providerId":"mock-flaky","modelId":"mock-fast"},"accepted":true,"blockers":[],"warnings":[],"preserved":["conversation transcript","assembled project context","system constraints","provider-neutral transfer state"],"adaptations":[],"reason":"explicit switch requested by client"}
+        """#
+        guard case .switch(let event)? = UiEventDecoder.decodeLine(line) else {
+            return XCTFail("expected a switch event")
+        }
+        XCTAssertEqual(event.lane, "main")
+        XCTAssertEqual(event.from, .init(providerId: "mock", modelId: "mock-fast"))
+        XCTAssertEqual(event.to, .init(providerId: "mock-flaky", modelId: "mock-fast"))
+        XCTAssertTrue(event.accepted)
+        XCTAssertTrue(event.blockers.isEmpty, "an accepted switch has nothing to block it")
+        XCTAssertEqual(
+            event.preserved,
+            ["conversation transcript", "assembled project context", "system constraints", "provider-neutral transfer state"],
+            "preserved is a FIXED list, not per-switch computed content"
+        )
+    }
+
+    func testRefusedSwitchDecodesWithBlockersAndEmptyPreserved() throws {
+        let line = #"""
+        {"t":"switch","lane":"main","from":{"providerId":"mock-flaky","modelId":"mock-fast"},"to":{"providerId":"groq","modelId":""},"accepted":false,"blockers":["\"groq\" is not available (no usable credential)"],"warnings":[],"preserved":[],"adaptations":[],"reason":"explicit switch requested by client"}
+        """#
+        guard case .switch(let event)? = UiEventDecoder.decodeLine(line) else {
+            return XCTFail("expected a switch event")
+        }
+        XCTAssertFalse(event.accepted)
+        XCTAssertEqual(event.blockers, [#""groq" is not available (no usable credential)"#])
+        // `to.modelId` is a real empty string on the wire when the target
+        // couldn't even be resolved — not a missing key, not null.
+        XCTAssertEqual(event.to.modelId, "")
+        XCTAssertTrue(event.preserved.isEmpty, "nothing survives a switch that never happened")
+        XCTAssertTrue(event.adaptations.isEmpty)
     }
 
     func testUnknownEventTypeSurvivesAsUnknown() throws {

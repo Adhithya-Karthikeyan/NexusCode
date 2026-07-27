@@ -328,6 +328,13 @@ private struct AgentCard: View {
     let row: AgentRow
     let now: Date
 
+    // Collapsed by default: a screen full of open step lists would defeat
+    // the "what is working right now" glance this view exists for. Local
+    // `@State` (not lifted to `AgentsView`) is deliberate — SwiftUI keys it to
+    // this card's identity in the `ForEach` above, so expanding one card
+    // during a live run never resets when a SIBLING card's row updates.
+    @State private var isExpanded = false
+
     private var elapsed: String? {
         guard let startedAt = row.startedAt else { return nil }
         let seconds = Int(max(0, now.timeIntervalSince(startedAt)))
@@ -374,6 +381,24 @@ private struct AgentCard: View {
                             .foregroundStyle(row.isRunning ? theme.color(\.accentDefault) : theme.color(\.textMuted))
                             .monospacedDigit()
                     }
+
+                    // Only offered when there is real data to show — an
+                    // origin with nothing behind it (an OMC agent outside any
+                    // tracked mission, a lane with zero tool calls so far)
+                    // gets no chevron at all, never one that opens onto
+                    // nothing.
+                    if row.hasExpandableDetail {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .bold))
+                                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(theme.color(\.textMuted))
+                        .accessibilityLabel(isExpanded ? "Collapse steps" : "Expand steps")
+                    }
                 }
 
                 if let detail = row.detail {
@@ -382,6 +407,12 @@ private struct AgentCard: View {
                         .foregroundStyle(theme.color(\.textSecondary))
                         .lineLimit(2)
                         // Align under the title, past the status dot's column.
+                        .padding(.leading, 8 + Space.sm)
+                }
+
+                if isExpanded {
+                    Divider().overlay(theme.color(\.chromeDivider))
+                    AgentCardDetail(row: row)
                         .padding(.leading, 8 + Space.sm)
                 }
             }
@@ -394,6 +425,84 @@ private struct AgentCard: View {
             color: row.isRunning ? theme.color(\.accentDefault).opacity(0.24) : .clear,
             radius: row.isRunning ? 12 : 0
         )
+    }
+}
+
+/// What "expand" actually reveals — branches on origin because the three
+/// kinds of concurrency don't share a step shape: an OODA role run has
+/// PHASES (`AgentRow.steps`), a provider lane has TOOL CALLS
+/// (`AgentRow.toolCalls`), an OMC subagent has its own slice of a mission
+/// TIMELINE (`AgentRow.timeline`). Every branch renders real data the row
+/// already carries — nothing here is synthesized for the occasion, and an
+/// origin with none of it never gets this far (`AgentRow.hasExpandableDetail`
+/// gates the chevron itself).
+private struct AgentCardDetail: View {
+    let row: AgentRow
+
+    var body: some View {
+        switch row.origin {
+        case .roleRun:
+            StepRail(steps: row.steps)
+        case .lane:
+            VStack(alignment: .leading, spacing: Space.xs) {
+                ForEach(row.toolCalls) { call in
+                    ToolRow(tool: call)
+                }
+            }
+        case .omc:
+            if !row.timeline.isEmpty {
+                TimelineRail(events: row.timeline)
+            }
+        }
+    }
+}
+
+/// The OODA step history, newest first — same rail visual as `TimelineRail`
+/// (dot, connector, two-line label) so the three expansion kinds read as one
+/// design language rather than three unrelated widgets, adapted to what a
+/// step actually carries: phase + step number, then its narration.
+private struct StepRail: View {
+    @Environment(\.nexusTheme) private var theme
+    let steps: [AgentStep]
+
+    private var newestFirst: [AgentStep] { steps.reversed() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(newestFirst.enumerated()), id: \.element.id) { index, step in
+                HStack(alignment: .top, spacing: Space.sm) {
+                    VStack(spacing: 0) {
+                        Circle()
+                            .fill(index == 0 ? theme.color(\.accentDefault) : theme.color(\.textMuted).opacity(0.5))
+                            .frame(width: 6, height: 6)
+                            .padding(.top, 4)
+                        if index < newestFirst.count - 1 {
+                            Rectangle()
+                                .fill(theme.color(\.chromeDivider))
+                                .frame(width: 1)
+                                .frame(maxHeight: .infinity)
+                        }
+                    }
+                    .frame(width: 6)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: Space.xs) {
+                            Text(step.phase)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(theme.color(\.textSecondary))
+                            Text("step \(step.step)")
+                                .font(Kind.micro)
+                                .foregroundStyle(theme.color(\.textMuted).opacity(0.7))
+                        }
+                        Text(step.narration)
+                            .font(Kind.caption)
+                            .foregroundStyle(theme.color(\.textMuted))
+                            .lineLimit(2)
+                    }
+                    .padding(.bottom, Space.sm)
+                }
+            }
+        }
     }
 }
 

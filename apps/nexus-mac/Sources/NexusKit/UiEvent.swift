@@ -326,6 +326,7 @@ public enum UiEvent: Sendable, Hashable {
         case .error: return "error"
         case .done: return "done"
         case .cache: return "cache"
+        case .switch: return "switch"
         case .unknown(let type, _): return type
         }
     }
@@ -355,6 +356,7 @@ extension UiEvent: Decodable {
         case "error": self = .error(try single.decode(RunError.self))
         case "done": self = .done(try single.decode(Done.self))
         case "cache": self = .cache(try single.decode(Cache.self))
+        case "switch": self = .switch(try single.decode(Switch.self))
 
         // `args` / `result` are `unknown` on the wire, so these two decode
         // through JSONValue rather than a generated struct.

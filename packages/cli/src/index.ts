@@ -172,6 +172,9 @@ const FLAG_SPEC: FlagSpec = {
     persistent: [],
     /** Explicitly allow safe text-only continuation after a routed partial failure. */
     "recover-partial": [],
+    // `plan --no-persist`: opt out of the default write into the durable task
+    // store (see PlanCommand usage below / GAPS G3).
+    "no-persist": [],
   },
 };
 
@@ -183,10 +186,10 @@ Commands:
   tui                   launch the rich interactive terminal UI (default on a TTY)
   ask <prompt>          one-shot completion (aliases: run, q); reads stdin if piped
   agent <prompt>        agentic run: native tool loop, or OODA framework with --role
-  plan <objective>      turn an objective into a task plan (planner role)
+  plan <objective>      turn an objective into a task plan, persisted by default (planner role)
   roles                 list the agent roles --role accepts (-o json for clients)
   task list|add|done|…  manage the durable task plan
-  jobs list|run|history background jobs, command history, PTY seam
+  jobs list|run|logs|kill|history  background jobs (--bg to detach), command history, PTY seam
   tools list|run         list/run the tool framework's tools (web/db/cloud/… groups)
   code <task>           drive a subprocess coding CLI (--agent claude-code | codex)
   chat [--resume <id>]  headless line REPL (pipe lines in; works on TERM=dumb)
@@ -260,6 +263,10 @@ Options:
                           silently — when the resolved provider can't honor it.
       --parent <id>       task add: parent task id (subtask)
       --deps <a,b>        task add: dependency task ids (comma-separated)
+      --no-persist        plan: skip writing the drafted plan into the durable
+                          task store (default: persisted; see 'nexus task list')
+      --background, --bg  jobs run: launch detached, tracked across invocations
+                          (list/logs/kill by id); index: reindex in the background
       --yolo              tool loop: full-access (no approval prompts)
       --approve           tool loop: workspace-write, auto-approve exec/network
       --read-only         tool loop: read-only (default)
@@ -334,7 +341,12 @@ class PlanCommand extends HandlerCommand {
   static override paths = [["plan"]];
   static override usage = Command.Usage({
     description: "Turn an objective into a verifiable, dependency-ordered task plan (planner role).",
-    examples: [["Plan a feature", "nexus plan -p mock -m mock-tools 'build a login page'"]],
+    details:
+      "The drafted plan is written into the SAME durable task store `nexus task list` reads (and the app's Tasks tab shows) — ids, parent/subtask structure, and dependency edges preserved, so a plan does not disappear when the process exits. Pass --no-persist to only preview the plan (nothing written). The OODA run itself always plans against its own private in-memory store; persistence happens once, at the end, from the settled result.",
+    examples: [
+      ["Plan a feature (persisted)", "nexus plan -p mock -m mock-tools 'build a login page'"],
+      ["Preview only, don't persist", "nexus plan --no-persist -p mock -m mock-tools 'build a login page'"],
+    ],
   });
   protected handler(): Handler {
     return cmdPlan;
@@ -375,10 +387,15 @@ class TaskCommand extends HandlerCommand {
 class JobsCommand extends HandlerCommand {
   static override paths = [["jobs"]];
   static override usage = Command.Usage({
-    description: "Terminal integration: list | run | history | pty (background jobs + command history).",
+    description: "Terminal integration: list | run | logs | kill | history | pty (background jobs + command history).",
+    details:
+      "Plain `jobs run` is FOREGROUND: it streams the command's output and waits for it to exit within this one invocation. `jobs run --background` (alias --bg) detaches the command instead — it outlives this invocation — and records it in a durable registry under the data dir, so a LATER, separate invocation can `jobs list` it, `jobs logs <id>` its captured output, or `jobs kill <id>` it. Liveness is re-probed against the real OS process table on every read (a dead/reassigned pid is reported as such, never left showing running). `jobs kill` re-verifies the recorded command and OS-reported start time against the live process immediately before signaling, and refuses outright on any mismatch — it will not signal a pid that has been reused for something else.",
     examples: [
       ["List background jobs", "nexus jobs"],
-      ["Run a command as a job", "nexus jobs run -- echo hello"],
+      ["Run a command as a job (foreground)", "nexus jobs run -- echo hello"],
+      ["Run detached, tracked across invocations", "nexus jobs run --bg -- npm run build"],
+      ["Show a background job's captured output", "nexus jobs logs <id>"],
+      ["Stop a background job", "nexus jobs kill <id>"],
       ["Recent command history", "nexus jobs history"],
     ],
   });

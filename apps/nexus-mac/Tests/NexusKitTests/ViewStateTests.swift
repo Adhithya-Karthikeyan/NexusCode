@@ -211,6 +211,127 @@ final class ViewStateTests: XCTestCase {
         XCTAssertEqual(state.lanes["main"]?.live?.cacheHit, false)
     }
 
+    // MARK: - Provider switch (`t: "switch"`)
+    //
+    // `nexus chat --persistent`'s in-process provider/model switch. Fires
+    // exactly once per request, accepted or refused, never a silent no-op —
+    // both outcomes must land in `state.switches`, and only an ACCEPTED one
+    // may change what `state.session` reports as the active provider/model.
+
+    private func switchTarget(_ providerId: String, _ modelId: String) -> UiEvent.Switch.Target {
+        .init(providerId: providerId, modelId: modelId)
+    }
+
+    func testAcceptedSwitchUpdatesTheActiveSessionProviderAndModel() throws {
+        var state = ViewState()
+        state.reduce(.session(.init(id: "run1", sessionId: "s1", provider: "mock", model: "mock-fast", ts: 0)), ts: 0)
+        state.reduce(
+            .switch(.init(
+                lane: "main",
+                from: switchTarget("mock", "mock-fast"),
+                to: switchTarget("mock-flaky", "mock-fast"),
+                accepted: true,
+                blockers: [],
+                warnings: [],
+                preserved: ["conversation transcript", "assembled project context", "system constraints", "provider-neutral transfer state"],
+                adaptations: [],
+                reason: "explicit switch requested by client"
+            )),
+            ts: 1
+        )
+
+        // The status bar's "model" readout reads `session.provider`/`.model`
+        // directly — a stale value here after a REAL in-process switch would
+        // be exactly the kind of confident-but-wrong state this app has
+        // spent tonight eliminating.
+        XCTAssertEqual(state.session?.provider, "mock-flaky")
+        XCTAssertEqual(state.session?.model, "mock-fast")
+        // Identity is unchanged — this is the SAME session, just a new target.
+        XCTAssertEqual(state.session?.id, "run1")
+
+        XCTAssertEqual(state.switches.count, 1)
+        let receipt = try XCTUnwrap(state.switches.first)
+        XCTAssertTrue(receipt.accepted)
+        XCTAssertEqual(receipt.preserved.count, 4)
+        XCTAssertEqual(state.providerHealth["mock-flaky"]?.status, .ok)
+    }
+
+    func testRefusedSwitchIsRecordedButNeverChangesTheActiveSession() throws {
+        var state = ViewState()
+        state.reduce(.session(.init(id: "run1", sessionId: "s1", provider: "mock-flaky", model: "mock-fast", ts: 0)), ts: 0)
+        state.reduce(
+            .switch(.init(
+                lane: "main",
+                from: switchTarget("mock-flaky", "mock-fast"),
+                to: switchTarget("groq", ""),
+                accepted: false,
+                blockers: ["\"groq\" is not available (no usable credential)"],
+                warnings: [],
+                preserved: [],
+                adaptations: [],
+                reason: "explicit switch requested by client"
+            )),
+            ts: 1
+        )
+
+        // Refused means refused: the session must read EXACTLY as it did
+        // before the request, not partially or optimistically updated.
+        XCTAssertEqual(state.session?.provider, "mock-flaky")
+        XCTAssertEqual(state.session?.model, "mock-fast")
+        XCTAssertNil(state.providerHealth["groq"], "a refused switch never dispatched to groq, so nothing about it is known")
+
+        // But the request itself is NOT dropped — never a silent no-op.
+        XCTAssertEqual(state.switches.count, 1)
+        let receipt = try XCTUnwrap(state.switches.first)
+        XCTAssertFalse(receipt.accepted)
+        XCTAssertEqual(receipt.blockers, ["\"groq\" is not available (no usable credential)"])
+        XCTAssertTrue(receipt.preserved.isEmpty, "nothing survives a switch that never happened")
+    }
+
+    func testEveryPreviousProviderIsUntouchedByAVoluntarySwitch() {
+        // Moving AWAY from a provider by explicit choice says nothing bad
+        // about it — unlike `.failover`, which is error-driven and DOES mark
+        // the departed provider `.degraded`. A switch must not borrow that
+        // treatment for an unrelated, non-error transition.
+        var state = ViewState()
+        // The `.session` event itself already marks "mock" `.ok` — capture
+        // that BEFORE the switch so the assertion below is about what the
+        // SWITCH does, not a false "must be absent" that the session event
+        // alone would already contradict.
+        state.reduce(.session(.init(id: "run1", sessionId: "s1", provider: "mock", model: "mock-fast", ts: 0)), ts: 0)
+        let beforeSwitch = state.providerHealth["mock"]
+        state.reduce(
+            .switch(.init(
+                lane: "main", from: switchTarget("mock", "mock-fast"), to: switchTarget("mock-flaky", "mock-fast"),
+                accepted: true, blockers: [], warnings: [],
+                preserved: ["conversation transcript", "assembled project context", "system constraints", "provider-neutral transfer state"],
+                adaptations: [], reason: "explicit switch requested by client"
+            )),
+            ts: 1
+        )
+        XCTAssertEqual(
+            state.providerHealth["mock"], beforeSwitch,
+            "the FROM provider's health entry must be untouched by a voluntary switch, not marked degraded"
+        )
+    }
+
+    func testAnAcceptedSwitchWithNoPriorSessionEventDoesNotInventOne() {
+        // Defensive: a switch is a control line, not a session announcement.
+        // If somehow no `session` event has landed yet, folding a switch must
+        // not synthesize a fake one out of thin air (there's no run id to give it).
+        var state = ViewState()
+        state.reduce(
+            .switch(.init(
+                lane: "main", from: switchTarget("mock", "mock-fast"), to: switchTarget("mock-flaky", "mock-fast"),
+                accepted: true, blockers: [], warnings: [], preserved: [], adaptations: [],
+                reason: "explicit switch requested by client"
+            )),
+            ts: 0
+        )
+        XCTAssertNil(state.session)
+        XCTAssertEqual(state.switches.count, 1, "the switch itself is still recorded")
+    }
+
     // MARK: - Multi-agent lanes
 
     func testConcurrentLanesStayIndependent() throws {
