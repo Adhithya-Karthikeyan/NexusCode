@@ -59,6 +59,52 @@ interface ResolvedChunk {
   rawTokens: number;
 }
 
+/**
+ * Bound for a single source's {@link ContextSource.collect} when the caller does
+ * not override it via `AssembleOptions.sourceTimeoutMs`. A source's `collect` is
+ * caller-supplied, unaudited code — most bundled sources are pure/fast, but
+ * `RepoMapSource` (and anything else backed by `@nexuscode/fileintel`'s
+ * `walkProject`) recurses a real directory tree with NO bound on how many
+ * directories it visits (only on the FILES/bytes it returns), one `readdir`
+ * awaited at a time. Given a project root that is actually someone's home
+ * directory (the CLI's default `cwd` when invoked from a shell that starts
+ * there) rather than a real project, that walk can spend anywhere from single-
+ * digit seconds to several CPU-bound minutes descending caches, app-container
+ * trees, and cloud-synced folders before it ever returns — and per source
+ * assembly step 1 below has zero timeout of its own, so the ENTIRE run used to
+ * block on it, exactly as unboundedly, with no output on either stream. This
+ * mirrors the fix already applied to `@nexuscode/mcp`'s `connectTransport`
+ * (`DEFAULT_CONNECT_TIMEOUT_MS`): race the whole call against a bound, and
+ * NEVER let a single misbehaving source cost the caller more than this.
+ */
+export const DEFAULT_SOURCE_TIMEOUT_MS = 10_000;
+
+/** Race `work` against `ms`, resolving to `fallback` (never rejecting) on timeout. */
+function withTimeout<T>(work: Promise<T>, ms: number, fallback: T): Promise<{ value: T; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ value: fallback, timedOut: true });
+    }, ms);
+    work.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ value, timedOut: false });
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ value: fallback, timedOut: false });
+      },
+    );
+  });
+}
+
 export class ContextEngine {
   async assemble(opts: AssembleOptions): Promise<AssembleResult> {
     const estimate: TokenEstimator = opts.estimate ?? defaultEstimator;
@@ -67,6 +113,7 @@ export class ContextEngine {
     const cwd = opts.cwd ?? process.cwd();
     const priorityWeight = opts.priorityWeight ?? 1;
     const maxBreakpoints = opts.maxBreakpoints ?? 4;
+    const sourceTimeoutMs = opts.sourceTimeoutMs ?? DEFAULT_SOURCE_TIMEOUT_MS;
     const budget = opts.budgetTokens;
 
     const collectCtx = {
@@ -77,16 +124,29 @@ export class ContextEngine {
       ...(opts.signal ? { signal: opts.signal } : {}),
     };
 
-    // 1. Collect from every source in parallel. A failing source contributes
-    //    nothing but never sinks the whole assembly.
+    // 1. Collect from every source in parallel, each individually bounded by
+    //    `sourceTimeoutMs` (see DEFAULT_SOURCE_TIMEOUT_MS above) — a stalled or
+    //    failing source contributes nothing but never sinks the whole assembly,
+    //    and never costs the caller more than its own timeout. A timeout is
+    //    reported via `timedOutSources` (never silent) so a caller that cares
+    //    can surface it; the run itself always proceeds.
+    const timedOutSources: string[] = [];
     const collected = await Promise.all(
       opts.sources.map(async (src) => {
-        try {
-          const chunks = await src.collect(collectCtx);
-          return { src, chunks };
-        } catch {
-          return { src, chunks: [] as ContextChunk[] };
+        const { value: chunks, timedOut } = await withTimeout(
+          src.collect(collectCtx).catch(() => [] as ContextChunk[]),
+          sourceTimeoutMs,
+          [] as ContextChunk[],
+        );
+        if (timedOut) {
+          timedOutSources.push(src.id);
+          process.stderr.write(
+            `context: source "${src.id}" timed out after ${sourceTimeoutMs}ms — dropped ` +
+              `(contributed no context this turn); pass a narrower cwd or raise sourceTimeoutMs ` +
+              `if "${src.id}" legitimately needs longer\n`,
+          );
         }
+        return { src, chunks };
       }),
     );
 
@@ -161,6 +221,7 @@ export class ContextEngine {
       perSourceCollected,
       estimate,
       maxBreakpoints,
+      timedOutSources,
     });
 
     const result: AssembleResult = { system, messages, report };
@@ -388,6 +449,7 @@ interface BuildReportArgs {
   perSourceCollected: Map<string, number>;
   estimate: TokenEstimator;
   maxBreakpoints: number;
+  timedOutSources: string[];
 }
 
 function buildReport(args: BuildReportArgs): ContextReport {
@@ -435,6 +497,7 @@ function buildReport(args: BuildReportArgs): ContextReport {
   for (const d of args.dropped) {
     perSourceDropped.set(d.sourceId, (perSourceDropped.get(d.sourceId) ?? 0) + 1);
   }
+  const timedOutSet = new Set(args.timedOutSources);
   const sources: SourceReport[] = args.sources.map((s) => {
     const inc = perSourceIncluded.get(s.id) ?? { count: 0, tokens: 0 };
     return {
@@ -445,6 +508,7 @@ function buildReport(args: BuildReportArgs): ContextReport {
       included: inc.count,
       dropped: perSourceDropped.get(s.id) ?? 0,
       tokens: inc.tokens,
+      ...(timedOutSet.has(s.id) ? { timedOut: true } : {}),
     };
   });
 
@@ -478,5 +542,6 @@ function buildReport(args: BuildReportArgs): ContextReport {
     lanes,
     sources,
     breakpoints,
+    timedOutSources: args.timedOutSources,
   };
 }

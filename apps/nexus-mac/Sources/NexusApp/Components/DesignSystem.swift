@@ -502,6 +502,39 @@ extension HeroEmptyState where Actions == EmptyView {
     }
 }
 
+/// The standard page shell: a header that never scrolls away, and a body
+/// that fills every bit of the remaining height.
+///
+/// Every list-style screen in this app used to stack its header and content
+/// inside ONE `ScrollView`. A `ScrollView` always top-aligns its content, so
+/// a short empty state or a two-item list renders correctly at the top and
+/// then leaves a dead void for the rest of the window — that one missing
+/// rule about vertical composition is why every screen with little content
+/// read as unfinished. `PageScaffold` fixes it at the root instead of
+/// per-view: `content` decides for itself whether it needs to scroll (return
+/// a `ScrollView` when there is real data) or should fill and centre (return
+/// a `HeroEmptyState`, or a loading/error state, unwrapped) — either way the
+/// outer `.frame(maxHeight: .infinity)` here is what makes that choice
+/// actually take up the window instead of floating in its top third.
+struct PageScaffold<Header: View, Content: View>: View {
+    @ViewBuilder var header: Header
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+extension PageScaffold where Header == EmptyView {
+    init(@ViewBuilder content: () -> Content) {
+        self.init(header: { EmptyView() }, content: content)
+    }
+}
+
 /// A keyboard-shortcut hint.
 struct KeyHint: View {
     @Environment(\.nexusTheme) private var theme

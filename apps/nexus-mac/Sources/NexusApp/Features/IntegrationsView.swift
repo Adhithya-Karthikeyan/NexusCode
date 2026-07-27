@@ -22,34 +22,42 @@ struct IntegrationsView: View {
     @State private var hooksState: HooksLoadState = .loading
 
     var body: some View {
-        ScrollView {
-            // Every section below owns its own padding — nothing here stacks a
-            // flexible frame under a trailing `.padding()`.
-            VStack(alignment: .leading, spacing: Space.lg) {
-                headerRow
-
-                if let controller {
-                    if controller.isLoading && controller.mcpServers.isEmpty && controller.tools.isEmpty {
-                        loadingState
-                    } else {
-                        if let error = controller.error {
-                            ErrorBanner(message: error)
-                        }
-                        mcpSection(controller)
-                        toolsSection(controller)
-                        hooksSection
-                    }
+        // Header pinned, body fills-or-scrolls — see `PageScaffold`'s doc
+        // comment. MCP servers / tools / hooks is real, often-long content
+        // once populated, so that branch keeps its own `ScrollView`; loading
+        // and "no executable" are single hero moments that now fill and
+        // centre the space below the header instead of pinning to its top.
+        PageScaffold {
+            headerRow
+                .padding(.horizontal, Space.xl)
+                .padding(.top, Space.xl)
+                .padding(.bottom, Space.lg)
+        } content: {
+            if let controller {
+                if controller.isLoading && controller.mcpServers.isEmpty && controller.tools.isEmpty {
+                    loadingState
                 } else {
-                    HeroEmptyState(
-                        icon: "terminal",
-                        title: "No nexus executable",
-                        message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
-                    )
-                    .frame(minHeight: 320)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: Space.lg) {
+                            if let error = controller.error {
+                                ErrorBanner(message: error)
+                            }
+                            mcpSection(controller)
+                            toolsSection(controller)
+                            hooksSection
+                        }
+                        .padding(.horizontal, Space.xl)
+                        .padding(.bottom, Space.xl)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
+            } else {
+                HeroEmptyState(
+                    icon: "terminal",
+                    title: "No nexus executable",
+                    message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                )
             }
-            .padding(Space.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(theme.color(\.surfaceBase))
         .task(id: workspace.projectDirectory) { await attach() }
@@ -79,7 +87,7 @@ struct IntegrationsView: View {
                 .font(Kind.caption)
                 .foregroundStyle(theme.color(\.textMuted))
         }
-        .frame(maxWidth: .infinity, minHeight: 220)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - MCP

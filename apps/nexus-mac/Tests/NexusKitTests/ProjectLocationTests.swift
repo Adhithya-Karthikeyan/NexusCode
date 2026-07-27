@@ -29,12 +29,14 @@ final class ProjectLocationTests: XCTestCase {
 
     func testRejectsRootBecauseAFinderLaunchReportsIt() {
         // Launched from Finder the working directory is "/", which can never be
-        // a project — opening there makes the app look broken.
-        XCTAssertEqual(resolve(remembered: nil, cwd: "/"), "/Users/x")
+        // a project — opening there makes the app look broken. The fallback is
+        // a dedicated workspace folder, not home — see
+        // `testRejectsTheHomeDirectoryItselfAsAWorkingDirectory` for why.
+        XCTAssertEqual(resolve(remembered: nil, cwd: "/"), "/Users/x/Library/Application Support/NexusCode/Workspace")
     }
 
     func testRejectsAnEmptyWorkingDirectory() {
-        XCTAssertEqual(resolve(remembered: nil, cwd: ""), "/Users/x")
+        XCTAssertEqual(resolve(remembered: nil, cwd: ""), "/Users/x/Library/Application Support/NexusCode/Workspace")
     }
 
     func testIgnoresARememberedDirectoryThatNoLongerExists() {
@@ -46,10 +48,24 @@ final class ProjectLocationTests: XCTestCase {
         XCTAssertEqual(resolve(remembered: ""), "/Users/x/project")
     }
 
-    func testFallsAllTheWayToHomeWhenNothingElseIsUsable() {
+    func testFallsBackToADedicatedWorkspaceRatherThanHomeWhenNothingElseIsUsable() {
+        // The home directory itself must never be the answer here — see
+        // `testRejectsTheHomeDirectoryItselfAsAWorkingDirectory` for why.
+        let result = resolve(remembered: "/gone", cwd: "/", existing: ["/Users/x"])
+        XCTAssertNotEqual(result, "/Users/x")
+        XCTAssertEqual(result, "/Users/x/Library/Application Support/NexusCode/Workspace")
+    }
+
+    func testRejectsTheHomeDirectoryItselfAsAWorkingDirectory() {
+        // Launched from a Terminal sitting at `~` (or `swift run` from a login
+        // shell), the working directory IS the home directory — non-empty and
+        // not "/", so it used to pass `isPlausibleProject` and become the
+        // project root. That is exactly the bug: a fresh window silently
+        // file-indexing the user's entire home folder and tripping a macOS
+        // "access your Documents folder" prompt on launch.
         XCTAssertEqual(
-            resolve(remembered: "/gone", cwd: "/", existing: ["/Users/x"]),
-            "/Users/x"
+            resolve(remembered: nil, cwd: "/Users/x", home: "/Users/x"),
+            "/Users/x/Library/Application Support/NexusCode/Workspace"
         )
     }
 

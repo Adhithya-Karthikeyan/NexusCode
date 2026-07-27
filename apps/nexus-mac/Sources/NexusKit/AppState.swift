@@ -124,7 +124,23 @@ public enum RunMode: String, CaseIterable, Identifiable, Sendable {
 public final class ConversationController {
     public private(set) var view = ViewState()
     public private(set) var isRunning = false
+    /// Raw stderr lines, in arrival order. Kept unclassified here — see
+    /// `presentedDiagnostics` for what the UI should actually do with them —
+    /// so nothing about how a line reads is lost before it can be triaged.
     public private(set) var diagnostics: [String] = []
+
+    /// `diagnostics`, classified for display: hidden lines dropped, the rest
+    /// paired with how calm or urgent they should read. Computed rather than
+    /// stored so `DiagnosticClassifier` is the only place that decision is
+    /// made — a second, separately-updated copy here is how the two would
+    /// eventually drift.
+    public var presentedDiagnostics: [DiagnosticPresentation] {
+        diagnostics.compactMap { line in
+            let presentation = DiagnosticClassifier.classify(line)
+            if case .hidden = presentation { return nil }
+            return presentation
+        }
+    }
 
     /// Provider/model for single-lane modes.
     public var provider: String?

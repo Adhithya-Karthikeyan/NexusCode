@@ -68,8 +68,22 @@ private struct AuthContent: View {
     @State private var savingKey: Set<String> = []
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Space.lg) {
+        // The error banner is a top-pinned caveat, shown across every state
+        // below it (loading, empty, or the real provider list) rather than
+        // living inside whichever branch happens to render — a failed
+        // refresh must stay visible even while the loading spinner or the
+        // empty state is what's on screen. The state below it fills the rest
+        // of the window instead of top-aligning inside a `ScrollView`, which
+        // is what let "No providers found" float with a dead void beneath it.
+        VStack(alignment: .leading, spacing: 0) {
+            if let error = controller.error {
+                ErrorBanner(message: error)
+                    .padding(.horizontal, Space.xl)
+                    .padding(.top, Space.xl)
+                    .padding(.bottom, Space.sm)
+            }
+
+            Group {
                 if controller.isLoading && controller.providers.isEmpty {
                     HStack(spacing: Space.sm) {
                         ProgressView().controlSize(.small)
@@ -77,37 +91,37 @@ private struct AuthContent: View {
                             .font(Kind.body)
                             .foregroundStyle(theme.color(\.textMuted))
                     }
-                    .frame(maxWidth: .infinity, minHeight: 300)
                 } else if controller.providers.isEmpty {
                     HeroEmptyState(
                         icon: "person.badge.key",
                         title: "No providers found",
                         message: "`nexus auth status` returned nothing to show."
                     )
-                    .frame(minHeight: 380)
                 } else {
-                    if !controller.signedIn.isEmpty {
-                        providerSection(
-                            title: "Signed in",
-                            subtitle: "\(controller.signedIn.count) provider\(controller.signedIn.count == 1 ? "" : "s") ready to use",
-                            rows: controller.signedIn
-                        )
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: Space.lg) {
+                            if !controller.signedIn.isEmpty {
+                                providerSection(
+                                    title: "Signed in",
+                                    subtitle: "\(controller.signedIn.count) provider\(controller.signedIn.count == 1 ? "" : "s") ready to use",
+                                    rows: controller.signedIn
+                                )
+                            }
+                            if !controller.available.isEmpty {
+                                providerSection(
+                                    title: "Available",
+                                    subtitle: "Not signed in yet",
+                                    rows: controller.available
+                                )
+                            }
+                        }
+                        .padding(Space.xl)
+                        .padding(.top, controller.error == nil ? 0 : Space.sm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    if !controller.available.isEmpty {
-                        providerSection(
-                            title: "Available",
-                            subtitle: "Not signed in yet",
-                            rows: controller.available
-                        )
-                    }
-                }
-
-                if let error = controller.error {
-                    ErrorBanner(message: error)
                 }
             }
-            .padding(Space.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.color(\.surfaceBase))
         .task { await controller.refresh() }

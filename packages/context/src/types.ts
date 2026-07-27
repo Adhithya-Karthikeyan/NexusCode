@@ -125,6 +125,16 @@ export interface AssembleOptions {
   priorityWeight?: number;
   /** Cooperative cancellation forwarded to sources. */
   signal?: AbortSignal;
+  /**
+   * Per-source bound on {@link ContextSource.collect} (default
+   * {@link DEFAULT_SOURCE_TIMEOUT_MS}). A source that has not resolved within
+   * this many milliseconds contributes nothing to this assembly — logged to
+   * stderr and listed in `ContextReport.timedOutSources` — rather than blocking
+   * the whole run. See the doc comment on `DEFAULT_SOURCE_TIMEOUT_MS` in
+   * `engine.ts` for why this exists (an unbounded directory walk over a large
+   * `cwd`, most notably).
+   */
+  sourceTimeoutMs?: number;
 }
 
 /** Why a chunk did not make the final assembly. */
@@ -176,6 +186,8 @@ export interface SourceReport {
   included: number;
   dropped: number;
   tokens: number;
+  /** `true` when this source's `collect` exceeded `sourceTimeoutMs` and was dropped. */
+  timedOut?: boolean;
 }
 
 /** A cache breakpoint offset at the end of a static lane. */
@@ -209,6 +221,8 @@ export interface ContextReport {
   lanes: LaneReport[];
   sources: SourceReport[];
   breakpoints: Breakpoint[];
+  /** Source ids dropped for exceeding `sourceTimeoutMs` this assembly (never silent). */
+  timedOutSources: string[];
 }
 
 /** What {@link ContextEngine.assemble} returns. */

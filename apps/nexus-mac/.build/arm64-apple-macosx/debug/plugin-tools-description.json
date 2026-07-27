@@ -266,6 +266,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/DiagnosticClassifier.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift"
         },
         {
@@ -342,6 +346,7 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/AppThemes.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Approvals.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Auth.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Themes.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Integrations.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/JSONValue.swift.o",
@@ -431,6 +436,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Themes.swift.o"
         },
         {
@@ -501,6 +510,7 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/AppThemes.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Approvals.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Auth.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/DiagnosticClassifier.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Integrations.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/JSONValue.swift",
@@ -540,6 +550,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AuthTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/DiagnosticClassifierTests.swift"
         },
         {
           "kind" : "file",
@@ -614,6 +628,7 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/AppThemeTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/ApprovalsTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/AuthTests.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/DiagnosticClassifierTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/IntegrationsTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/MarkdownTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/NexusClientIntegrationTests.swift.o",
@@ -695,6 +710,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/DiagnosticClassifierTests.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/IntegrationsTests.swift.o"
         },
         {
@@ -752,6 +771,7 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AppThemeTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ApprovalsTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AuthTests.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/DiagnosticClassifierTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/IntegrationsTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/MarkdownTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusClientIntegrationTests.swift",
@@ -951,6 +971,7 @@
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/AppThemes.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Approvals.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Auth.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/DiagnosticClassifier.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Integrations.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/JSONValue.swift",
@@ -1029,6 +1050,7 @@
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AppThemeTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ApprovalsTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AuthTests.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/DiagnosticClassifierTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/IntegrationsTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/MarkdownTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusClientIntegrationTests.swift",
@@ -1339,6 +1361,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Integrations.swift.o"
         },
         {
@@ -1429,6 +1455,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/DiagnosticClassifier.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift"
         },
         {
@@ -1512,6 +1542,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AuthTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/DiagnosticClassifierTests.swift"
         },
         {
           "kind" : "file",
@@ -1607,6 +1641,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Integrations.swift.o"
         },
         {
@@ -1680,6 +1718,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/AuthTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/DiagnosticClassifierTests.swift.o"
         },
         {
           "kind" : "file",

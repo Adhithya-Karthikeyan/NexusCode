@@ -29,43 +29,53 @@ struct GitView: View {
     @State private var repoState: GitRepoState?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Space.lg) {
-                headerRow
-
-                if let client {
-                    if let repoState {
-                        if !repoState.isRepo {
-                            HeroEmptyState(
-                                icon: "exclamationmark.triangle",
-                                title: "Not a git repository",
-                                message: "\(workspace.projectDirectory.path) isn't a git checkout, so there's nothing to commit, review, explain, or describe."
-                            )
-                            .frame(minHeight: 320)
-                        } else {
-                            repoStatusCard(repoState)
-                            ExplainCard(client: client, cwd: workspace.projectDirectory, repoState: repoState)
-                            ReviewCard(client: client, cwd: workspace.projectDirectory, repoState: repoState)
-                            CommitCard(
-                                client: client, cwd: workspace.projectDirectory, repoState: repoState,
-                                onCommitted: { await refreshRepoState() }
-                            )
-                            PrCard(client: client, cwd: workspace.projectDirectory, repoState: repoState)
-                        }
+        // Header pinned, body fills-or-scrolls — see `PageScaffold`'s doc
+        // comment. The populated case (status card + four action cards) is
+        // real, often-tall content, so it keeps its own `ScrollView`; the
+        // "not a repo" / "no executable" / loading states are single hero
+        // moments that now fill and centre in the space below the header
+        // instead of sitting pinned to the top of a mostly-black window.
+        PageScaffold {
+            headerRow
+                .padding(.horizontal, Space.xl)
+                .padding(.top, Space.xl)
+                .padding(.bottom, Space.lg)
+        } content: {
+            if let client {
+                if let repoState {
+                    if !repoState.isRepo {
+                        HeroEmptyState(
+                            icon: "exclamationmark.triangle",
+                            title: "Not a git repository",
+                            message: "\(workspace.projectDirectory.path) isn't a git checkout, so there's nothing to commit, review, explain, or describe."
+                        )
                     } else {
-                        loadingState
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: Space.lg) {
+                                repoStatusCard(repoState)
+                                ExplainCard(client: client, cwd: workspace.projectDirectory, repoState: repoState)
+                                ReviewCard(client: client, cwd: workspace.projectDirectory, repoState: repoState)
+                                CommitCard(
+                                    client: client, cwd: workspace.projectDirectory, repoState: repoState,
+                                    onCommitted: { await refreshRepoState() }
+                                )
+                                PrCard(client: client, cwd: workspace.projectDirectory, repoState: repoState)
+                            }
+                            .padding(.horizontal, Space.xl)
+                            .padding(.bottom, Space.xl)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 } else {
-                    HeroEmptyState(
-                        icon: "terminal",
-                        title: "No nexus executable",
-                        message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
-                    )
-                    .frame(minHeight: 320)
+                    loadingState
                 }
+            } else {
+                HeroEmptyState(
+                    icon: "terminal",
+                    title: "No nexus executable",
+                    message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                )
             }
-            .padding(Space.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(theme.color(\.surfaceBase))
         .task(id: workspace.projectDirectory) { await attach() }
@@ -95,7 +105,7 @@ struct GitView: View {
                 .font(Kind.caption)
                 .foregroundStyle(theme.color(\.textMuted))
         }
-        .frame(maxWidth: .infinity, minHeight: 220)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func repoStatusCard(_ state: GitRepoState) -> some View {

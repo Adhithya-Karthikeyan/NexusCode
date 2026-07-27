@@ -264,6 +264,32 @@ describe("ContextEngine — ContextReport correctness", () => {
     expect(res.system).toContain("ok");
     expect(res.report.sources.find((s) => s.id === "bad")!.collected).toBe(0);
   });
+
+  it("bounds a source that never resolves — the whole run must never hang on it", async () => {
+    // Regression test for the real-world CLI hang: `RepoMapSource` walking an
+    // unbounded directory tree (e.g. a user's home directory) had no timeout
+    // anywhere above it, so a slow/stuck `collect()` blocked the entire run
+    // forever. A source whose promise never settles is the sharpest version of
+    // that failure mode; `sourceTimeoutMs` below (well under vitest's default
+    // test timeout) proves `assemble()` still returns instead of hanging.
+    const stuck: ContextSource = {
+      id: "stuck",
+      kind: "static",
+      priority: 50,
+      collect: () => new Promise<ContextChunk[]>(() => {}), // never resolves
+    };
+    const res = await engine.assemble({
+      budgetTokens: 1000,
+      userMessage: "q",
+      now: 1,
+      sourceTimeoutMs: 25,
+      sources: [stuck, source("sys", "static", 100, [{ id: "sys", lane: "system", text: "ok" }])],
+    });
+    expect(res.system).toContain("ok");
+    expect(res.report.timedOutSources).toEqual(["stuck"]);
+    expect(res.report.sources.find((s) => s.id === "stuck")!.timedOut).toBe(true);
+    expect(res.report.sources.find((s) => s.id === "stuck")!.collected).toBe(0);
+  });
 });
 
 describe("ContextEngine — rendering", () => {

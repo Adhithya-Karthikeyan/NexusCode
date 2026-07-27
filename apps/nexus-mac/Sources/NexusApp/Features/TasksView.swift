@@ -14,66 +14,85 @@ struct TasksView: View {
     @State private var newTitle = ""
 
     var body: some View {
-        ScrollView {
-            // Every piece of content below handles its own padding — nothing
-            // here stacks a flexible frame under a trailing `.padding()`.
+        // The composer chrome (title, progress, add-task field) is pinned via
+        // `PageScaffold`'s header slot rather than scrolling away with the
+        // list — it's the one thing on this screen you want reachable while
+        // scrolling a long queue, and pinning it is also what stops a short
+        // list from reading as "content in the top third, void below": the
+        // list itself now fills or scrolls the REST of the window, not the
+        // whole thing top-aligned inside one big ScrollView.
+        PageScaffold {
             VStack(alignment: .leading, spacing: Space.lg) {
                 headerRow
-
                 if let controller {
                     ProgressSummary(progress: controller.progress)
-
                     AddTaskField(title: $newTitle) { title in
                         Task { await controller.add(title: title) }
                     }
-
                     if let error = controller.error, !controller.tasks.isEmpty {
                         ErrorBanner(message: error) { controller.error = nil }
                     }
-
-                    if controller.isLoading && controller.tasks.isEmpty {
-                        loadingState
-                    } else if let error = controller.error, controller.tasks.isEmpty {
-                        errorState(error) { Task { await controller.refresh() } }
-                    } else if controller.tasks.isEmpty {
-                        HeroEmptyState(
-                            icon: "checklist",
-                            title: "No tasks yet",
-                            message: "Add one above to start the durable queue — it persists across sessions via `nexus task`."
-                        )
-                        .frame(minHeight: 320)
-                    } else {
-                        // `grouped` always returns all six buckets, including
-                        // empty ones, so this renders a stable set of section
-                        // headers rather than reshuffling as tasks move status.
-                        ForEach(controller.grouped, id: \.status) { group in
-                            if !group.tasks.isEmpty {
-                                TaskSection(status: group.status, tasks: group.tasks, allTasks: controller.tasks) { id, status in
-                                    Task { await controller.setStatus(status, for: id) }
-                                } onDelete: { id in
-                                    Task { await controller.remove(id: id) }
-                                }
-                            } else if group.status != .unknown {
-                                // Empty buckets still render, so headers stay put
-                                // as tasks move between them — but NOT `.unknown`.
-                                // That bucket exists only to catch a status this
-                                // build does not recognise; showing "Unknown 0"
-                                // surfaces an internal fallback as if it were a
-                                // real category the user should reason about.
-                                SectionHeader(group.status.label, accessory: AnyView(CountPill(text: "0", tone: .neutral)))
-                            }
-                        }
-                    }
-                } else {
-                    HeroEmptyState(
-                        icon: "terminal",
-                        title: "No nexus executable",
-                        message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
-                    )
                 }
             }
             .padding(Space.xl)
+            .padding(.bottom, Space.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
+        } content: {
+            if let controller {
+                if controller.isLoading && controller.tasks.isEmpty {
+                    loadingState
+                } else if let error = controller.error, controller.tasks.isEmpty {
+                    errorState(error) { Task { await controller.refresh() } }
+                } else if controller.tasks.isEmpty {
+                    HeroEmptyState(
+                        icon: "checklist",
+                        title: "No tasks yet",
+                        message: "Add one above to start the durable queue — it persists across sessions via `nexus task`."
+                    )
+                } else {
+                    ScrollView {
+                        // `grouped` always returns all six buckets, including
+                        // empty ones, so this renders a stable set of section
+                        // headers rather than reshuffling as tasks move status.
+                        VStack(alignment: .leading, spacing: Space.lg) {
+                            ForEach(controller.grouped, id: \.status) { group in
+                                if !group.tasks.isEmpty {
+                                    TaskSection(status: group.status, tasks: group.tasks, allTasks: controller.tasks) { id, status in
+                                        Task { await controller.setStatus(status, for: id) }
+                                    } onDelete: { id in
+                                        Task { await controller.remove(id: id) }
+                                    }
+                                } else if group.status != .unknown {
+                                    // Empty buckets still render, so headers stay
+                                    // put as tasks move between them — but NOT
+                                    // `.unknown`. That bucket exists only to catch
+                                    // a status this build does not recognise;
+                                    // showing "Unknown 0" surfaces an internal
+                                    // fallback as if it were a real category the
+                                    // user should reason about.
+                                    //
+                                    // A single low-emphasis line, not a full
+                                    // `SectionHeader` + count pill — five empty
+                                    // buckets next to one real one used to read
+                                    // as six equally-weighted sections, which is
+                                    // exactly what made a one-task queue look
+                                    // like a wall of empty chrome.
+                                    EmptyStatusRow(label: group.status.label)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, Space.xl)
+                        .padding(.bottom, Space.xl)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } else {
+                HeroEmptyState(
+                    icon: "terminal",
+                    title: "No nexus executable",
+                    message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                )
+            }
         }
         .background(theme.color(\.surfaceBase))
         .task(id: workspace.projectDirectory) { await attach() }
@@ -101,7 +120,7 @@ struct TasksView: View {
                 .font(Kind.caption)
                 .foregroundStyle(theme.color(\.textMuted))
         }
-        .frame(maxWidth: .infinity, minHeight: 220)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func errorState(_ message: String, retry: @escaping () -> Void) -> some View {
@@ -117,7 +136,7 @@ struct TasksView: View {
             Button("Retry", action: retry)
                 .buttonStyle(SoftButton(tone: .accent))
         }
-        .frame(maxWidth: .infinity, minHeight: 220)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func attach() async {
@@ -216,11 +235,34 @@ private struct ErrorBanner: View {
                     .font(.system(size: 9, weight: .semibold))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
         }
         .foregroundStyle(theme.color(\.warningFg))
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm)
         .background(theme.color(\.warningBg).opacity(0.6), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+    }
+}
+
+/// One empty status bucket, collapsed to a single low-emphasis line instead
+/// of a full `SectionHeader` + count pill. The bucket still needs to render
+/// (see the call site's comment on why `.unknown` is the one exception) so
+/// headers stay put as tasks move between them, but it must not compete
+/// visually with a section that actually has tasks in it.
+private struct EmptyStatusRow: View {
+    @Environment(\.nexusTheme) private var theme
+    let label: String
+
+    var body: some View {
+        HStack(spacing: Space.xs) {
+            Text(label.uppercased())
+                .font(Kind.micro)
+                .tracking(0.5)
+                .foregroundStyle(theme.color(\.textMuted).opacity(0.55))
+            Text("Empty")
+                .font(Kind.micro)
+                .foregroundStyle(theme.color(\.textMuted).opacity(0.35))
+        }
     }
 }
 
@@ -324,6 +366,7 @@ private struct TaskRow: View {
                     }
                     .buttonStyle(SoftButton(tone: .danger, size: .compact))
                     .help("Delete task")
+                    .accessibilityLabel("Delete task")
                 }
             }
         }

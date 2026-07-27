@@ -37,6 +37,13 @@
     "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Auth.swiftdeps",
     "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Auth.dia"
   },
+  "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/DiagnosticClassifier.swift": {
+    "dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier.d",
+    "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier.swift.o",
+    "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier~partial.swiftmodule",
+    "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier.swiftdeps",
+    "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/DiagnosticClassifier.dia"
+  },
   "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift": {
     "dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Themes.d",
     "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKit.build/Themes.swift.o",

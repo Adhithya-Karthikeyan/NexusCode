@@ -10,33 +10,45 @@ struct RootView: View {
     @Environment(\.nexusTheme) private var theme
 
     var body: some View {
-        // A plain HStack, not `NavigationSplitView`.
-        //
-        // The split view manages its own per-column safe areas and toolbar
-        // interaction, and on this OS it gave the detail column a title-bar
-        // inset while giving the sidebar column none — drawing the sidebar's
-        // header under the traffic lights. Four documented fixes
-        // (`safeAreaInset`, `List` + `.listStyle(.sidebar)`, background-only
-        // `ignoresSafeArea`, `unifiedCompact`) each failed to move it. Owning
-        // the split directly removes the whole interaction: both columns are now
-        // ordinary views inside one content area with one safe area.
-        HStack(spacing: 0) {
-            Sidebar()
-                .frame(width: 248)
+        // `StatusBar` is a sibling BELOW the sidebar/content split, not
+        // nested inside the content column's own `VStack`. It used to be the
+        // latter, which put it flush against the content column's bottom
+        // edge only — the sidebar had its own, separate live-status readout
+        // (`SidebarFooter`, now gone) sitting at the SAME height one column
+        // over, so the window read as having two competing bottom strips.
+        // One bar spanning the full width, carrying the real state from
+        // both halves (see `StatusBar`'s own doc comment), replaces both.
+        VStack(spacing: 0) {
+            // A plain HStack, not `NavigationSplitView`.
+            //
+            // The split view manages its own per-column safe areas and toolbar
+            // interaction, and on this OS it gave the detail column a title-bar
+            // inset while giving the sidebar column none — drawing the sidebar's
+            // header under the traffic lights. Four documented fixes
+            // (`safeAreaInset`, `List` + `.listStyle(.sidebar)`, background-only
+            // `ignoresSafeArea`, `unifiedCompact`) each failed to move it. Owning
+            // the split directly removes the whole interaction: both columns are now
+            // ordinary views inside one content area with one safe area.
+            HStack(spacing: 0) {
+                Sidebar()
+                    .frame(width: 248)
 
-            Rectangle()
-                .fill(theme.hairline)
-                .frame(width: 1)
+                Rectangle()
+                    .fill(theme.hairline)
+                    .frame(width: 1)
 
-            VStack(spacing: 0) {
-                if let problem = workspace.setupProblem {
-                    SetupBanner(message: problem)
+                VStack(spacing: 0) {
+                    if let problem = workspace.setupProblem {
+                        SetupBanner(message: problem)
+                    }
+                    content
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                StatusBar()
+                .background(theme.color(\.surfaceBase))
             }
-            .background(theme.color(\.surfaceBase))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            StatusBar()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .tint(theme.color(\.accentDefault))
@@ -150,11 +162,12 @@ private struct Sidebar: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // The footer is an inset, not the last VStack child, for the same reason
-        // as the status bar: a sibling can be pushed out, an inset cannot.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            SidebarFooter()
-        }
+        // No footer readout down here any more — this sidebar used to end in
+        // its own live-status block ("OMC watching" / "N agents running"),
+        // floating with no room to breathe right above the window's bottom
+        // edge. `StatusBar` is the single, full-width bottom bar now (see its
+        // doc comment): the "OMC watching" fact moved there, and the agent
+        // count was always redundant with that bar's own "N working" pill.
         // ONLY the background bleeds under the title bar. Applying
         // `.ignoresSafeArea()` to the whole sidebar is the standard way to get a
         // native-looking material behind the traffic lights — and also the
@@ -221,6 +234,7 @@ private struct ProjectSwitcherRow: View {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(theme.color(\.textMuted))
+                    .accessibilityHidden(true)
                 Text(workspace.projectDirectory.lastPathComponent)
                     .font(Kind.bodyEmphasis)
                     .foregroundStyle(theme.color(\.textPrimary))
@@ -230,6 +244,7 @@ private struct ProjectSwitcherRow: View {
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(theme.color(\.textMuted))
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, Space.sm)
             .padding(.vertical, 7)
@@ -246,12 +261,23 @@ private struct ProjectSwitcherRow: View {
         .onHover { hovering = $0 }
         .help(workspace.projectDirectory.path)
         .animation(.easeOut(duration: 0.12), value: hovering)
+        .accessibilityLabel("Project: \(workspace.projectDirectory.lastPathComponent)")
+        .accessibilityHint("Choose a different project directory")
     }
 }
 
-/// One navigation destination. Selected state is a filled accent pill rather
-/// than a tint, so it reads clearly against the sunken sidebar background at
-/// a glance, without needing the system's own selection chrome.
+/// One navigation destination.
+///
+/// Selected state used to be a FULL-STRENGTH `accentDefault` fill — the
+/// single loudest object on every screen in the app, for a nav item that
+/// only needs to be legible, not shouted. It's now the same restrained
+/// technique `CountPill`'s `.accent` tone already uses and already has a
+/// contrast test for: a tinted `accentMuted` wash rather than the solid
+/// colour, with `Color.readableText` computing the label colour against it
+/// (never assumed — see that function's doc comment on exactly how guessing
+/// wrong here bit `CountPill` before). A slim accent rail on the leading edge
+/// carries the rest of the "this one is selected" signal, at a weight that
+/// reads as an indicator rather than a block.
 private struct SidebarNavRow: View {
     @Environment(\.nexusTheme) private var theme
     let tab: WorkspaceTab
@@ -261,74 +287,64 @@ private struct SidebarNavRow: View {
 
     @State private var hovering = false
 
+    /// Computed rather than reused from `accentFg` — that token was designed
+    /// for text on the full-strength `accentDefault` fill, not the muted
+    /// wash this row now uses. See `Theme.swift`'s `readableText` doc comment
+    /// for the exact bug guessing that token produced elsewhere.
+    private var selectedForeground: Color {
+        Color.readableText(on: theme.tokens.accentMuted, preferring: theme.tokens.textPrimary, otherwise: theme.tokens.textInverse)
+    }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.sm) {
                 Image(systemName: tab.systemImage)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
+                    // The label below already names this control; a decorative
+                    // glyph with its own default AX name (the SF Symbol's) is
+                    // exactly what turned this row into a bare, unnamed
+                    // `AXButton` in VoiceOver — hiding it lets the row's own
+                    // `accessibilityLabel` win instead of competing with it.
+                    .accessibilityHidden(true)
                 Text(tab.title)
                     .font(Kind.bodyEmphasis)
                 Spacer(minLength: 0)
                 if badge > 0 {
                     CountPill(text: "\(badge)", tone: isSelected ? .neutral : .accent)
+                        .accessibilityHidden(true)
                 }
             }
-            .foregroundStyle(isSelected ? theme.color(\.accentFg) : theme.color(\.textSecondary))
+            .foregroundStyle(isSelected ? selectedForeground : theme.color(\.textSecondary))
             .padding(.horizontal, Space.sm)
             .padding(.vertical, 7)
             .background {
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                     .fill(
                         isSelected
-                            ? theme.color(\.accentDefault)
+                            ? theme.color(\.accentMuted)
                             : (hovering ? theme.color(\.surfaceOverlay) : .clear)
                     )
+            }
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(theme.color(\.accentDefault))
+                        .frame(width: 3)
+                        .padding(.vertical, 5)
+                        .padding(.leading, 2)
+                }
             }
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-    }
-}
-
-/// Compact live status, pinned to the bottom of the sidebar: is OMC watching
-/// this project, and how much is running right now. Answers "is anything
-/// happening" without switching tabs.
-private struct SidebarFooter: View {
-    @Environment(WorkspaceModel.self) private var workspace
-    @Environment(\.nexusTheme) private var theme
-
-    private var omcLabel: String {
-        guard let omc = workspace.omc, omc.isAvailable else { return "OMC not used here" }
-        return omc.isWatching ? "OMC watching" : "OMC idle"
-    }
-
-    private var running: Int { runningCount(workspace) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Rectangle().fill(theme.color(\.chromeDivider)).frame(height: 1)
-                .padding(.bottom, 4)
-
-            HStack(spacing: 6) {
-                StatusDot(isRunning: workspace.omc?.isWatching == true, isFailed: false, size: 6, animate: false)
-                Text(omcLabel)
-                    .font(Kind.caption)
-                    .foregroundStyle(theme.color(\.textMuted))
-            }
-
-            HStack(spacing: 6) {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(running > 0 ? theme.color(\.accentDefault) : theme.color(\.textMuted))
-                Text(running > 0 ? "\(running) agent\(running == 1 ? "" : "s") running" : "no agents running")
-                    .font(Kind.caption)
-                    .foregroundStyle(theme.color(\.textMuted))
-            }
-        }
-        .padding(.horizontal, Space.md)
-        .padding(.bottom, Space.md)
+        // Set explicitly rather than relying on the label + icon + badge
+        // combining on their own: this is the exact control the accessibility
+        // tree audit found reading as an unnamed button (see the file's
+        // header task notes), so the name is asserted here instead of hoped for.
+        .accessibilityLabel(badge > 0 ? "\(tab.title), \(badge) running" : tab.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -361,12 +377,26 @@ struct SetupBanner: View {
 // MARK: - Status bar
 
 /// The always-visible bottom strip: provider/model, live cost, context
-/// pressure, and how many agents are working. One row, never wraps.
+/// pressure, whether OMC is watching this project, and how many agents are
+/// working. One row, never wraps.
+///
+/// This is now the ONLY bottom bar in the window — it used to share the
+/// bottom edge with a second, separate readout pinned to the sidebar
+/// (`SidebarFooter`, now gone), which put two differently-styled strips at
+/// the same height and made the window read as unfinished. Everything that
+/// second strip carried moved here: "OMC watching" joined the row below, and
+/// its per-agent count was already redundant with the "N working" pill this
+/// bar always had at the trailing edge.
 struct StatusBar: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
 
     private var running: Int { runningCount(workspace) }
+
+    private var omcLabel: String? {
+        guard let omc = workspace.omc, omc.isAvailable else { return nil }
+        return omc.isWatching ? "OMC watching" : "OMC idle"
+    }
 
     var body: some View {
         HStack(spacing: Space.md) {
@@ -374,9 +404,20 @@ struct StatusBar: View {
                 Image(systemName: "hexagon.fill")
                     .font(.system(size: 8))
                     .foregroundStyle(theme.color(\.accentDefault))
+                    .accessibilityHidden(true)
                 Text("NexusCode")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(theme.color(\.textPrimary))
+            }
+
+            if let omcLabel {
+                StatusDivider()
+                HStack(spacing: 6) {
+                    StatusDot(isRunning: workspace.omc?.isWatching == true, isFailed: false, size: 6, animate: false)
+                    Text(omcLabel)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color(\.textMuted))
+                }
             }
 
             if let session = workspace.conversation?.view.session {

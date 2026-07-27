@@ -100,7 +100,22 @@ struct ConversationView: View {
     @ViewBuilder
     private var transcript: some View {
         if laneOrder.isEmpty {
+            // `HeroEmptyState` fills whatever frame it's given and centers
+            // its own content within it — left alone in this screen's full
+            // (control-strip-to-composer) canvas, that put the hero dead in
+            // the vertical middle, with roughly as much void BELOW it (down
+            // to the composer) as above it. That read as two unrelated
+            // objects — a floating hero, a floating composer — rather than
+            // one screen. `.fixedSize` collapses the hero back to its own
+            // intrinsic height so it stops fighting for the full canvas, and
+            // bottom-alignment then lets it settle just above the composer —
+            // the void moves ABOVE the hero (toward the control strip),
+            // which is where an empty void reads as "unused space" rather
+            // than "something is missing between these two things."
             emptyState
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, Space.xxl)
         } else if controller.mode.isMultiLane && laneOrder.count > 1 {
             // Fan-out: one column per lane, so answers are compared, not scrolled.
             ScrollView(.horizontal) {
@@ -201,8 +216,8 @@ struct ConversationView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            if !controller.diagnostics.isEmpty {
-                DiagnosticsStrip(lines: controller.diagnostics)
+            if !controller.presentedDiagnostics.isEmpty {
+                DiagnosticsStrip(notes: controller.presentedDiagnostics)
             }
 
             if controller.view.streaming {
@@ -1261,31 +1276,55 @@ struct ToolRow: View {
     }
 }
 
-/// stderr from the CLI. Surfaced rather than swallowed, so a launch failure or a
-/// provider warning is visible instead of manifesting as an empty answer — kept
-/// visually quiet, though, since most runs never produce a line here.
+/// stderr from the CLI, already triaged by `DiagnosticClassifier` — a raw line
+/// never reaches this view untriaged. Surfaced rather than swallowed, so a
+/// launch failure or a genuine provider problem is visible instead of
+/// manifesting as an empty answer, but each line renders in the tone its own
+/// classification earned: `.warning` keeps the amber treatment every
+/// diagnostic used to get regardless of content; `.quiet` gets a calm,
+/// informational one, so amber only ever appears when something is actually
+/// wrong.
 struct DiagnosticsStrip: View {
     @Environment(\.nexusTheme) private var theme
-    let lines: [String]
+    let notes: [DiagnosticPresentation]
 
     var body: some View {
-        HStack(alignment: .top, spacing: Space.sm) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 10))
-                .foregroundStyle(theme.color(\.warningFg).opacity(0.85))
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(lines.suffix(3).enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(Kind.monoSmall)
-                        .foregroundStyle(theme.color(\.warningFg).opacity(0.85))
-                        .lineLimit(2)
-                }
+        VStack(alignment: .leading, spacing: Space.xs) {
+            ForEach(Array(notes.suffix(3).enumerated()), id: \.offset) { _, note in
+                row(for: note)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func row(for note: DiagnosticPresentation) -> some View {
+        switch note {
+        // The controller already drops `.hidden` lines before they reach
+        // `presentedDiagnostics`; handled here too so this view stays correct
+        // even if a future caller feeds it an unfiltered list.
+        case .hidden:
+            EmptyView()
+        case .quiet(let text):
+            line(text, icon: "info.circle", fg: theme.color(\.infoFg), bg: theme.color(\.infoBg))
+        case .warning(let text):
+            line(text, icon: "exclamationmark.triangle", fg: theme.color(\.warningFg), bg: theme.color(\.warningBg))
+        }
+    }
+
+    private func line(_ text: String, icon: String, fg: Color, bg: Color) -> some View {
+        HStack(alignment: .top, spacing: Space.sm) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundStyle(fg.opacity(0.85))
+            Text(text)
+                .font(Kind.monoSmall)
+                .foregroundStyle(fg.opacity(0.85))
+                .lineLimit(2)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Space.sm)
         .padding(.vertical, 6)
-        .background(theme.color(\.warningBg).opacity(0.6))
+        .background(bg.opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
     }
 }

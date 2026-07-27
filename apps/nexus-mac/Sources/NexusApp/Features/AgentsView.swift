@@ -52,57 +52,78 @@ struct AgentsView: View {
     /// is attached — so it is gated on more than just the three row lists.
     private var hasReadout: Bool { !lanes.isEmpty || !roleRuns.isEmpty || !omcAgents.isEmpty || hud != nil }
 
+    private var noActivity: Bool { lanes.isEmpty && roleRuns.isEmpty && omcAgents.isEmpty }
+
+    /// Stricter than `noActivity`: a mission or an unreadable-paths notice is
+    /// real content even when no row is actively running (e.g. between two
+    /// agent launches in the same mission), so neither should be replaced by
+    /// the "Nothing running" hero — only true silence earns that.
+    private var isFullyEmpty: Bool { noActivity && mission == nil && unreadable.isEmpty }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Space.lg) {
-                if hasReadout {
-                    HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud)
-                }
+        // `HeaderStrip` is pinned via `PageScaffold`'s header slot rather than
+        // living inside the scrolling content like every other section here:
+        // it is a dashboard readout ("N running", session cost), the one
+        // thing on this screen worth keeping visible while scrolling a long
+        // list of cards below it — and, when there's nothing running, it's
+        // what stops the empty state from being the ENTIRE screen with no
+        // context above it.
+        PageScaffold {
+            if hasReadout {
+                HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud)
+                    .padding(.horizontal, Space.xl)
+                    .padding(.top, Space.xl)
+                    .padding(.bottom, Space.lg)
+            }
+        } content: {
+            if isFullyEmpty {
+                HeroEmptyState(
+                    icon: "person.3.sequence",
+                    title: "Nothing running",
+                    message: "Provider lanes appear here during a Compare or Race run. NexusCode's own agent runs (`nexus agent --role`) and OMC subagents appear here too, whenever they run in this project."
+                )
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.lg) {
+                        if !roleRuns.isEmpty {
+                            AgentSection(
+                                title: "NexusCode Agent Runs",
+                                subtitle: "nexus agent --role … — one agent iterating through Observe → Plan → Act → Reflect → Evaluate",
+                                rows: roleRuns,
+                                now: now
+                            )
+                        }
+                        if !lanes.isEmpty {
+                            AgentSection(
+                                title: "Provider Lanes",
+                                subtitle: "Models answering the same prompt — live nexus event stream",
+                                rows: lanes,
+                                now: now
+                            )
+                        }
+                        if !omcAgents.isEmpty {
+                            AgentSection(
+                                title: "OMC Subagents",
+                                subtitle: "From .omc/state — specialised agents doing separate work",
+                                rows: omcAgents,
+                                now: now
+                            )
+                        }
 
-                if lanes.isEmpty && roleRuns.isEmpty && omcAgents.isEmpty {
-                    HeroEmptyState(
-                        icon: "person.3.sequence",
-                        title: "Nothing running",
-                        message: "Provider lanes appear here during a Compare or Race run. NexusCode's own agent runs (`nexus agent --role`) and OMC subagents appear here too, whenever they run in this project."
-                    )
-                    .frame(minHeight: 380)
-                } else {
-                    if !roleRuns.isEmpty {
-                        AgentSection(
-                            title: "NexusCode Agent Runs",
-                            subtitle: "nexus agent --role … — one agent iterating through Observe → Plan → Act → Reflect → Evaluate",
-                            rows: roleRuns,
-                            now: now
-                        )
-                    }
-                    if !lanes.isEmpty {
-                        AgentSection(
-                            title: "Provider Lanes",
-                            subtitle: "Models answering the same prompt — live nexus event stream",
-                            rows: lanes,
-                            now: now
-                        )
-                    }
-                    if !omcAgents.isEmpty {
-                        AgentSection(
-                            title: "OMC Subagents",
-                            subtitle: "From .omc/state — specialised agents doing separate work",
-                            rows: omcAgents,
-                            now: now
-                        )
-                    }
-                }
+                        if let mission {
+                            MissionPanel(mission: mission)
+                        }
 
-                if let mission {
-                    MissionPanel(mission: mission)
-                }
-
-                if !unreadable.isEmpty {
-                    UnreadableNotice(paths: unreadable)
+                        if !unreadable.isEmpty {
+                            UnreadableNotice(paths: unreadable)
+                        }
+                    }
+                    .padding(.horizontal, Space.xl)
+                    .padding(.top, hasReadout ? 0 : Space.xl)
+                    .padding(.bottom, Space.xl)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(Space.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(theme.color(\.surfaceBase))
         .onReceive(tick) { now = $0 }

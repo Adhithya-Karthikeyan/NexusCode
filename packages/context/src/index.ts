@@ -12,7 +12,7 @@
  * prompt-caches hit.
  */
 
-export { ContextEngine } from "./engine.js";
+export { ContextEngine, DEFAULT_SOURCE_TIMEOUT_MS } from "./engine.js";
 
 export { defaultEstimator } from "./tokens.js";
 export { truncateMiddle, truncateTail } from "./compress.js";
