@@ -39,6 +39,38 @@ describe("history store — raw field stripping", () => {
     }
   });
 
+  it("preserves the coordinator's `raw.agent` metadata (the OODA narrative) while still stripping the rest of `raw`", async () => {
+    const dbPath = tmpDbPath();
+    const store = await openHistory({ enabled: true, dbPath });
+    try {
+      const chunk = {
+        type: "text-delta",
+        runId: "run_agent",
+        text: "Run finished: goal-met.",
+        channel: "reasoning",
+        raw: {
+          agent: { phase: "stop", role: "coder", step: 3, data: { stopReason: "goal-met", verdict: "met" } },
+          // A provider might stamp other fields onto the same `raw` object —
+          // only `agent` is a first-party payload; everything else must still
+          // be stripped, exactly like the fully-opaque case above.
+          providerInternal: "should-not-survive",
+        },
+      } as unknown as StreamChunk;
+
+      store.append({ sessionId: "sess_agent", turnId: "turn_agent", runId: "run_agent", seq: 1, chunk });
+
+      const events = await historyShow(dbPath, "run_agent");
+      expect(events).toHaveLength(1);
+      const payload = JSON.parse(events[0]!.payload) as { raw?: { agent?: unknown; providerInternal?: unknown } };
+      expect(payload.raw).toEqual({
+        agent: { phase: "stop", role: "coder", step: 3, data: { stopReason: "goal-met", verdict: "met" } },
+      });
+      expect(payload.raw?.providerInternal).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
   it("redacts a known secret value inside a tool-result chunk's content before persisting", async () => {
     const dbPath = tmpDbPath();
     const store = await openHistory({ enabled: true, dbPath });

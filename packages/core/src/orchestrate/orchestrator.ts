@@ -830,7 +830,7 @@ function makeLaneBuilder(spec: RunSpec, runId: string): LaneBuilder {
       };
       if (finishReason !== undefined) result.finishReason = finishReason;
       if (error !== undefined) result.error = error;
-      if (toolExchange !== undefined) result.toolExchange = toolExchange;
+      if (toolExchange !== undefined) result.toolExchange = guardToolExchange(toolExchange);
       return result;
     },
   };
@@ -2290,7 +2290,14 @@ async function* agentStream(
         }
       }
       yield trChunk;
-      const toolMsg: Message = { role: "tool", toolCallId: call.id, content: result.content };
+      // The live chunk above carries the tool's REAL, full output — only the
+      // copy that gets threaded forward (into the next provider turn AND, via
+      // `toolExchange`, into persisted history) is capped.
+      const toolMsg: Message = {
+        role: "tool",
+        toolCallId: call.id,
+        content: truncateToolResultForHistory(result.content),
+      };
       if (call.name) toolMsg.name = call.name;
       toolMessages.push(toolMsg);
     }

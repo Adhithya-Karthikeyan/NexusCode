@@ -223,6 +223,34 @@ describe("replay", () => {
     // Replay is deterministic: identical on a second call.
     expect(store.replay(SESSION)).toEqual(timeline);
   });
+
+  it("reproduces an OODA coordinator's `agent`/`reasoning` pair, with `data` intact, from a persisted role run", () => {
+    // What `agentMetaChunk()` (`@nexuscode/agent`) actually emits: a
+    // reasoning-channel text-delta stamped with `raw.agent`. `SessionStore.append`
+    // must keep that structured payload (not just the narration text) so a
+    // replay can reconstruct the `agent` UiEvent the live run produced.
+    emit({
+      type: "text-delta",
+      runId: RUN,
+      text: "Run finished: goal-met.",
+      channel: "reasoning",
+      raw: { agent: { phase: "stop", role: "coder", step: 2, data: { stopReason: "goal-met", verdict: "met" } } },
+    } as StreamChunk);
+
+    const timeline = store.replay(SESSION);
+    const agentEvent = timeline.find((e) => e.t === "agent");
+    expect(agentEvent).toMatchObject({
+      t: "agent",
+      phase: "stop",
+      role: "coder",
+      step: 2,
+      text: "Run finished: goal-met.",
+      data: { stopReason: "goal-met", verdict: "met" },
+    });
+    // The paired narration line survives right alongside it, from the same row.
+    const idx = timeline.indexOf(agentEvent!);
+    expect(timeline[idx + 1]).toMatchObject({ t: "reasoning", delta: "Run finished: goal-met." });
+  });
 });
 
 describe("export", () => {
