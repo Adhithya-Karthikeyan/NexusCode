@@ -32,6 +32,19 @@ describe("event-log reducer", () => {
     expect(after.session?.model).toBe("Opus 4.8");
   });
 
+  it("accepts a `cache` event (§ CAPABILITIES.md C7) without crashing — type-checks against the mirrored union and bumps eventCount", () => {
+    // Compile-time coverage matters more than runtime here: `{ t: "cache", lane:
+    // "main", hit: true }` failing to type-check against this file's `UiEvent`
+    // import would mean `packages/tui/src/store/events.ts` had drifted from
+    // `packages/core/src/projection.ts` again. No dedicated view state exists
+    // for a cache hit yet (falls through the reducer's generic `default:`), so
+    // this only asserts it degrades safely, not that anything renders from it.
+    const cacheEvent: UiEvent = { t: "cache", lane: "main", hit: true };
+    const before = initialViewState;
+    const after = reduceEvent(before, cacheEvent, 1);
+    expect(after.eventCount).toBe(before.eventCount + 1);
+  });
+
   it("accumulates text deltas into a live turn, finalized on done", () => {
     const v = reduceEvents([
       session,

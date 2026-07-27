@@ -322,7 +322,11 @@ private struct SessionRow: View {
                         Metric(label: "turns", value: "\(session.turnCount)")
                         Metric(label: "tok", value: formatCount(session.inputTokens + session.outputTokens))
                         if let cost = costLabel(session) {
-                            Metric(label: "cost", value: cost, emphasis: true)
+                            if let help = costHelp(session) {
+                                Metric(label: "cost", value: cost, emphasis: true).help(help)
+                            } else {
+                                Metric(label: "cost", value: cost, emphasis: true)
+                            }
                         }
                         Spacer(minLength: 0)
                     }
@@ -409,7 +413,11 @@ private struct SessionDetailCard: View {
                         Metric(label: "in", value: formatCount(session.inputTokens))
                         Metric(label: "out", value: formatCount(session.outputTokens))
                         if let cost = costLabel(session) {
-                            Metric(label: "cost", value: cost, emphasis: true)
+                            if let help = costHelp(session) {
+                                Metric(label: "cost", value: cost, emphasis: true).help(help)
+                            } else {
+                                Metric(label: "cost", value: cost, emphasis: true)
+                            }
                         }
                         Spacer(minLength: 0)
                     }
@@ -498,6 +506,14 @@ private struct RunRow: View {
 /// `NexusSession.costUsd`), so a partial-but-nonzero total is still shown —
 /// marked with `*` — rather than being replaced by a bare "—" that would
 /// throw away the figure the CLI does know.
+///
+/// Four decimal places, not the two `RootView`'s status bar and
+/// `ConversationView`'s composer readout use for the identical `costUsd` /
+/// `costIncomplete` pair: this is a historical record, comparing costs ACROSS
+/// many sessions, where a `$0.0123` vs `$0.0089` difference is the whole
+/// point of looking — collapsing that to `$0.01` for both would hide it. The
+/// status bar and composer are live glance figures instead, where `<$0.01`
+/// already answers "is this basically free" without needing the extra digits.
 private func costLabel(_ session: NexusSession) -> String? {
     switch session.costUsd {
     case let cost? where cost > 0:
@@ -508,6 +524,17 @@ private func costLabel(_ session: NexusSession) -> String? {
         // news (a mixed session whose priced runs happened to sum to ~0).
         return session.costIncomplete ? "—" : nil
     }
+}
+
+/// Non-`nil` exactly when `costLabel` above is showing an incomplete total —
+/// call sites attach this as a `.help()` tooltip so the `*`/`—` marker has an
+/// explanation on hover instead of being an unlabelled glyph on a dollar
+/// figure. Wording matches `RootView`'s `costIncompleteHelp` for the same
+/// `costIncomplete` concept — keep the two in sync.
+private func costHelp(_ session: NexusSession) -> String? {
+    session.costIncomplete
+        ? "Partial total — pricing is unknown for at least one run, so this isn't the full cost."
+        : nil
 }
 
 /// Renders a token/count total as `12.4k`/`1.2m` past the point plain digits

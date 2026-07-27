@@ -111,6 +111,28 @@ private func presentDirectoryPicker(current: URL, onPick: (URL) -> Void) {
     onPick(url)
 }
 
+/// The status bar's cost readout for the whole session. `nil` means show
+/// nothing — the genuinely-empty case (no runs yet, or every run so far was
+/// free), unchanged from before this existed. Uses the SAME two-decimal /
+/// `<$0.01` shape and `*` "partial total" convention as `ConversationView`'s
+/// composer readout (`UsageReadout.formatted`) for the identical underlying
+/// `ViewState.totals` value — the two are simultaneously visible chrome
+/// showing the same number, so they must never disagree digit-for-digit.
+/// `SessionsView`'s cost column deliberately keeps four decimals instead: it's
+/// a historical record where sub-cent differences across many sessions are
+/// the point, not a live glance figure where `<$0.01` already answers "is
+/// this basically free" without extra digits.
+private func statusBarCost(_ totals: UsageTotals) -> String? {
+    guard totals.costUsd > 0 else { return totals.costIncomplete ? "—" : nil }
+    let amount = totals.costUsd < 0.01 ? "<$0.01" : String(format: "$%.2f", totals.costUsd)
+    return totals.costIncomplete ? "\(amount)*" : amount
+}
+
+/// Explains the `*`/`—` marker `statusBarCost` can attach to the status bar's
+/// cost readout. Wording matches `SessionsView`'s `costHelp` for the
+/// identical `costIncomplete` concept — keep the two in sync.
+private let costIncompleteHelp = "Partial total — pricing is unknown for at least one run, so this isn't the full cost."
+
 // MARK: - Sidebar
 
 /// The whole left column: brand mark, project switcher, navigation, and a
@@ -425,8 +447,13 @@ struct StatusBar: View {
                 Metric(label: "model", value: session.model, emphasis: true)
             }
 
-            if let totals = workspace.conversation?.view.totals, totals.costUsd > 0 {
-                Metric(label: "cost", value: String(format: "$%.4f", totals.costUsd))
+            if let totals = workspace.conversation?.view.totals, let cost = statusBarCost(totals) {
+                if totals.costIncomplete {
+                    Metric(label: "cost", value: cost)
+                        .help(costIncompleteHelp)
+                } else {
+                    Metric(label: "cost", value: cost)
+                }
             }
 
             if let hud = workspace.omc?.snapshot.hud {
