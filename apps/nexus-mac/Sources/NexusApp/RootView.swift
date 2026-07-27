@@ -773,7 +773,14 @@ struct ChatTab: View {
                 detail: entry.provider.detail,
                 available: entry.isUsable,
                 disabledReason: entry.reason,
-                kind: entry.provider.kind
+                kind: entry.provider.kind,
+                // A tripped circuit (quota/rate-limit/repeated failures) rides
+                // `PickerOption.warning` — the SAME "visible but not blocking"
+                // mechanism `ControlStrip.rolePicker` already uses for a
+                // write-capable agent role, not `disabledReason`/`available`:
+                // the provider stays fully selectable (see
+                // `SelectableProvider.circuitWarning`'s doc for why).
+                warning: entry.circuitWarning
             )
         }
     }
