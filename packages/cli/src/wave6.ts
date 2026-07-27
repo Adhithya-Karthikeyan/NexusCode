@@ -37,7 +37,7 @@ import type { ProviderAdapter, ProviderRegistry, UiEvent } from "@nexuscode/core
 import type { ParsedArgs } from "./args.js";
 import { userConfigDir } from "./config-io.js";
 import { buildAuthedRuntime, isProviderUsable } from "./runtime.js";
-import { resolveDefaultProviderForRun } from "./commands.js";
+import { readStdin, resolveDefaultProviderForRun } from "./commands.js";
 import {
   buildObservability,
   loadTraceSpans,

@@ -269,10 +269,15 @@ final class ProvidersTests: XCTestCase {
             ("transient", "temporarily unavailable"),
         ]
         for (reason, expectedLabel) in cases {
-            let reasonField = reason.map { #","reason":"\($0)""# } ?? ""
-            let circuit = try XCTUnwrap(ProviderCircuit(json: try circuitJSON(#"""
-            {"target":{"providerId":"mock"},"state":"open","availability":"blocked","attempts":1,"openCount":1\#(reasonField)}
-            """#)))
+            var fields: [String: JSONValue] = [
+                "target": .object(["providerId": .string("mock")]),
+                "state": .string("open"),
+                "availability": .string("blocked"),
+                "attempts": .number(1),
+                "openCount": .number(1),
+            ]
+            if let reason { fields["reason"] = .string(reason) }
+            let circuit = try XCTUnwrap(ProviderCircuit(json: .object(fields)))
             let warning = try XCTUnwrap(SelectableProvider(provider: mock, circuit: circuit).circuitWarning)
             XCTAssertTrue(warning.hasPrefix(expectedLabel), "reason \(String(describing: reason)) -> \(warning)")
             // No `blockedUntil` in any of these fixtures — must fall back to

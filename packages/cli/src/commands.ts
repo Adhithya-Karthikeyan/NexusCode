@@ -261,8 +261,15 @@ const STDIN_FIRST_BYTE_TIMEOUT_MS = (() => {
  * silent stall) so a run that unexpectedly inherited an idle pipe explains
  * itself instead of just quietly proceeding as if `</dev/null` had been
  * passed.
+ *
+ * Exported so `wave6.ts`'s git flows (`commit`/`review`/`explain`/`pr`, via
+ * `resolveDiff`) share this SAME bounded implementation instead of each
+ * package maintaining its own copy of "read stdin" — which is exactly how
+ * `wave6.ts` ended up with a byte-for-byte copy of this function's PRE-FIX
+ * (unbounded) form, silently outliving the fix here. One implementation,
+ * one place a future change to stdin handling has to be made.
  */
-async function readStdin(): Promise<string> {
+export async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return "";
   const stdin = process.stdin;
   return new Promise<string>((resolve) => {
