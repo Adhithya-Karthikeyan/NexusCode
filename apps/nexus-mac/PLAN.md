@@ -1,5 +1,62 @@
 # NexusCode.app — working backlog
 
+## ★ STANDING MANDATE (2026-07-27, from the owner) — do not lose this
+
+**Objective is now recorded** in project memory and injected every session. In
+short: the CLI is the only engine (every app capability must exist as a `nexus`
+command first); switching provider/model must never lose context; honesty over
+convenience; every basic AND advanced harness property; UI/UX is the product,
+not polish; never ship a silent failure.
+
+### Step 1 — capability completeness
+1. Understand the objective first — every decision depends on it. ✅ recorded
+2. List ALL inputs, outputs, features, tools, options (MCP, pre/post hooks, RAG,
+   AI interactions, AI behaviours, AI switching, …). 🔄 `docs/CAPABILITIES.md`
+3. For EACH item, capture in detail how it is expected to work. 🔄 same doc
+4. Anything missing → design how it should work. 🔄 GAPS section
+5. Verify every item actually works; fix and test; **keep fixing until right.** ⬜
+
+### Step 2 — interface
+Study how the app interface SHOULD be. Full focus on design, UI, UX, layout,
+colours, buttons, shapes. List every button and option, analyse, test, refix
+until right. 🔄 `apps/nexus-mac/UI-INVENTORY.md`
+
+### Step 1.5 — verification evidence so far (2026-07-27 night)
+
+Harnesses live in `<scratchpad>/{smoke,smoke2,edge}.mjs`. They spawn each command
+in a child with a hard SIGKILL deadline and capture stdout/stderr SEPARATELY.
+**Built because `timeout` is not installed on this machine** — and a command
+wrapped in a missing `timeout` silently does not run AND reports success.
+
+- ✅ **45/45 commands answer `--help` cleanly** — no load-time crashes. The real
+  command list is: agent ask audit auth budget cache chain chat code commit
+  compare config consensus doctor explain history index jobs keys login logout
+  lsp mcp memory models plan plugin policy pr providers race rbac receipt replay
+  review roles route search serve session task tools trace tui usage.
+  (Note it is `session`, singular — not `sessions`.)
+- ✅ **20/20 safe read-only invocations pass, ZERO hangs**, all ≤840ms: audit,
+  auth, budget, cache, config, doctor, history, jobs, keys, mcp, memory, models,
+  plugin, policy(list), providers, rbac(list), roles, session, task, tools,
+  usage, and `ask -p mock -m mock-fast` (819ms).
+  **So the hang is specific to the agent/tool-loop path, not the CLI generally.**
+- ✅ **Argument validation is solid** — 9 of 10 identifier-taking commands reject
+  an EMPTY argument with a usage error, exactly as they reject a bogus one.
+- 🔴 **BUG: `nexus trace ""` returns 11,134,907 bytes with exit 0** — an empty
+  identifier silently widens into "dump every span ever recorded", while
+  `trace zzz-not-real` correctly exits 1. Isolated, not systemic. Fix in flight.
+- ⬜ `lsp diagnostics` reports "no language server available for typescript" in a
+  TypeScript repo — exits 0. Degraded-but-honest, or a real gap? Needs a call.
+
+### Hard rules learned the hard way
+- **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An
+  agent's coordinate click landed in the owner's real Notes document, typed into
+  it, then pressed Cmd+Z three times — possibly destroying their concurrent
+  work. Screenshots + accessibility-resolved `AXPress` inside
+  `window "NexusCode"` ONLY. Never automate text entry into the live app.
+- Nothing is done without the binary/app actually run and observed. A green
+  suite has twice described features that did not work.
+
+
 > ## ⚠️ ENVIRONMENT ISSUE (not a code regression) — read this first
 >
 > **Symptom:** the app launches but no window appears.

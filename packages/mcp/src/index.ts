@@ -36,6 +36,11 @@ export {
   McpClient,
   McpClientManager,
   resolveTransport,
+  // Exported for tests only — every real caller gets the exit reaper for free
+  // through `McpClient.connectTransport`/`close`. See the module-level comment
+  // above `trackChildPid` in client.ts for what this backstops and why.
+  trackChildPid,
+  reapTrackedChildren,
 } from "./client.js";
 export type {
   SecretResolver,

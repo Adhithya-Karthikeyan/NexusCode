@@ -1,7 +1,34 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { McpClientManager, McpClient, parseMcpServerConfig } from "../src/index.js";
+import { fileURLToPath } from "node:url";
+import {
+  McpClientManager,
+  McpClient,
+  parseMcpServerConfig,
+  resolveTransport,
+  trackChildPid,
+  reapTrackedChildren,
+} from "../src/index.js";
 import { startHarness, buildTestMcpServer, type Harness } from "./harness.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
+/** `true` while `pid` still exists (works without permission to signal it). */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Poll `check` until it's true or `timeoutMs` elapses (SIGKILL isn't instant). */
+async function waitUntil(check: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
 
 let harness: Harness | undefined;
 afterEach(async () => {
@@ -132,6 +159,59 @@ describe("connect timeout (never hang on an unresponsive server — regression f
 
     await mgr.closeAll();
   }, 15_000);
+});
+
+describe("child-process reaper (never leak a spawned MCP server — regression for the real kyp-mem leak)", () => {
+  it("reapTrackedChildren SIGKILLs a tracked pid nothing else ever closed", async () => {
+    // Stand-in for "a real MCP server child, tracked, whose McpClient.close()
+    // never ran" — the exact shape a caller that connects outside a
+    // try/finally (or a process killed by an unhandled SIGTERM) leaves behind.
+    const { spawn } = await import("node:child_process");
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000_000)"]);
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", () => resolve());
+      child.once("error", reject);
+    });
+    const pid = child.pid!;
+    expect(isAlive(pid)).toBe(true);
+
+    trackChildPid(pid);
+    reapTrackedChildren();
+
+    await waitUntil(() => !isAlive(pid), 2_000);
+    expect(isAlive(pid)).toBe(false);
+  });
+
+  it("a REAL spawned stdio server that connects successfully and is never close()d is still reaped", async () => {
+    // The fixture is a genuine MCP server over stdio (not the in-memory
+    // harness) — this is a full end-to-end run of `resolveTransport` →
+    // `connectTransport` spawning and speaking to an actual OS subprocess,
+    // exactly like the real `kyp-mem serve` in the field.
+    const fixture = fileURLToPath(new URL("./fixtures/stdio-server.mjs", import.meta.url));
+    const config = parseMcpServerConfig({
+      name: "reaper-fixture",
+      transport: "stdio",
+      command: process.execPath,
+      args: [fixture],
+    });
+    const transport = await resolveTransport(config);
+    const client = McpClient.withTransport("reaper-fixture");
+    await client.connectTransport(transport);
+    expect(client.isConnected()).toBe(true);
+
+    const pid = (transport as { pid?: number | null }).pid;
+    expect(typeof pid).toBe("number");
+    expect(isAlive(pid as number)).toBe(true);
+
+    // Deliberately do NOT call client.close() — simulate a caller that threw
+    // (or a process that was SIGTERM'd) before its own cleanup ever ran.
+    // `reapTrackedChildren` stands in for the process 'exit'/SIGTERM listener
+    // firing, without actually tearing down the test runner to prove it.
+    reapTrackedChildren();
+
+    await waitUntil(() => !isAlive(pid as number), 2_000);
+    expect(isAlive(pid as number)).toBe(false);
+  }, 10_000);
 });
 
 describe("McpClientManager (multiple servers + discovery)", () => {

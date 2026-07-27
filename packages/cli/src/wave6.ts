@@ -421,10 +421,13 @@ export async function cmdTrace(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   }
 
   // Optional filter: a traceId, a runId (via span attribute), or a sessionId
-  // (resolved to its turn/trace ids through the session store).
+  // (resolved to its turn/trace ids through the session store). Only an
+  // *absent* arg means "no filter" — an explicit empty string (`nexus trace
+  // ""`) must be rejected like any other non-matching identifier, not
+  // silently treated as "show everything" (`if (filter)` was falsy on "").
   const filter = args.positionals[0];
   let selected = spans;
-  if (filter) {
+  if (filter !== undefined) {
     const direct = spans.filter((s) => s.traceId === filter);
     if (direct.length > 0) {
       selected = direct;

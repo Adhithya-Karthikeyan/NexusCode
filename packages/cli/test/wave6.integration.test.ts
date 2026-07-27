@@ -266,6 +266,19 @@ describe("wave 6 — observability (trace)", () => {
     expect(text.stdout).toContain("[run]");
   }, 20_000);
 
+  it("an empty trace filter behaves exactly like a bogus one (never dumps every span)", async () => {
+    await seedMockRun("trace empty-arg regression");
+    const bogus = await runCli(["trace", "zzz-not-real"]);
+    expect(bogus.code).toBe(1);
+    expect(bogus.stderr).toContain('no spans for "zzz-not-real"');
+
+    const empty = await runCli(["trace", ""]);
+    expect(empty.code).toBe(1);
+    expect(empty.stderr).toContain('no spans for ""');
+    // Must NOT succeed with the full unfiltered dump.
+    expect(empty.stdout).toBe("");
+  }, 20_000);
+
   it("doctor reports the observability subsystem with a span count", async () => {
     const r = await runCli(["doctor"]);
     expect(r.code).toBe(0);

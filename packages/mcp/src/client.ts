@@ -136,6 +136,90 @@ function withTimeout<T>(work: Promise<T>, ms: number, onTimeout: () => Promise<v
   });
 }
 
+// ── Child-process reaper ─────────────────────────────────────────────────────
+//
+// `StdioClientTransport.close()` (SDK-internal) already terminates its spawned
+// child correctly — end stdin, wait, SIGTERM, wait, SIGKILL — but that only
+// runs when OUR code reaches it. Two gaps let a spawned server (a real
+// process, e.g. `kyp-mem serve`) outlive us instead:
+//
+//   1. A caller that connects a client OUTSIDE a try/finally (or that throws
+//      between connecting and its own cleanup block) never calls `close()` at
+//      all — the reference is simply dropped.
+//   2. This process itself is killed by an UNHANDLED signal (SIGTERM is the
+//      default `kill`; SIGINT is Ctrl-C). Node's default disposition for a
+//      signal with no listener is immediate termination — no `finally`, no
+//      `exit` event, nothing runs. A stalled/killed CLI run leaks its child
+//      exactly this way.
+//
+// Neither gap is about the MCP protocol; both are "we forgot to clean up
+// before we disappeared." So cleanup lives at the process level, not the
+// call-site level: every stdio child's pid is tracked here the moment it
+// spawns, and independently of whatever the caller does, a SIGKILL reaper
+// runs on ('exit') — which Node fires for a normal return, an uncaught
+// exception, an unhandled rejection, and any explicit `process.exit()` — and
+// on SIGTERM, which is otherwise fatal-with-no-cleanup by default (see
+// `installExitReaper` below for why SIGINT is deliberately NOT hooked here).
+// A pid is removed the moment `McpClient.close()` actually reaps it, so the
+// reaper only ever touches pids nothing else has already accounted for (a
+// stale pid is never re-signaled — pids get reused by the OS).
+const trackedChildPids = new Set<number>();
+let reaperInstalled = false;
+
+/** Exported for tests only — kills every currently-tracked pid and clears the set. */
+export function reapTrackedChildren(): void {
+  for (const pid of trackedChildPids) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already dead, or never real — either way, nothing to do.
+    }
+  }
+  trackedChildPids.clear();
+}
+
+function installExitReaper(): void {
+  if (reaperInstalled) return;
+  reaperInstalled = true;
+  process.on("exit", reapTrackedChildren);
+  // SIGTERM (the default, unqualified `kill`) has NO listener anywhere else in
+  // this codebase, so Node's default disposition applies: instant termination,
+  // no 'exit' event, nothing runs. Registering one here trades that for "reap
+  // known children, then exit with the conventional 128+signal code" — a few
+  // extra milliseconds for a guarantee that would otherwise not exist.
+  //
+  // Deliberately NOT SIGINT: every command that owns an MCP session already
+  // installs its own `process.once("SIGINT", ...)` to cancel the run
+  // gracefully (see `commands.ts`), whose OWN `finally` block calls
+  // `mcp.close()`. Node calls every listener on a signal, so an unconditional
+  // `process.exit()` here would race that handler and cut its graceful
+  // cancellation off mid-flight. The ('exit') listener above still backstops
+  // that path — it fires once the graceful shutdown actually calls
+  // `process.exit()` (or returns normally) — without competing with it.
+  //
+  // SIGKILL cannot be trapped by any process, by design of the OS; there is
+  // no handling that, here or anywhere.
+  process.on("SIGTERM", () => {
+    reapTrackedChildren();
+    process.exit(143);
+  });
+}
+
+/**
+ * Track a spawned child so the exit reaper can SIGKILL it if we disappear
+ * first. Exported for tests only — normal callers get this for free through
+ * `McpClient.connectTransport`.
+ */
+export function trackChildPid(pid: number): void {
+  installExitReaper();
+  trackedChildPids.add(pid);
+}
+
+/** Stop tracking a pid — call once its OWN graceful close has already reaped it. */
+function untrackChildPid(pid: number): void {
+  trackedChildPids.delete(pid);
+}
+
 /**
  * Resolve a declared server config into a live SDK `Transport`, resolving any
  * auth refs through the `SecretResolver`. Exported for tests and for callers
@@ -227,6 +311,10 @@ export class McpClient {
   // covers the normal (declared-server) construction path.
   private readonly explicitTimeoutMs: number | undefined;
   private connected = false;
+  // The stdio child's pid, once known (see `connectTransport`) — tracked with
+  // the process-wide exit reaper below and untracked the moment `close()`
+  // reaps it itself. `undefined` for a non-stdio transport or before connect.
+  private childPid: number | undefined = undefined;
 
   constructor(config: McpServerConfig, secrets?: SecretResolver) {
     this.name = config.name;
@@ -255,6 +343,7 @@ export class McpClient {
       connected: false,
       trustServerAnnotations: opts?.trustAnnotations ?? false,
       explicitTimeoutMs: opts?.timeoutMs,
+      childPid: undefined,
     });
     return c;
   }
@@ -297,18 +386,35 @@ export class McpClient {
   /** Connect over a caller-supplied transport (in-process / stdio / remote). */
   async connectTransport(transport: Transport): Promise<void> {
     const ms = this.timeout() ?? DEFAULT_CONNECT_TIMEOUT_MS;
-    await withTimeout(
-      this.client.connect(transport, { timeout: ms }),
-      ms,
-      // Awaited by `withTimeout` before it rejects: drop the half-connected
-      // client so a stalled spawned child/socket is actually killed (the SDK's
-      // stdio transport SIGTERMs then SIGKILLs it) rather than merely
-      // abandoned to run forever. Never lets a broken close() re-hang us —
-      // `withTimeout` still settles even if this rejects.
-      () => this.client.close().catch(() => undefined),
-      `mcp "${this.name}": connect timed out after ${ms}ms (server did not complete the MCP handshake in time)`,
-    );
-    this.connected = true;
+    try {
+      await withTimeout(
+        this.client.connect(transport, { timeout: ms }),
+        ms,
+        // Awaited by `withTimeout` before it rejects: drop the half-connected
+        // client so a stalled spawned child/socket is actually killed (the SDK's
+        // stdio transport SIGTERMs then SIGKILLs it) rather than merely
+        // abandoned to run forever. Never lets a broken close() re-hang us —
+        // `withTimeout` still settles even if this rejects.
+        () => this.client.close().catch(() => undefined),
+        `mcp "${this.name}": connect timed out after ${ms}ms (server did not complete the MCP handshake in time)`,
+      );
+      this.connected = true;
+    } finally {
+      // Track the spawned child (if this is a stdio transport — `pid` is a
+      // stdio-only concept, absent/null on SSE/HTTP transports) regardless of
+      // whether connect ultimately succeeded, timed out, or threw: `start()`
+      // may have already spawned the process either way, and the exit reaper
+      // (see the module-level comment above `trackChildPid`) is the backstop
+      // for exactly the case where NEITHER the timeout's own `client.close()`
+      // NOR our caller's `finally` gets a chance to reap it. Re-tracking an
+      // already-closed pid is harmless — `process.kill` on a dead pid just
+      // throws ESRCH, caught and ignored.
+      const pid = (transport as { pid?: number | null }).pid;
+      if (typeof pid === "number") {
+        this.childPid = pid;
+        trackChildPid(pid);
+      }
+    }
   }
 
   private ensure(): void {
@@ -394,6 +500,12 @@ export class McpClient {
     if (!this.connected) return;
     await this.client.close();
     this.connected = false;
+    // Reaped properly via the graceful path above — the exit-reaper backstop
+    // no longer needs to (and must not: pids get reused by the OS) touch it.
+    if (this.childPid !== undefined) {
+      untrackChildPid(this.childPid);
+      this.childPid = undefined;
+    }
   }
 }
 
