@@ -6,8 +6,10 @@ import NexusKit
 ///
 /// Like `SessionsView`/`TasksView`, `WorkspaceModel` holds no
 /// `IntegrationsController` of its own, so this view builds one from
-/// `NexusBinary.discover` + `NexusClient` and rebuilds it whenever the project
-/// directory changes. Hooks aren't part of `IntegrationsController` (that type
+/// `workspace.binary` + `NexusClient` — the ONE binary
+/// `WorkspaceModel.attach()` already resolved, not a fresh
+/// `NexusBinary.discover` — and rebuilds it whenever the project directory
+/// changes. Hooks aren't part of `IntegrationsController` (that type
 /// only wraps `mcp`/`tools`), so this view loads them itself over the same
 /// client with a plain `NexusCommand.json(["config", "get", "hooks"])` call —
 /// verified for real against `nexus config get hooks -o json`, which returns
@@ -58,7 +60,7 @@ struct IntegrationsView: View {
                 HeroEmptyState(
                     icon: "terminal",
                     title: "No nexus executable",
-                    message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                    message: workspace.setupProblem ?? "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
                 )
             }
         }
@@ -221,7 +223,7 @@ struct IntegrationsView: View {
     // MARK: - Attach
 
     private func attach() async {
-        guard let binary = NexusBinary.discover(repoRoot: workspace.projectDirectory) else {
+        guard let binary = workspace.binary else {
             client = nil
             controller = nil
             return

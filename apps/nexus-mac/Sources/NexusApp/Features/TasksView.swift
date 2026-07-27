@@ -123,7 +123,7 @@ struct TasksView: View {
     }
 
     private func attach() async {
-        guard let binary = NexusBinary.discover(repoRoot: workspace.projectDirectory) else {
+        guard let binary = workspace.binary else {
             controller = nil
             return
         }

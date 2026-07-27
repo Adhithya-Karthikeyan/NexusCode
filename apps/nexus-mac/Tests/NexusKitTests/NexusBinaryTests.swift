@@ -182,4 +182,31 @@ final class NexusBinaryTests: XCTestCase {
         XCTAssertEqual(launch.executable, binary.url)
         XCTAssertTrue(launch.leadingArguments.isEmpty)
     }
+
+    // MARK: - `explainMissing`: the one place that explains a `nil` from `discover`
+    //
+    // This is what every "no nexus executable" state in the app now reads
+    // instead of independently guessing — `WorkspaceModel` and six view-level
+    // fallbacks all point here.
+
+    func testExplainMissingNamesTheExactNexusBinValueWhenOneIsSet() {
+        let message = NexusBinary.explainMissing(environment: ["NEXUS_BIN": "/env/does-not-exist"])
+        XCTAssertTrue(message.contains("/env/does-not-exist"), "the whole value of this message is naming the exact path — got: \(message)")
+        XCTAssertTrue(message.contains("NEXUS_BIN"))
+    }
+
+    func testExplainMissingUsesTheGenericMessageWhenNexusBinIsUnset() {
+        let message = NexusBinary.explainMissing(environment: [:])
+        XCTAssertTrue(message.contains("Install it"))
+        XCTAssertTrue(message.contains("NEXUS_BIN"), "still mentions the escape hatch, just not as the diagnosed cause")
+    }
+
+    func testExplainMissingTreatsBlankNexusBinAsUnsetTooJustLikeDiscoverDoes() {
+        // Same trim-then-check rule as `discover` itself — the two must never
+        // disagree about what counts as "set."
+        for blank in ["", "   "] {
+            let message = NexusBinary.explainMissing(environment: ["NEXUS_BIN": blank])
+            XCTAssertTrue(message.contains("Install it"), "blank (\"\(blank)\") must read as unset, not as a literal empty path")
+        }
+    }
 }

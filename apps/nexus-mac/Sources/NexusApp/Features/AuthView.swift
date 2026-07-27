@@ -11,11 +11,11 @@ import NexusKit
 /// no key value is ever held longer than the single write `AuthController`
 /// makes into a child process's stdin — see that type for the full contract.
 ///
-/// A no-argument `View`, like `AgentsView` and `SettingsView`: it reads the
-/// active project directory from `WorkspaceModel` (for `NexusBinary`
-/// discovery — the same repo-local dev-build fallback `WorkspaceModel`
-/// itself uses) but owns its `AuthController` entirely, so it can be dropped
-/// into `RootView`'s tab switch with no wiring beyond that.
+/// A no-argument `View`, like `AgentsView` and `SettingsView`: it reads
+/// `workspace.binary` — the ONE binary `WorkspaceModel.attach()` already
+/// resolved, not a fresh `NexusBinary.discover` — but owns its
+/// `AuthController` entirely, so it can be dropped into `RootView`'s tab
+/// switch with no wiring beyond that.
 struct AuthView: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
@@ -29,13 +29,13 @@ struct AuthView: View {
                 HeroEmptyState(
                     icon: "person.badge.key",
                     title: "No nexus executable",
-                    message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                    message: workspace.setupProblem ?? "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
                 )
             }
         }
         .task {
             guard controller == nil else { return }
-            guard let binary = NexusBinary.discover(repoRoot: workspace.projectDirectory) else { return }
+            guard let binary = workspace.binary else { return }
             let created = AuthController(
                 client: NexusClient(binary: binary),
                 binary: binary,

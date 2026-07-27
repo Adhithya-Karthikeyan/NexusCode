@@ -73,7 +73,7 @@ struct GitView: View {
                 HeroEmptyState(
                     icon: "terminal",
                     title: "No nexus executable",
-                    message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                    message: workspace.setupProblem ?? "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
                 )
             }
         }
@@ -121,7 +121,7 @@ struct GitView: View {
     // MARK: - Attach
 
     private func attach() async {
-        guard let binary = NexusBinary.discover(repoRoot: workspace.projectDirectory) else {
+        guard let binary = workspace.binary else {
             client = nil
             repoState = nil
             return

@@ -588,9 +588,14 @@ both of which survive their CLI-side verifications.
     `preferredProviders`, `allowProviders`, `denyProviders`, `maxCostMultiplier` (4),
     `contextSafetyMarginTokens` (1024), `showReceipts` (`true`), `nativeSessionSlots` (`true`).
 - **Expected behaviour:**
-  - Requirements are **inferred from the live request** (modalities, tools, reasoning, git, mcp),
-    then the target is assessed for compatibility; incompatibility produces `blockers[]` and
-    `warnings[]` rather than a silent downgrade (`switching.ts:39-49`).
+  - Requirements are **inferred from the live request** (modalities, tools, reasoning, git, mcp)
+    **and from the transcript already threaded into it** (`hasToolHistory`, `switching.ts:24-37`) —
+    a target whose `caps.tools` is false is blocked from a switch the moment the conversation already
+    contains a tool call/result, not just when the *next* turn wants to offer tools; the blocker names
+    both real options (stay on the current provider, or start a new conversation without that
+    history) rather than switching and failing on the next turn's request instead. Then the target is
+    assessed for compatibility; incompatibility produces `blockers[]` and `warnings[]` rather than a
+    silent downgrade (`switching.ts:39-49`).
   - A receipt records `preserved[]`, `adaptations[]`, `warnings[]` and whether the switch was
     `automatic` — the honesty artefact for "switching never loses capability".
   - In the TUI, an accepted switch re-points `activeProvider`/`activeModel` for the **next** turn
@@ -610,7 +615,8 @@ both of which survive their CLI-side verifications.
   `activeBackendModel` exist precisely so the UI cannot claim one provider while another answers.
   But: the teardown **discards the live session object** and the next submit starts a fresh
   `chat --persistent` with `--resume <sessionId>`, so continuity depends entirely on
-  `history.storePrompts` and text-only resume. No switch receipt is read or displayed. See
+  `history.storePrompts` (resume now restores the full conversation including any tool-call
+  exchange, not text-only — see §27 / GAPS G5). No switch receipt is read or displayed. See
   **GAPS G5**.
 - **Status:** `VERIFIED (execution pass)` for the **engine/CLI path** — a provider/model switch was
   confirmed end to end to preserve context. This does **not** clear **G5**: the app does not switch
@@ -2806,6 +2812,28 @@ evidence and proposes a design.
 - **Design:** resolve `const cwd = args.flags.get("cwd") ?? process.cwd()` once in `cmdAsk` and thread
   it into `buildPowerSources`, matching `cmdAgent`. Worth auditing the same way across every command
   that assembles context, since the flag is global in the grammar but honoured ad hoc.
+
+### G19. The TUI's `/model` and `/provider` picker preflight never consults `assessSwitchTarget`
+- **Evidence:** `preflightModelSwitch` / `preflightProviderSwitch` (`packages/cli/src/model-switch
+  .ts:285-311`) check only whether the provider is usable, whether the model is advertised, and
+  whether the circuit is blocked. Neither calls `assessSwitchTarget` or `inferSwitchRequirements` —
+  confirmed by reading both functions in full and grepping the file for either name (zero hits). This
+  is a *different* preflight from `performSwitch`'s `{"type":"switch",…}` control line
+  (`commands.ts:4023`), which does call them and does get every blocker, including the
+  `hasToolHistory` one added alongside this entry.
+- **Consequence:** picking `/model` or `/provider` in the TUI is not just missing the
+  `hasToolHistory` blocker (§19) — it is missing ALL of `assessSwitchTarget`'s checks: modality
+  support, structured output, reasoning, file-edit/shell/git/approval-gate/MCP capability, context
+  window compaction (`adaptRequestForSwitch` is never called either, so no history compaction
+  happens on a switch to a smaller model), and the cost-multiplier guard. A user can switch, mid
+  tool-using conversation, straight into a provider that cannot accept any of it, entirely through
+  the TUI's own supported switch UI.
+- **Design:** thread `SwitchContext` a `ChatRequest`-shaped view of the live session (transcript +
+  active tools) and have both preflights build `inferSwitchRequirements`/`assessSwitchTarget` the
+  same way `performSwitch` already does, surfacing `assessment.blockers` as the rejection `reason`
+  instead of (or alongside) the current usable/advertised/circuit checks. Out of scope for the
+  `hasToolHistory` pass itself, which only changed `assessSwitchTarget` — this preflight needs its
+  own change to even call it.
 
 ---
 
