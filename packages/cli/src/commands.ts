@@ -412,7 +412,7 @@ async function runOrchestration(opts: RunOrchestrationOptions): Promise<Orchestr
         io.err(
           dimErr(
             `[usage] in=${outcome.usage.inputTokens} out=${outcome.usage.outputTokens} ` +
-              `cost=$${(outcome.usage.costUsd ?? 0).toFixed(6)}\n`,
+              `cost=${formatCostUsd(outcome.usage.costUsd)}${costIncompleteNote(outcome.runs)}\n`,
           ),
         );
       }
@@ -500,7 +500,7 @@ function renderTextTrailer(outcome: OrchestrationOutcome, single: boolean, io: I
       io.err(
         dimErr(
           `[usage] ${w.adapterId}:${w.model} in=${w.usage.inputTokens} out=${w.usage.outputTokens} ` +
-            `cost=$${(w.usage.costUsd ?? 0).toFixed(6)} finish=${w.finishReason ?? w.status}\n`,
+            `cost=${formatCostUsd(w.usage.costUsd)} finish=${w.finishReason ?? w.status}\n`,
         ),
       );
     }
@@ -626,7 +626,7 @@ function renderLaneSummary(runs: readonly RunResult[], io: Io, winnerRunId?: str
     io.err(
       dimErr(
         `[lane ${r.adapterId}:${r.model}] status=${r.status}${win} ` +
-          `out=${r.usage.outputTokens} cost=$${(r.usage.costUsd ?? 0).toFixed(6)}\n`,
+          `out=${r.usage.outputTokens} cost=${formatCostUsd(r.usage.costUsd)}\n`,
       ),
     );
   }
@@ -644,7 +644,7 @@ function runJson(r: RunResult): Record<string, unknown> {
     usage: {
       inputTokens: r.usage.inputTokens,
       outputTokens: r.usage.outputTokens,
-      costUsd: r.usage.costUsd ?? 0,
+      costUsd: r.usage.costUsd ?? null,
     },
   };
   if (r.error) {
@@ -666,7 +666,8 @@ function toCompareJson(outcome: OrchestrationOutcome): Record<string, unknown> {
     usage: {
       inputTokens: outcome.usage.inputTokens,
       outputTokens: outcome.usage.outputTokens,
-      costUsd: outcome.usage.costUsd ?? 0,
+      costUsd: outcome.usage.costUsd ?? null,
+      costIncomplete: costIsIncomplete(outcome.runs),
     },
   };
 }
@@ -798,7 +799,7 @@ function renderCachedResponse(
         usage: {
           inputTokens: cached.usage.inputTokens,
           outputTokens: cached.usage.outputTokens,
-          costUsd: cached.usage.costUsd ?? 0,
+          costUsd: cached.usage.costUsd ?? null,
         },
       })}\n`,
     );
@@ -1484,7 +1485,7 @@ function agentResultJson(r: AgentRunResult): Record<string, unknown> {
     usage: {
       inputTokens: r.usage.inputTokens,
       outputTokens: r.usage.outputTokens,
-      costUsd: r.usage.costUsd ?? 0,
+      costUsd: r.usage.costUsd ?? null,
     },
   };
 }
@@ -1497,7 +1498,7 @@ function renderAgentTrailer(r: AgentRunResult, io: Io): void {
   );
   io.err(
     `[usage] in=${r.usage.inputTokens} out=${r.usage.outputTokens} ` +
-      `cost=$${(r.usage.costUsd ?? 0).toFixed(6)}\n`,
+      `cost=${formatCostUsd(r.usage.costUsd)}\n`,
   );
 }
 
@@ -2386,7 +2387,8 @@ function toOrchestrationJson(outcome: OrchestrationOutcome): Record<string, unkn
     usage: {
       inputTokens: outcome.usage.inputTokens,
       outputTokens: outcome.usage.outputTokens,
-      costUsd: outcome.usage.costUsd ?? 0,
+      costUsd: outcome.usage.costUsd ?? null,
+      costIncomplete: costIsIncomplete(outcome.runs),
     },
   };
   if (outcome.merged) {
@@ -2425,7 +2427,7 @@ function renderOrchestrationText(outcome: OrchestrationOutcome, io: Io): void {
   io.err(
     dimErr(
       `[usage] in=${outcome.usage.inputTokens} out=${outcome.usage.outputTokens} ` +
-        `cost=$${(outcome.usage.costUsd ?? 0).toFixed(6)}\n`,
+        `cost=${formatCostUsd(outcome.usage.costUsd)}${costIncompleteNote(outcome.runs)}\n`,
     ),
   );
 }
@@ -5892,10 +5894,9 @@ export async function cmdHistory(args: ParsedArgs, io: Io = defaultIo): Promise<
     }
     for (const r of rows) {
       const when = new Date(r.created_at).toISOString();
-      const cost = (r.cost_usd ?? 0).toFixed(6);
       io.out(
         `${when}  ${r.run_id}  ${r.adapter_id}:${r.model}  ${r.status}  ` +
-          `in=${r.input_tokens} out=${r.output_tokens} $${cost}\n`,
+          `in=${r.input_tokens} out=${r.output_tokens} ${formatCostUsd(r.cost_usd)}\n`,
       );
     }
     return 0;
