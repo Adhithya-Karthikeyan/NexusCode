@@ -317,11 +317,18 @@ receipt treatment in the UI.
 
 ### ⬜ OPEN — the short list for whoever picks this up
 
-1. 🔄 **Five test files remain un-retrofitted** to `spawnCli` and flake under
-   full-suite parallel load (`chat-persistent`, `chat-resume`, `chat-quota`,
-   `chat-memory`, `handoff-failover`). They pass in isolation every time. Audit
-   each for raw-stdin dependence FIRST — `spawnCli` closes stdin, which is
-   exactly why `stdin-hang.integration.test.ts` must NEVER adopt it. IN FLIGHT.
+1. ✅ **The five flaky files are retrofitted.** All of `chat-persistent`,
+   `chat-resume`, `chat-quota`, `chat-memory`, `handoff-failover` now go through
+   `spawnCli`; the audit found none of them holds stdin open, so none needed to
+   stay out. **`stdin-hang.integration.test.ts` is confirmed untouched** (empty
+   `git diff --stat`) and must stay that way forever — `spawnCli` closes stdin,
+   which would hide the exact bug that file exists to catch. Five consecutive
+   full-suite runs, all 228/2260 green, load sampled before and after each.
+
+   The rule for future files: leave one out ONLY if it holds stdin open across a
+   real wait-for-response cycle. `chat-approvals` is the shape that would
+   qualify; none of these five were.
+
 2. ⬜ **Assistive-technology input is reasoned about, not tested.** The composer
    question below is settled as far as *our* code goes, but nobody has run live
    Dictation or Voice Control against the app. That is the one check that would
