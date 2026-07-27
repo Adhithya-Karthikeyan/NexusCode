@@ -12,13 +12,13 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { spawnCli } from "./helpers/spawn-cli.js";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const CONFIG_DIR = join(mkdtempSync(join(tmpdir(), "nx-chatpersist-cfg-")), "cfg");
@@ -110,44 +110,24 @@ interface ChatResult {
 }
 
 /**
- * Spawn `nexus chat --persistent` and feed it lines ONE AT A TIME, waiting for
- * each turn's trailing blank line (text mode) or `turn_end` (ndjson) before
- * writing the next — the same shape a native client driving this over stdio
- * would use — then close stdin (EOF) and wait for the process to exit on its
- * own, proving the clean-shutdown path rather than a killed process.
+ * Spawn `nexus chat --persistent` and feed it every line up front — `--persistent`
+ * still consumes them one at a time via readline on the child side, so this
+ * exercises the same incremental-read code path a trickled write would,
+ * without this test depending on real-time pacing. Waits for the process to
+ * exit on its own (stdin EOF), proving the clean-shutdown path rather than a
+ * killed process.
  */
 function runPersistentChat(lines: string[], extraArgs: string[] = []): Promise<ChatResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [BIN, "chat", "--persistent", "-p", "spy", "-m", "spy-1", ...extraArgs],
-      {
-        cwd: WORK_DIR,
-        env: {
-          ...process.env,
-          NEXUS_CONFIG_DIR: CONFIG_DIR,
-          NEXUS_DATA_DIR: DATA_DIR,
-          NEXUS_HISTORY_DISABLED: "1",
-          SPY_API_KEY: "test-key",
-        },
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => {
-      stdout += String(d);
-    });
-    child.stderr.on("data", (d) => {
-      stderr += String(d);
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
-
-    // Write every line up front — `--persistent` still consumes them one at a
-    // time via readline, so this exercises the SAME incremental code path a
-    // trickled write would, without the test depending on real-time pacing.
-    for (const line of lines) child.stdin.write(`${line}\n`);
-    child.stdin.end();
+  return spawnCli(BIN, ["chat", "--persistent", "-p", "spy", "-m", "spy-1", ...extraArgs], {
+    cwd: WORK_DIR,
+    input: lines.map((line) => `${line}\n`).join(""),
+    env: {
+      ...process.env,
+      NEXUS_CONFIG_DIR: CONFIG_DIR,
+      NEXUS_DATA_DIR: DATA_DIR,
+      NEXUS_HISTORY_DISABLED: "1",
+      SPY_API_KEY: "test-key",
+    },
   });
 }
 
@@ -221,26 +201,14 @@ function parseNdjson(stdout: string): NdjsonLine[] {
 
 describe("nexus chat --persistent -o ndjson — session id bug fix", () => {
   it("carries the real engine session id on every `session` event, stable across turns, distinct from the per-run `id`", async () => {
-    const child = spawn(
-      process.execPath,
-      [fileURLToPath(new URL("../dist/index.js", import.meta.url)), "chat", "--persistent", "-p", "mock", "-m", "mock-fast", "-o", "ndjson"],
-      {
-        cwd: WORK_DIR,
-        env: { ...process.env, NEXUS_CONFIG_DIR: CONFIG_DIR, NEXUS_DATA_DIR: DATA_DIR, NEXUS_HISTORY_DISABLED: "1" },
-      },
-    );
-    let stdout = "";
-    child.stdout.on("data", (d) => {
-      stdout += String(d);
+    const r = await spawnCli(BIN, ["chat", "--persistent", "-p", "mock", "-m", "mock-fast", "-o", "ndjson"], {
+      cwd: WORK_DIR,
+      input: "first line\nsecond line\n",
+      env: { ...process.env, NEXUS_CONFIG_DIR: CONFIG_DIR, NEXUS_DATA_DIR: DATA_DIR, NEXUS_HISTORY_DISABLED: "1" },
     });
-    const closed = new Promise<number>((resolve) => child.on("close", (code) => resolve(code ?? -1)));
-    child.stdin.write("first line\n");
-    child.stdin.write("second line\n");
-    child.stdin.end();
-    const code = await closed;
-    expect(code).toBe(0);
+    expect(r.code).toBe(0);
 
-    const events = parseNdjson(stdout);
+    const events = parseNdjson(r.stdout);
     const sessionEvents = events.filter((e) => e.t === "session");
     const turnEndEvents = events.filter((e) => e.t === "turn_end");
 

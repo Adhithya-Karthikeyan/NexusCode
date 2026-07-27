@@ -359,6 +359,44 @@ struct ConversationView: View {
     /// gets exactly the plain fill this already was.
     private var composerCard: some View {
         HStack(alignment: .bottom, spacing: Space.sm) {
+            // **Cannot be driven via the accessibility API — verified, not a
+            // defect. Do not re-investigate this.** Setting this field's
+            // `kAXValueAttribute` via `AXUIElementSetAttributeValue` updates
+            // what AX reports back (and what's drawn) but never reaches
+            // `draft`'s `@State` storage, so `canSend` below stays false and
+            // no submit fires even though the text visibly "took" — a
+            // convincing-looking false negative if you don't know the cause.
+            //
+            // Reproduced in total isolation: a throwaway one-file SwiftUI
+            // app with nothing but `TextField(text:) + @State + Button
+            // (disabled:)` — no NexusCode/NexusKit code at all — shows the
+            // identical failure on this toolchain (Swift 6.3.3 / macOS
+            // 26.5.2), for BOTH a plain single-line field and this
+            // `axis: .vertical` one. Also tried the "replace selection" AX
+            // shape (`kAXSelectedTextRangeAttribute` +
+            // `kAXSelectedTextAttribute`, the closer analogue to how an
+            // IME/AT commits text) instead of a raw value slam: same
+            // failure. So this is a general SwiftUI-on-AppKit accessibility-
+            // bridge limitation, not something wrong with this view.
+            //
+            // This does NOT mean real assistive tech is blocked here.
+            // Dictation and Voice Control deliver typed text through the
+            // standard text-input/first-responder pipeline — the same route
+            // a live keystroke takes — not by writing `kAXValueAttribute`
+            // directly, so they reach `draft` the normal way real typing
+            // does. (Not independently re-verified against live Dictation/
+            // Voice Control in this pass — enabling either is a system-wide
+            // toggle, judged too invasive to flip and revert just to
+            // confirm this; the conclusion rests on the isolated repro
+            // above plus the documented shape of macOS text-input delivery.)
+            //
+            // Implication for automation: don't set this field's AX value
+            // and expect the Send button/submit to react — it structurally
+            // can't. To verify submit behavior, call
+            // `ConversationController.submit(_:)` directly (NexusKit has a
+            // test target); to verify the composer's on-screen appearance,
+            // screenshots/the §C2 headless render are unaffected by any of
+            // this.
             TextField("Message NexusCode…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...8)

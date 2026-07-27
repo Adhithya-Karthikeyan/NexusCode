@@ -353,6 +353,32 @@ receipt treatment in the UI.
   it, then pressed Cmd+Z three times — possibly destroying their concurrent
   work. Screenshots + accessibility-resolved `AXPress` inside
   `window "NexusCode"` ONLY. Never automate text entry into the live app.
+- **The composer's `TextField` cannot be driven via `AXUIElementSetAttributeValue`
+  either — verified, not a defect, do not re-investigate.** An agent set the
+  composer's `kAXValueAttribute` directly, saw the text render correctly, but
+  the Send button's `AXEnabled` stayed `false` and nothing spawned. Traced to
+  ground: `draft` (`ConversationView.swift`) is a plain SwiftUI `@State`, and
+  `canSend` is gated on it; setting `kAXValueAttribute` updates what AX
+  reports back and what's drawn, but never reaches that `@State` — a
+  throwaway one-file SwiftUI app with nothing but `TextField(text:) + @State
+  + Button(disabled:)`, zero NexusCode code, reproduces the identical failure
+  on this toolchain (Swift 6.3.3 / macOS 26.5.2), for both a plain
+  single-line field and an `axis: .vertical` one. The "replace selection" AX
+  shape (`kAXSelectedTextRangeAttribute` + `kAXSelectedTextAttribute`, closer
+  to how an IME/AT actually commits text) fails identically — this is a
+  general SwiftUI-on-AppKit accessibility-bridge limitation, not a
+  NexusCode bug, and not believed to block real Dictation/Voice Control
+  (those deliver text via the standard text-input/first-responder pipeline a
+  live keystroke also uses, not a raw `kAXValueAttribute` write) — though
+  that belief was reasoned from the isolated repro and documented macOS
+  text-input architecture, not confirmed against live Dictation/Voice
+  Control, since flipping either on system-wide was judged too invasive to
+  do just for this check. **Do not attempt to fill the composer via AX and
+  expect the Send button/submit to react.** To verify submit behavior, call
+  `ConversationController.submit(_:)` directly (NexusKit has a test target
+  for exactly this); screenshots/§C2 rendering remain the right tool for the
+  composer's on-screen appearance. See the doc comment at `composerCard`'s
+  `TextField` in `ConversationView.swift` for the same note in situ.
 - Nothing is done without the binary/app actually run and observed. A green
   suite has twice described features that did not work.
 

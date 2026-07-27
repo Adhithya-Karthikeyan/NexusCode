@@ -9,13 +9,13 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { spawnCli } from "./helpers/spawn-cli.js";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const CONFIG_DIR = join(mkdtempSync(join(tmpdir(), "nx-chatmem-cfg-")), "cfg");
@@ -102,28 +102,16 @@ afterAll(async () => {
 });
 
 function runChat(input: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, "chat", "-p", "spy", "-m", "spy-1"], {
-      cwd: WORK_DIR,
-      env: {
-        ...process.env,
-        NEXUS_CONFIG_DIR: CONFIG_DIR,
-        NEXUS_DATA_DIR: DATA_DIR,
-        NEXUS_HISTORY_DISABLED: "1",
-        SPY_API_KEY: "test-key",
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => {
-      stdout += String(d);
-    });
-    child.stderr.on("data", (d) => {
-      stderr += String(d);
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
-    child.stdin.end(input);
+  return spawnCli(BIN, ["chat", "-p", "spy", "-m", "spy-1"], {
+    cwd: WORK_DIR,
+    input,
+    env: {
+      ...process.env,
+      NEXUS_CONFIG_DIR: CONFIG_DIR,
+      NEXUS_DATA_DIR: DATA_DIR,
+      NEXUS_HISTORY_DISABLED: "1",
+      SPY_API_KEY: "test-key",
+    },
   });
 }
 

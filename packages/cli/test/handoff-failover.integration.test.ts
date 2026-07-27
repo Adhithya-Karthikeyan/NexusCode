@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnCli } from "./helpers/spawn-cli.js";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const ROOT = mkdtempSync(join(tmpdir(), "nx-handoff-wire-"));
@@ -149,47 +149,34 @@ afterAll(async () => {
 });
 
 function runRoute(): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        BIN,
-        "route",
-        "test",
-        "--optimize",
-        "explicit",
-        "--allow",
-        "spent/spent-model",
-        "--allow",
-        "healthy/healthy-model",
-        "--retries",
-        "1",
-        "-o",
-        "json",
-        "Continue the Aurora migration",
-      ],
-      {
-        cwd: WORK_DIR,
-        env: {
-          ...process.env,
-          NEXUS_CONFIG_DIR: CONFIG_DIR,
-          NEXUS_DATA_DIR: DATA_DIR,
-          NEXUS_VAULT_PASSPHRASE: "handoff-test-passphrase",
-          WIRE_API_KEY: "test-key",
-        },
+  return spawnCli(
+    BIN,
+    [
+      "route",
+      "test",
+      "--optimize",
+      "explicit",
+      "--allow",
+      "spent/spent-model",
+      "--allow",
+      "healthy/healthy-model",
+      "--retries",
+      "1",
+      "-o",
+      "json",
+      "Continue the Aurora migration",
+    ],
+    {
+      cwd: WORK_DIR,
+      env: {
+        ...process.env,
+        NEXUS_CONFIG_DIR: CONFIG_DIR,
+        NEXUS_DATA_DIR: DATA_DIR,
+        NEXUS_VAULT_PASSPHRASE: "handoff-test-passphrase",
+        WIRE_API_KEY: "test-key",
       },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
-  });
+    },
+  );
 }
 
 describe("routed provider handoff on the HTTP wire", () => {
