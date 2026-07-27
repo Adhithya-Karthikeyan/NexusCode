@@ -29,8 +29,15 @@ struct TasksView: View {
                     AddTaskField(title: $newTitle) { title in
                         Task { await controller.add(title: title) }
                     }
+                    // Dismissible `.warning`: every source of `controller.error`
+                    // (a failed refresh, add, status change, or delete) leaves
+                    // the queue below fully valid either way — see
+                    // `InlineBanner`'s doc for why that's unconditional. Even
+                    // the one non-network case ("no subcommand sets status X
+                    // directly") is still informational in exactly the same
+                    // sense: nothing on screen is blocked by it.
                     if let error = controller.error, !controller.tasks.isEmpty {
-                        ErrorBanner(message: error) { controller.error = nil }
+                        InlineBanner(message: error) { controller.error = nil }
                     }
                 }
             }
