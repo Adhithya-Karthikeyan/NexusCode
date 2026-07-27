@@ -225,6 +225,64 @@ public enum UiEvent: Sendable, Hashable {
         public let hit: Bool
     }
 
+    /// An explicit in-process provider/model switch (`nexus chat --persistent`'s
+    /// `{"type":"switch",…}` control line): the SAME live session, same
+    /// engine, just starts dispatching its NEXT turn to a different adapter —
+    /// not the app's older tear-down-and-`--resume`. Fires exactly once per
+    /// request, accepted or refused, never a silent no-op. Mirrors the
+    /// TypeScript `switch` event (`packages/core/src/projection.ts`) exactly;
+    /// real bytes for both outcomes captured live via `chat --persistent`
+    /// over a FIFO (see `UiEventDecodingTests`).
+    public struct Switch: Sendable, Hashable, Codable {
+        /// One side of a switch. Never optional, even when nothing resolved:
+        /// on an immediate rejection (target provider not usable at all)
+        /// `to.modelId` decodes as an empty string, not a missing key —
+        /// verified live.
+        public struct Target: Sendable, Hashable, Codable {
+            public let providerId: String
+            public let modelId: String
+        }
+
+        public let lane: String
+        public let from: Target
+        public let to: Target
+        /// `false` means the switch was REFUSED — `to` never took effect,
+        /// the session stayed on `from`, and `blockers` says exactly why.
+        /// Mirrors `ProviderSwitchAssessment.compatible`
+        /// (`packages/core/src/switching.ts`): an explicit switch that would
+        /// silently lose a capability the conversation is using (tools, a
+        /// modality, reasoning, …) is rejected outright, never degraded.
+        public let accepted: Bool
+        /// Every reason the switch was refused. Empty when `accepted`.
+        public let blockers: [String]
+        /// Non-fatal caveats either way — e.g. "requires compaction for an
+        /// N-token window".
+        public let warnings: [String]
+        /// What the switch machinery claims survived. Empty when NOT
+        /// `accepted`.
+        ///
+        /// Read literally, NOT as a blanket guarantee — this is a FIXED,
+        /// always-identical list (`makeSwitchReceipt`,
+        /// `packages/core/src/switching.ts`) naming what the TRANSCRIPT AS
+        /// IT EXISTS carries forward (conversation transcript, assembled
+        /// project context, system constraints, provider-neutral transfer
+        /// state). It is silent on tool-call history because tool calls are
+        /// never IN the transcript to begin with: `replyMessages`
+        /// (`packages/core/src/engine.ts`) collapses every turn's reply to
+        /// its final TEXT before it ever reaches `session.transcript` — true
+        /// at every turn boundary, switch or not, resume or not. This
+        /// describes what a switch does NOT additionally lose, never that
+        /// anything round-trips it. A consumer must not render this list as
+        /// "nothing was lost."
+        public let preserved: [String]
+        /// e.g. "compacted N older message(s) for target context". Empty
+        /// when NOT `accepted`.
+        public let adaptations: [String]
+        /// Free-text cause — a client-supplied reason, or why an automatic
+        /// switch fired.
+        public let reason: String
+    }
+
     /// The lane this event belongs to, when it has one.
     ///
     /// Lanes are how a multi-provider run keeps concurrent agents apart: a
@@ -245,6 +303,7 @@ public enum UiEvent: Sendable, Hashable {
         case .error(let e): return e.lane
         case .done(let e): return e.lane
         case .cache(let e): return e.lane
+        case .switch(let e): return e.lane
         case .unknown: return nil
         }
     }
