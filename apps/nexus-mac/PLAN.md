@@ -37,7 +37,38 @@
 > The app was rendering all eight tabs correctly earlier in the session; four
 > were audited at two window sizes. Nothing is lost.
 
-## A0. NEXT TASK — use the resolution cause in the UI
+## A0. ROUND 2 — issues found on first real use (2026-07-27)
+
+The app now runs (the earlier no-window symptom was environmental and cleared).
+Using it surfaced these:
+
+- ✅ **CRITICAL: switching provider did nothing.** Picked Codex, UI showed
+  `codex`/`gpt-5-codex`, and the reply said "I'm Claude". Cause: `-p`/`-m` are
+  baked into a process's argv at spawn, and `submitToPersistentSession` only
+  spawned when `session == nil` — so a switch left the ORIGINAL backend running
+  and answering. FIXED: the backend now relaunches when provider/model changes,
+  `--resume`ing the same session so context survives. Guarded by
+  `testSwitchingProviderRelaunchesTheBackend`. `activeBackendProvider` is now
+  public so the UI can never again claim one provider while another answers.
+- 🔄 **Markdown is not rendered.** Assistant replies show literal `**bold**`,
+  `#` and `-`. Block parser going into NexusKit (testable), renderer into
+  NexusApp. Must be streaming-safe: an unterminated code fence is normal
+  mid-stream and must not swallow the rest of the message.
+- 🔄 **`anthropic` missing from the provider picker** despite being signed in
+  (oauth, ~432m left). Picker shows only claude-code/codex/gemini.
+- 🔄 **Model picker lists stale/wrong versions.**
+- 🔄 **Themes are terminal palettes, not app themes.** Root cause is
+  architectural: they are GENERATED from `packages/theme`, an ANSI/terminal
+  system — flat solid tokens with no material, elevation, gradient or state
+  layer. Correct for a terminal, which is why the app reads cheap. Being
+  replaced with a hand-designed app theme model.
+- 🔄 **Layout/UX reads cheap and boring.** Research-first: a spec is being
+  produced before any more building.
+- 🔄 **OMC for every provider, not just Claude.** Under investigation — the
+  honest answer may be that NexusCode's own role/OODA orchestration is already
+  provider-agnostic and simply is not exposed in the app.
+
+## A0b. NEXT TASK — use the resolution cause in the UI
 
 ✅ DONE: structured deny reason. The CLI emits TWO `approval` events per gated
 call, same `id`. `resolution` absent = pending; present = settled, carrying

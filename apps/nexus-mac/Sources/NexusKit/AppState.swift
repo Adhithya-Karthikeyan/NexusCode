@@ -126,6 +126,27 @@ public final class ConversationController {
     /// a single prompt and settle, so they keep using the one-shot client.
     private var session: PersistentSession?
 
+    /// The provider/model the LIVE backend process was actually launched with.
+    ///
+    /// `-p`/`-m` are baked into a process's argv at spawn time, so changing the
+    /// picker cannot change what an already-running process is talking to.
+    /// Without tracking this, switching provider mid-conversation silently kept
+    /// answering from the ORIGINAL provider while the UI displayed the new one —
+    /// the user is told they are talking to Codex and is in fact talking to
+    /// Claude. Comparing against the current selection is what makes a switch
+    /// real.
+    private var launchedWith: (provider: String?, model: String?)?
+
+    /// What the LIVE backend process is actually talking to, as opposed to what
+    /// the picker currently shows. `nil` when no backend is running.
+    ///
+    /// Exposed because the difference is meaningful: argv is fixed at spawn, so
+    /// a picker change only takes effect on the next launch. Surfacing the real
+    /// value means the UI can never again claim one provider while another is
+    /// answering — the defect this pair of properties exists to prevent.
+    public var activeBackendProvider: String? { launchedWith?.provider }
+    public var activeBackendModel: String? { launchedWith?.model ?? nil }
+
     public init(client: NexusClient, binary: NexusBinary, workingDirectory: URL? = nil) {
         self.client = client
         self.binary = binary
@@ -202,6 +223,18 @@ public final class ConversationController {
     /// Single-lane: write the prompt to the conversation that is already open,
     /// starting it on first use.
     private func submitToPersistentSession(_ text: String) {
+        // A provider/model change must RESTART the backend — argv is fixed at
+        // spawn. `--resume` carries the same engine session across the restart,
+        // so the conversation and its context survive the switch.
+        if session != nil, let launched = launchedWith,
+           launched.provider != provider || launched.model != model {
+            let stale = session
+            session = nil
+            task?.cancel()
+            task = nil
+            Task { await stale?.stop() }
+        }
+
         if session == nil {
             var extras: [String] = []
             if let provider { extras += ["-p", provider] }
@@ -217,6 +250,7 @@ public final class ConversationController {
                 extraArguments: extras
             )
             session = started
+            launchedWith = (provider, model)
             task = Task { [weak self] in
                 guard let self else { return }
                 for await item in await started.start() {
@@ -226,6 +260,7 @@ public final class ConversationController {
                 // The backend exited; the next submit starts a fresh one rather
                 // than writing into a dead pipe.
                 self.session = nil
+                self.launchedWith = nil
                 self.isRunning = false
             }
         }
@@ -276,6 +311,7 @@ public final class ConversationController {
     public func endSession() {
         let ending = session
         session = nil
+        launchedWith = nil
         Task { await ending?.stop() }
         cancel()
     }

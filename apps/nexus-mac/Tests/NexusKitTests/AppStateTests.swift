@@ -101,6 +101,63 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(c.isRunning)
     }
 
+    // MARK: - Provider switching (regression)
+
+    func testSwitchingProviderRelaunchesTheBackend() async throws {
+        let c = controller()
+        c.mode = .ask
+        c.provider = "alpha"
+        c.model = "alpha-1"
+
+        c.submit("first")
+        // The backend is spawned with `-p alpha` baked into argv.
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+        XCTAssertEqual(c.activeBackendModel, "alpha-1")
+
+        // Settle the turn WITHOUT ending the session — `cancel()` frees the
+        // composer but deliberately leaves the backend alive, which is exactly
+        // the state a real user switches provider in.
+        c.cancel()
+
+        // The user picks a different provider and sends again.
+        c.provider = "beta"
+        c.model = "beta-1"
+        c.submit("second")
+
+        // REGRESSION GUARD. The original implementation only spawned when
+        // `session == nil`, so a switch left the ORIGINAL process running: the
+        // picker said Codex while Claude kept answering. The backend must now
+        // be relaunched against the new selection.
+        XCTAssertEqual(c.activeBackendProvider, "beta")
+        XCTAssertEqual(c.activeBackendModel, "beta-1")
+    }
+
+    func testSameProviderDoesNotRelaunchTheBackend() {
+        let c = controller()
+        c.mode = .ask
+        c.provider = "alpha"
+
+        c.submit("first")
+        let before = c.activeBackendProvider
+        c.cancel()
+        c.submit("second")
+
+        // Restarting on every turn would throw away the conversation's process
+        // (and its warm state) for nothing — only a CHANGE justifies it.
+        XCTAssertEqual(c.activeBackendProvider, before)
+    }
+
+    func testFanOutModesDoNotTouchThePersistentBackend() {
+        let c = controller()
+        c.mode = .compare
+        c.backends = ["one", "two"]
+        c.submit("compare this")
+
+        // compare/race are one-shot dispatches, not a held conversation, so they
+        // must never spawn or disturb the persistent session.
+        XCTAssertNil(c.activeBackendProvider)
+    }
+
     // MARK: - Agent rows
 
     func testLaneRowsReportStreamingAndToolCounts() throws {

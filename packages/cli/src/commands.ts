@@ -3711,7 +3711,13 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
   const config = await loadEffectiveConfig();
 
   if (sub === "list" || sub === "status") {
-    const runtime = await buildRuntime(config);
+    // `buildAuthedRuntime` (not plain `buildRuntime`) so the default "anthropic"
+    // OAuth adapter registers when the user has run `nexus login anthropic` — see
+    // `registerDefaultAnthropicProvider`'s doc comment: it only registers when a
+    // caller passes an `authRegistry`, and a signed-in-but-not-keyed "anthropic"
+    // must still show up (greyed or not) in `providers list`/`status`, exactly
+    // like every other provider — this is the picker's source of truth.
+    const runtime = await buildAuthedRuntime(config);
     const circuit = openProviderCircuit(config);
     const circuitStatuses = circuit?.listStatuses({ includeClosed: true }) ?? [];
     if (output === "json") {
@@ -3867,7 +3873,11 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
  */
 export async function cmdModels(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // `buildAuthedRuntime`, matching `cmdProviders` above: `nexus models anthropic`
+  // must resolve the same default "anthropic" adapter the picker lists, which
+  // only registers when the auth registry is wired in (OAuth "login like Claude
+  // Code" credential resolution) — see `registerDefaultAnthropicProvider`.
+  const runtime = await buildAuthedRuntime(config);
   const output = parseOutput(args);
 
   // Target provider resolution mirrors the run commands:
