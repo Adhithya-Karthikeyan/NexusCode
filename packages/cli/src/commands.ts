@@ -1091,12 +1091,16 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   // same engine bus. Without a role, the fast native tool loop below is used.
   const roleFlag = args.flags.get("role");
   if (roleFlag !== undefined) {
+    // `runAgentOoda` validates/applies `--effort` itself (it's also reached
+    // directly from `plan`, which never comes through here).
     const res = await runAgentOoda(args, io, roleFlag, prompt);
     if (res.result && output !== "json" && output !== "ndjson") {
       renderAgentTrailer(res.result, io);
     }
     return res.code;
   }
+  const effortResult = parseEffortFlag(args, io, "agent");
+  if ("code" in effortResult) return effortResult.code;
 
   const config = await loadEffectiveConfig();
   // Enterprise subsystem (§25): off by default. When on, its private-model
@@ -1122,6 +1126,7 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
 
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
   const system = args.flags.get("system") ?? defaultSystemPrompt();
+  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "agent", io);
 
   // Tool registry (built-in suite) + permission gate.
   const toolRegistry = new ToolRegistry();
@@ -1190,7 +1195,12 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     input: turn.input,
     idempotencyKey: randomUUID(),
   };
-  if (system !== undefined) run.params = { system };
+  if (system !== undefined || reasoning) {
+    run.params = {
+      ...(system !== undefined ? { system } : {}),
+      ...(reasoning ? { reasoning } : {}),
+    };
+  }
 
   // Wave-10 hooks/webhooks (§24): a HookBus + WebhookDispatcher built from
   // config. Its guarded pre/post-tool interceptor rides the kernel's additive

@@ -90,30 +90,53 @@ type KeyringEntryCtor = new (service: string, username: string) => KeyringEntry;
  */
 export const DEFAULT_KEYCHAIN_TIMEOUT_MS = 5_000;
 
-/** Race `work` against `ms`, resolving to `fallback` (never rejecting) on timeout. */
-function withTimeout<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+/**
+ * Race `work` against `ms`, resolving to `fallback` (never rejecting) on
+ * timeout. Reports whether it actually timed out — distinct from a genuine
+ * (fast) rejection/resolution to `fallback` — so a caller can tell "the OS
+ * said no" (unremarkable, already handled below) apart from "the OS never
+ * answered" (worth a diagnostic; see `keychainTimeoutMessage`).
+ */
+function withTimeout<T>(work: Promise<T>, ms: number, fallback: T): Promise<{ value: T; timedOut: boolean }> {
   return new Promise((resolve) => {
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      resolve(fallback);
+      resolve({ value: fallback, timedOut: true });
     }, ms);
     work.then(
       (value) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(value);
+        resolve({ value, timedOut: false });
       },
       () => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(fallback);
+        resolve({ value: fallback, timedOut: false });
       },
     );
   });
+}
+
+/**
+ * The diagnostic for a keychain call that hit `DEFAULT_KEYCHAIN_TIMEOUT_MS`
+ * (or a caller-supplied override) — printed to stderr, never silent, so
+ * "why did my key stop being found" doesn't send the next person hunting
+ * through the retry/dedupe/network code a plain "timed out" would imply.
+ * `op` is the verb that timed out ("read"/"write"/"delete"); `ref` is the
+ * logical secret name (e.g. "anthropic"), not the resolved key value.
+ */
+function keychainTimeoutMessage(op: string, ref: string, ms: number): string {
+  return (
+    `secrets: keychain ${op} for "${ref}" timed out after ${ms}ms — most likely macOS is waiting ` +
+    `on an authorization prompt this process cannot display (a stored item whose reading process ` +
+    `has not been granted access blocks exactly like this, indefinitely, with no dialog visible in ` +
+    `a headless/dispatched run); falling back to the encrypted file store\n`
+  );
 }
 
 /**
@@ -166,7 +189,8 @@ export class KeychainBackend {
     const e = await this.entry(ref);
     if (!e) return null;
     try {
-      const v = await withTimeout(e.getPassword(), this.timeoutMs, undefined);
+      const { value: v, timedOut } = await withTimeout(e.getPassword(), this.timeoutMs, undefined);
+      if (timedOut) process.stderr.write(keychainTimeoutMessage("read", ref, this.timeoutMs));
       return v && v.length > 0 ? v : null;
     } catch {
       // NoEntry (or platform ambiguity) → treat as absent.
@@ -182,11 +206,12 @@ export class KeychainBackend {
       // caller (`ChainedSecretStore.set`) already falls through to the
       // encrypted-file backend on `false`, exactly like a genuine write
       // failure. `ok` distinguishes "genuinely wrote" from "gave up waiting".
-      const ok = await withTimeout(
+      const { value: ok, timedOut } = await withTimeout(
         e.setPassword(value).then(() => true),
         this.timeoutMs,
         false,
       );
+      if (timedOut) process.stderr.write(keychainTimeoutMessage("write", ref, this.timeoutMs));
       return ok;
     } catch {
       // Platform/keychain failure (e.g. no default keychain in a headless or
@@ -200,7 +225,9 @@ export class KeychainBackend {
     const e = await this.entry(ref);
     if (!e) return false;
     try {
-      return await withTimeout(e.deletePassword(), this.timeoutMs, false);
+      const { value: ok, timedOut } = await withTimeout(e.deletePassword(), this.timeoutMs, false);
+      if (timedOut) process.stderr.write(keychainTimeoutMessage("delete", ref, this.timeoutMs));
+      return ok;
     } catch {
       return false;
     }
