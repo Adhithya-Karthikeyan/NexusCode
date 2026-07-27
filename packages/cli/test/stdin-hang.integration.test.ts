@@ -12,6 +12,16 @@
  * why every existing test suite passed while the real bug was live: the
  * harness itself could never reproduce an open, un-ended stdin. This file
  * spawns directly and deliberately leaves `child.stdin` open and untouched.
+ *
+ * Second-order regression, also covered here: the first version of
+ * `STDIN_FIRST_BYTE_TIMEOUT_MS` (2s) was tight enough to misdiagnose a
+ * legitimately slow producer (`curl slow-api | nexus ask`, a script that
+ * computes before printing) as an inherited-idle pipe and silently drop its
+ * input. Once a prompt argument short-circuits away the common case (above),
+ * every remaining `readStdin` caller has stdin as its ONLY input source —
+ * nothing to fall back to — so the bound is now a generous 30s by default
+ * (`NEXUS_STDIN_TIMEOUT_MS` overrides it; the tests below use a small
+ * override to stay fast rather than actually waiting 30s).
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -47,13 +57,24 @@ afterEach(() => {
 });
 
 /**
- * Spawn the built CLI with stdin an OPEN, non-TTY pipe that is never written
- * to and never closed — the exact shape of an inherited-but-silent stdin.
- * Resolves once the process exits on its own, OR is killed after `hardCapMs`
- * (a real bug reproduction, not a false pass: if the fix regresses, this
- * test fails with a clear timeout instead of hanging the whole suite).
+ * Spawn the built CLI with stdin an OPEN, non-TTY pipe. Resolves once the
+ * process exits on its own, OR is killed after `hardCapMs` (a real bug
+ * reproduction, not a false pass: if the fix regresses, this test fails with
+ * a clear timeout instead of hanging the whole suite).
+ *
+ * `delayed`, when given, writes `delayed.text` to stdin (then closes it)
+ * after `delayed.afterMs` — simulating a real producer that is merely SLOW
+ * to produce its first byte (`curl slow-api | nexus ask`), as opposed to the
+ * default (omitted) behavior of never writing or closing stdin at all, which
+ * simulates an inherited-but-silent descriptor with no producer behind it at
+ * all. These are deliberately different scenarios with different correct
+ * outcomes — see the two describe blocks below.
  */
-function spawnWithOpenStdin(args: string[], hardCapMs: number): Promise<Result> {
+function spawnWithOpenStdin(
+  args: string[],
+  hardCapMs: number,
+  opts: { extraEnv?: Record<string, string>; delayed?: { text: string; afterMs: number } } = {},
+): Promise<Result> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const child = spawn(process.execPath, [BIN, ...args], {
@@ -65,6 +86,7 @@ function spawnWithOpenStdin(args: string[], hardCapMs: number): Promise<Result> 
         NEXUSCODE_DATA_DIR: DATA_DIR,
         NEXUS_HISTORY_DISABLED: "1",
         NEXUS_VAULT_PASSPHRASE: "test-passphrase",
+        ...opts.extraEnv,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -74,12 +96,20 @@ function spawnWithOpenStdin(args: string[], hardCapMs: number): Promise<Result> 
     child.stdout.on("data", (d) => (stdout += String(d)));
     child.stderr.on("data", (d) => (stderr += String(d)));
     child.on("error", reject);
-    // Deliberately: no child.stdin.write(), no child.stdin.end().
+    // Deliberately: no immediate child.stdin.write(), no immediate .end() —
+    // unless `delayed` asks for exactly that, later.
+    let delayTimer: NodeJS.Timeout | undefined;
+    if (opts.delayed) {
+      delayTimer = setTimeout(() => {
+        child.stdin.end(opts.delayed!.text);
+      }, opts.delayed.afterMs);
+    }
     const hardCap = setTimeout(() => {
       child.kill("SIGKILL");
     }, hardCapMs);
     child.on("close", (code, signal) => {
       clearTimeout(hardCap);
+      clearTimeout(delayTimer);
       liveChild = undefined;
       resolve({ code, signal, stdout, stderr, elapsedMs: Date.now() - start });
     });
@@ -87,14 +117,15 @@ function spawnWithOpenStdin(args: string[], hardCapMs: number): Promise<Result> 
 }
 
 describe("stdin hang regression — a prompt argument must never wait on stdin", () => {
-  it("`ask` with a prompt argument and an open, never-closing stdin completes promptly (not the 2s stdin bound, not a hang)", async () => {
+  it("`ask` with a prompt argument and an open, never-closing stdin completes promptly (not the 30s stdin bound, not a hang)", async () => {
     const r = await spawnWithOpenStdin(["ask", "-p", "mock", "-m", "mock-fast", "hi there"], 8_000);
     expect(r.signal).toBeNull(); // null signal ⇒ exited on its own, not SIGKILLed by our hard cap
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("hi there");
-    // Comfortably under STDIN_FIRST_BYTE_TIMEOUT_MS (2000ms) — readPrompt must
-    // skip the stdin wait entirely when a prompt argument is present, not
-    // merely have it bounded.
+    // Comfortably under STDIN_FIRST_BYTE_TIMEOUT_MS (30_000ms default) —
+    // readPrompt must skip the stdin wait entirely when a prompt argument is
+    // present, not merely have it bounded (an 8s hard cap on this test would
+    // be a strange way to prove "under 30s" otherwise).
     expect(r.elapsedMs).toBeLessThan(1_500);
   }, 10_000);
 
@@ -110,17 +141,53 @@ describe("stdin hang regression — a prompt argument must never wait on stdin",
 });
 
 describe("stdin hang regression — a genuine stdin read (no positional alternative) is bounded, not silent", () => {
+  // Uses NEXUS_STDIN_TIMEOUT_MS to exercise the real 30s-default LOGIC on a
+  // short, fast-test-friendly bound instead of actually waiting 30s — the
+  // mechanism under test (give up after N ms of total silence, diagnose it)
+  // does not care what N is, and the production default is a separate,
+  // one-line assertion further down (`readStdin default is 30s`).
+  const FAST_BOUND_MS = 400;
+
   it("`chat` (batch mode, no --persistent) with an open, never-closing stdin gives up within the bound instead of hanging forever", async () => {
-    const r = await spawnWithOpenStdin(["chat", "-p", "mock", "-m", "mock-fast"], 8_000);
+    const r = await spawnWithOpenStdin(["chat", "-p", "mock", "-m", "mock-fast"], 8_000, {
+      extraEnv: { NEXUS_STDIN_TIMEOUT_MS: String(FAST_BOUND_MS) },
+    });
     expect(r.signal).toBeNull(); // must resolve on its own well before the 8s hard cap
-    // Nothing was ever piped, so readStdin gives up at STDIN_FIRST_BYTE_TIMEOUT_MS
-    // (2000ms) and `chat` treats that exactly like `</dev/null`: no lines, exit 0.
+    // Nothing was ever piped, so readStdin gives up at the bound and `chat`
+    // treats that exactly like `</dev/null`: no lines, exit 0.
     expect(r.code).toBe(0);
-    expect(r.elapsedMs).toBeGreaterThanOrEqual(1_900);
-    expect(r.elapsedMs).toBeLessThan(6_000);
+    expect(r.elapsedMs).toBeGreaterThanOrEqual(FAST_BOUND_MS - 100);
+    expect(r.elapsedMs).toBeLessThan(FAST_BOUND_MS + 4_000);
     // Never silent: the diagnostic explains WHY it waited and gave up.
     expect(r.stderr).toContain("stdin is open but produced no input");
   }, 10_000);
+
+  it("case C — a producer that is silent LONGER than a naive short bound, then emits, must still succeed (the regression this bound-raise fixes)", async () => {
+    // Mirrors the exact real-world report: `{ sleep 4; echo "…"; } | nexus ask`
+    // failed under the original 2s bound because the first byte legitimately
+    // arrived after it. Reproduced here at test speed: the producer writes
+    // AFTER the fast bound above would already have given up, but still well
+    // within a generous one — proving a slow-but-real producer is not mistaken
+    // for an inherited-idle pipe merely for not being instant.
+    const r = await spawnWithOpenStdin(["ask", "-p", "mock", "-m", "mock-fast"], 8_000, {
+      extraEnv: { NEXUS_STDIN_TIMEOUT_MS: "2000" },
+      delayed: { text: "delayed question", afterMs: 700 }, // > FAST_BOUND_MS, < the 2000ms bound here
+    });
+    expect(r.signal).toBeNull();
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("delayed question");
+    // Never diagnosed as a timeout — it wasn't one.
+    expect(r.stderr).not.toContain("stdin is open but produced no input");
+  }, 10_000);
+});
+
+describe("stdin hang regression — the shipped default is genuinely generous, not just the test override", () => {
+  it("readStdin's default bound (no override) is 30s, not the original 2s that regressed slow pipes", () => {
+    const src = readFileSync(fileURLToPath(new URL("../src/commands.ts", import.meta.url)), "utf8");
+    const m = src.match(/return Number\.isFinite\(parsed\) && parsed > 0 \? parsed : (\d[\d_]*);/);
+    expect(m).not.toBeNull();
+    expect(Number(m![1]!.replace(/_/g, ""))).toBe(30_000);
+  });
 });
 
 describe("stdin hang regression — piping still works exactly as documented", () => {

@@ -212,19 +212,41 @@ function parseOutput(args: ParsedArgs): OutputMode {
  * ANOTHER process (a wrapper script, an orchestrator, this very CLI's own
  * subprocess-provider path) that does not explicitly redirect stdin inherits
  * whatever open-but-silent descriptor its parent had, and `for await (const c
- * of process.stdin)` waits for data-or-EOF that may never come. That is a real
- * reported hang (`ask -p mock "hi"` — a prompt WAS given, so the eventual fix
- * is "don't need stdin at all" for that path, but every OTHER caller here —
- * `chat`'s batch-stdin read, `readPastedCode`, `pickProvider`'s piped-choice
- * read — has no alternative input source to fall back to and must actually
- * wait on stdin), so the guard belongs in the read itself, once, not
- * per-call-site: bound only the "is anyone there" wait. Once ANY byte (or
- * EOF) has actually arrived, the rest of the read proceeds with NO further
- * time pressure — a slow-but-real producer (`slow-command | nexus ask`,
- * `git diff | nexus explain`) is never cut off mid-stream, only a stdin that
- * stays open, non-TTY, and produces nothing at all is.
+ * of process.stdin)` waits for data-or-EOF that may never come. That was a
+ * real reported hang (`ask -p mock "hi"` — a prompt WAS given) — fixed by
+ * `readPrompt` skipping stdin entirely whenever a positional is present (see
+ * below), NOT by this bound; a prompt argument means `readStdin` is never
+ * even called.
+ *
+ * Once that short-circuit exists, EVERY remaining caller of `readStdin` —
+ * `readPrompt` with no positional, `chat`'s batch-stdin read, `readPastedCode`,
+ * `pickProvider`'s piped-choice read — is a case where stdin is the ONLY
+ * possible input source: there is nothing else to fall back to, so reaching
+ * this read at all already means either a real pipe or a genuine mistake, not
+ * "incidentally still had stdin open." That flips the cost/benefit of a tight
+ * bound: cutting it short doesn't save a hang anymore (the actual hang is
+ * already fixed above), it just silently discards real input from anything
+ * slower to produce its first byte than the bound — `curl slow-api | nexus
+ * ask`, `docker logs … | nexus explain`, any script that computes before it
+ * prints. A first version of this bound (2s) regressed exactly that: a
+ * producer that thought for 4s before writing was misdiagnosed as an
+ * inherited-idle pipe and its input silently dropped.
+ *
+ * So this is deliberately generous rather than snappy — long enough to cover
+ * a slow cold-start API call or script startup, while still being a REAL,
+ * finite bound (never "forever," and always the clear stderr diagnostic
+ * below on the way out) for the genuinely-nothing-there case. `NEXUS_
+ * STDIN_TIMEOUT_MS` overrides it (mainly so tests can exercise the timeout
+ * path without a 30s test). Once ANY byte (or EOF) has actually arrived, the
+ * rest of the read proceeds with NO further time pressure — a slow-but-real
+ * producer is never cut off mid-stream once it has started, only a stdin
+ * that stays open, non-TTY, and produces nothing at all, ever, is.
  */
-const STDIN_FIRST_BYTE_TIMEOUT_MS = 2_000;
+const STDIN_FIRST_BYTE_TIMEOUT_MS = (() => {
+  const raw = process.env["NEXUS_STDIN_TIMEOUT_MS"];
+  const parsed = raw !== undefined ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
+})();
 
 /**
  * Read all of stdin, bounded (see `STDIN_FIRST_BYTE_TIMEOUT_MS`). `""` on a
@@ -291,10 +313,13 @@ async function readStdin(): Promise<string> {
  * prompt argument already in hand — the actual cause of a real hang: a
  * prompt WAS given, but the process still waited on an inherited, open,
  * silent stdin it was never going to use. `readStdin` is now bounded on its
- * own (see `STDIN_FIRST_BYTE_TIMEOUT_MS`), which would have capped that same
- * hang at 2s — but a prompt argument means there is nothing to gain from
- * reading stdin AT ALL, so this skips the wait entirely rather than merely
- * shortening it.
+ * own too (see `STDIN_FIRST_BYTE_TIMEOUT_MS`) — but that bound is deliberately
+ * generous (a real fallback-free stdin read must tolerate a slow producer),
+ * so relying on it here instead of skipping the read outright would trade an
+ * instant answer for a multi-second one whenever a prompt argument is already
+ * in hand. A prompt argument means there is nothing to gain from reading
+ * stdin AT ALL, so this skips the wait entirely rather than merely bounding
+ * it.
  */
 async function readPrompt(args: ParsedArgs): Promise<string> {
   const promptArg = args.positionals.join(" ").trim();
