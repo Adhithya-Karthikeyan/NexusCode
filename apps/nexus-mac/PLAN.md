@@ -125,7 +125,7 @@ a tall scroll view.*
 
 ### STATE AS OF 2026-07-28 (overnight run)
 
-**Green:** Swift **314/314** (7.6s) · TypeScript **2215/2215** (222 files, exit 0)
+**Green:** Swift **350/350** (9.2s) · TypeScript **2249/2249** (228 files, exit 0)
 · both builds clean · 45/45 CLI commands healthy · zero hangs ·
 `docs/CAPABILITIES.md` (2908 lines) · `apps/nexus-mac/UI-INVENTORY.md`
 (885 lines, ~102 controls).
@@ -314,6 +314,38 @@ switch does not ADDITIONALLY lose", **not** as a completeness claim — see the
 tool-call finding above.
 ⬜ Swift side: the `switch` UiEvent needs mirroring into `UiEvent.swift` and a
 receipt treatment in the UI.
+
+### ⬜ OPEN — the short list for whoever picks this up
+
+1. **`assessSwitchTarget` needs a tool-history blocker.** Now that tool calls
+   persist, switching to a provider that cannot accept tool blocks is a REAL
+   failure where it used to be inert — and it surfaces as a provider 400 on the
+   NEXT turn, misattributed. Infer from the transcript, not the current request.
+   Blocked must mean blocked. IN FLIGHT (`switching.ts` + `commands.ts`).
+2. **Binary resolution happens in SIX places.** `NexusApp.swift` plus five
+   feature views each call `NexusBinary.discover` independently. It is a single
+   fact about the environment, and it now carries real semantics (fail-closed
+   override, distinguishable failure causes) that six call sites must each get
+   right forever. `NexusApp.swift` has the good failure message; the five views
+   still show the generic one that tells a user who set `NEXUS_BIN` to set
+   `NEXUS_BIN`. **Fixing the five strings is the change that guarantees a
+   seventh instance later** — consolidate instead, and put the "explain this
+   failure" logic in NexusKit where it can actually be tested.
+3. **Five test files remain un-retrofitted** to `spawnCli` and flake under
+   full-suite parallel load (`chat-persistent`, `chat-resume`, `chat-quota`,
+   `chat-memory`, `handoff-failover`). They pass in isolation. Audit each for
+   raw-stdin dependence FIRST — `spawnCli` closes stdin, which is exactly why
+   `stdin-hang.integration.test.ts` must never adopt it.
+4. **A switch receipt has no visible treatment.** `ViewState.switches.last`
+   carries it. A BLOCKED switch especially must not be silently absorbed.
+   Proposed wording, kept because it is honest: *"switched to X — conversation
+   and context carried over; tool-call history is not (never was, any turn
+   boundary)."*
+5. **`Turn.cacheHit` has no visible treatment.** A cached turn's $0.00 is a
+   CONFIRMED zero (no model call happened) — a third state beyond unknown and
+   priced-zero.
+6. Setting the composer's text programmatically does not enable Send. Unknown
+   whether that is a real bug or an AX-harness limitation with SwiftUI `@State`.
 
 ### Hard rules learned the hard way
 - **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An

@@ -191,6 +191,31 @@ public struct NexusBinary: Sendable {
         return candidates.first(where: fileExists).map { NexusBinary(url: URL(fileURLWithPath: $0)) }
     }
 
+    /// Explains why `discover` returned `nil` — the ONE place that knows how
+    /// to turn that failure into a message a user can act on. Before this,
+    /// `WorkspaceModel` (the one caller that gets it right) and six
+    /// view-level fallbacks each said something different — most of them the
+    /// same generic string, unable to tell "nothing anywhere" apart from "you
+    /// pointed `NEXUS_BIN` somewhere and it's wrong." Every caller routes
+    /// through here now, so there is exactly one explanation to keep honest.
+    ///
+    /// Distinguishing those two causes is unambiguous BECAUSE of `discover`'s
+    /// own contract: a set `NEXUS_BIN` that fails to resolve fails the WHOLE
+    /// lookup outright rather than falling through to a repo build or an
+    /// install location (see that function's doc). So if it's set at all,
+    /// that is always the reason a `nil` came back — never a coincidence
+    /// alongside some other gap this message would otherwise have to guess at.
+    public static func explainMissing(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        if let override = environment["NEXUS_BIN"]?.trimmingCharacters(in: .whitespacesAndNewlines), !override.isEmpty {
+            return "NEXUS_BIN is set to \"\(override)\", but nothing executable exists there."
+        }
+        return """
+            Could not find the `nexus` executable. Install it, or set NEXUS_BIN \
+            to its path, or point this window at a NexusCode checkout that has \
+            been built.
+            """
+    }
+
     /// A `.js` entrypoint is run through `node`; a native binary runs directly.
     var launch: (executable: URL, leadingArguments: [String]) {
         if url.pathExtension == "js" {

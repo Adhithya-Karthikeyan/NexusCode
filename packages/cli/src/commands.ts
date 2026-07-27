@@ -4008,17 +4008,16 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
    * exactly as they were — the current turn, and every one after it until a
    * switch is accepted, keeps going to the CURRENT target).
    *
-   * What this does NOT do, despite the receipt's `preserved` list: recover
-   * tool-call history. `replyMessages` (`@nexuscode/core`'s `engine.ts`)
-   * already collapses every turn's reply to its final text before it ever
-   * reaches `session.transcript` — true for EVERY turn boundary, switch or
-   * not, resume or not (`RunResult.toolCalls` exists and is simply never
-   * read there). `assessSwitchTarget`/`adaptRequestForSwitch` operate on
-   * `session.transcript` as it already is; they cannot restore content that
-   * was never written to it. So a switch carries forward exactly as much
-   * tool-call context as staying on the same provider would have — none —
-   * and the `switch` event's `preserved` field must be read as "not
-   * ADDITIONALLY lost by switching," never as "tool calls survive this."
+   * `session.transcript` now DOES carry a turn's full tool-call exchange
+   * (`replyMessages` in `@nexuscode/core`'s `engine.ts` threads
+   * `RunResult.toolExchange` verbatim instead of collapsing to text-only) —
+   * so the receipt's `preserved` list is no longer aspirational for tool
+   * calls either, the same way it wasn't for the rest of the conversation.
+   * `assessSwitchTarget`/`adaptRequestForSwitch` operate on `session
+   * .transcript` as it already is: a target whose `caps.tools` can't accept
+   * that history is now a BLOCKER (`hasToolHistory`, `switching.ts`), refused
+   * before the switch happens, not silently dropped or discovered as a 400
+   * on the next turn.
    */
   async function performSwitch(targetProvider: string, targetModel: string | undefined): Promise<void> {
     const emit = (ev: UiEvent): void => renderStreaming(ev, output === "ndjson" ? "ndjson" : "text", io);

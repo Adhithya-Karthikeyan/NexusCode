@@ -24,6 +24,17 @@ export type ProviderSwitchPolicy = "strict" | "fallback" | "ask";
 export interface ProviderSwitchRequirements {
   modalities: Array<"text" | "image" | "audio">;
   tools: boolean;
+  /**
+   * True when the conversation being threaded into this request ALREADY
+   * contains tool-call content (a `role: "tool"` message, or a
+   * `tool_use`/`tool_result` content block). Distinct from `tools` above,
+   * which answers a different question — is a tool being OFFERED for the
+   * NEXT turn — and can be false even when this is true (e.g. a switch
+   * control line, which is not itself a new turn and offers no tools of its
+   * own). Set from the transcript, never from what's being asked for next;
+   * see `assessSwitchTarget`'s blocker for why this matters.
+   */
+  hasToolHistory: boolean;
   structuredOutput: boolean;
   reasoning: boolean;
   systemPrompt: boolean;
@@ -135,6 +146,15 @@ function modalitiesOf(messages: readonly Message[]): Array<"text" | "image" | "a
   return [...values];
 }
 
+/** See `ProviderSwitchRequirements.hasToolHistory`'s doc comment. */
+function transcriptHasToolHistory(messages: readonly Message[]): boolean {
+  return messages.some(
+    (m) =>
+      m.role === "tool" ||
+      m.content.some((b) => b.type === "tool_use" || b.type === "tool_result"),
+  );
+}
+
 export function inferSwitchRequirements(
   request: ChatRequest,
   execution: ProviderSwitchRuntimeOptions["executionRequirements"] = {},
@@ -142,6 +162,7 @@ export function inferSwitchRequirements(
   return {
     modalities: modalitiesOf(request.messages),
     tools: (request.tools?.length ?? 0) > 0,
+    hasToolHistory: transcriptHasToolHistory(request.messages),
     structuredOutput: request.responseFormat !== undefined,
     reasoning: request.reasoning?.enabled === true,
     systemPrompt: Boolean(request.system?.trim()),
@@ -196,6 +217,21 @@ export function assessSwitchTarget(
     if (!modalities.has(modality)) blockers.push(`${modality} input is unsupported`);
   }
   if (requirements.tools && !caps.tools) blockers.push("tool calling is unsupported");
+  // Distinct from the check above: this conversation already contains tool
+  // calls/results (not merely "the next turn wants to offer tools"). Blocked
+  // means blocked — never switch-and-hope that the target's wire format can
+  // somehow absorb history it was never designed to accept; a caller that
+  // let this through would fail on the NEXT turn, misattributed to whatever
+  // that turn happened to be, not to the switch that actually caused it. The
+  // message states both real options, since silently losing tool history is
+  // exactly the kind of "recoverable-looking but isn't" failure this project
+  // keeps finding.
+  if (requirements.hasToolHistory && !caps.tools) {
+    blockers.push(
+      `${providerId} cannot accept the tool-call history already in this conversation — ` +
+        "stay on the current provider, or start a new conversation without that history to switch",
+    );
+  }
   if (requirements.structuredOutput && !caps.structuredOutput) {
     blockers.push("structured output is unsupported");
   }
