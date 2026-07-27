@@ -39,7 +39,7 @@ import {
 import { userText, type ContentBlock, type Message, type StreamChunk } from "@nexuscode/shared";
 import { PermissionGate, ToolRegistry, type Tool } from "@nexuscode/tools";
 import type { TaskStore } from "@nexuscode/tasks";
-import { agentMetaChunk } from "./events.js";
+import { agentMetaChunk, isAgentMeta } from "./events.js";
 import { AsyncQueue } from "./queue.js";
 import { defaultEvaluate, defaultPlan, defaultVerify } from "./policies.js";
 import type { AgentRegistry } from "./roles.js";
