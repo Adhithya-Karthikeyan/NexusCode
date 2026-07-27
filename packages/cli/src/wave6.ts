@@ -103,6 +103,26 @@ function sessionLabel(m: SessionMeta): string {
   return m.name ? `${m.name} (${m.sessionId})` : m.sessionId;
 }
 
+/**
+ * Format a session's total cost. `m.costUsd` sums only the runs with known
+ * pricing (see `SessionMeta.costIncomplete`) — when the session also has
+ * unpriced runs, that sum is not the true total, so it must say so rather
+ * than read as a confident number.
+ */
+function sessionCostLabel(m: SessionMeta): string {
+  const known = `$${m.costUsd.toFixed(6)}`;
+  return m.costIncomplete ? `${known} (incomplete)` : known;
+}
+
+/**
+ * Format a per-run/per-event cost. `null`/`undefined` means genuinely UNKNOWN
+ * pricing, distinct from a real `$0` for a free provider — never coerce with
+ * `?? 0` (see `@nexuscode/core`'s `projection.ts`).
+ */
+function formatCostUsd(costUsd: number | null | undefined): string {
+  return costUsd == null ? "unpriced" : `$${costUsd.toFixed(6)}`;
+}
+
 export async function cmdSession(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const sub = args.positionals[0] ?? "list";
   const output = parseOutput(args);
@@ -125,7 +145,7 @@ export async function cmdSession(args: ParsedArgs, io: Io = defaultIo): Promise<
         const when = new Date(m.updatedAt).toISOString();
         io.out(
           `${when}  ${sessionLabel(m)}  ${m.provider ?? "-"}:${m.model ?? "-"}  ` +
-            `turns=${m.turnCount} runs=${m.runCount} $${m.costUsd.toFixed(6)}\n`,
+            `turns=${m.turnCount} runs=${m.runCount} ${sessionCostLabel(m)}\n`,
         );
       }
       return 0;
@@ -152,7 +172,7 @@ export async function cmdSession(args: ParsedArgs, io: Io = defaultIo): Promise<
       io.out(`  provider ${meta.provider ?? "-"}:${meta.model ?? "-"}\n`);
       io.out(
         `  turns=${meta.turnCount} runs=${meta.runCount} events=${meta.eventCount} ` +
-          `in=${meta.inputTokens} out=${meta.outputTokens} $${meta.costUsd.toFixed(6)}\n`,
+          `in=${meta.inputTokens} out=${meta.outputTokens} ${sessionCostLabel(meta)}\n`,
       );
       for (const r of runs) {
         io.out(`  run ${r.run_id.slice(0, 12)} ${r.adapter_id}:${r.model} ${r.status}\n`);
@@ -283,7 +303,7 @@ function replayLine(ev: UiEvent): string | null {
     case "error":
       return `\n[error] ${ev.code}: ${ev.message}`;
     case "usage":
-      return `\n[usage] in=${ev.inputTokens} out=${ev.outputTokens} $${ev.costUsd.toFixed(6)}`;
+      return `\n[usage] in=${ev.inputTokens} out=${ev.outputTokens} ${formatCostUsd(ev.costUsd)}`;
     case "done":
       return `\n[done] ${ev.finishReason}`;
     default:

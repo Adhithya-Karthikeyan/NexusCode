@@ -472,18 +472,115 @@ source — not guessed.
   agent tool-loop appears not to terminate on that provider). CLI-side.
 - ⬜ Directory picker opened on launch once, unreproduced — watch for it.
 
+## C2. Visual verification WITHOUT a window — use this
+
+macOS in this session refuses to show a window even for a minimal 4-line SwiftUI
+app, so the screenshot gate was unavailable. It is available again by another
+route: a headless `ImageRenderer` harness that compiles the REAL `Markdown.swift`
++ `DesignSystem.swift` against NexusKit and renders them to PNG with no window
+server.
+
+Harness: `<scratchpad>/uicheck`, PNGs in `<scratchpad>/shots/`.
+
+**Known artifact:** `ImageRenderer` does not draw `ScrollView` CONTENT — verified
+with a control (a bare `ScrollView { Text }` renders blank while the same `Text`
+renders fine). So code blocks appear empty. That is the harness, not the app, and
+sizes are still computed correctly, so measurements hold.
+
+This is how the numbers in §C3 were obtained. **Prefer it to reasoning about
+layout.** It has already disproved one suspicion (`CodeBlock` was thought to
+force a fixed 260pt box; measurement showed 44pt for 2 lines, 260pt for 40) and
+caught defects a read missed.
+
+## C3. Review findings — open (2026-07-27)
+
+Ordered worst first. Everything below was re-verified against disk at HEAD.
+
+1. **HIGH — `Card` draws drop shadows** (`DesignSystem.swift:128`), contradicting
+   the house rule documented 60 lines above it in the SAME file, which records
+   shadows as the reason an earlier pass "looked flat rather than layered".
+   Every dark theme gets opacity 0.16@r6 and 0.24@r12 → a grey smudge halo
+   around every card over a near-black canvas. The border also silently moved
+   from translucent `theme.hairline` to an opaque token.
+2. **HIGH — the 660pt reading column made the layout read as two screens.** The
+   transcript is capped and centered but the composer and control strip stay
+   full-bleed: at 1280 (pane 1031pt) the text sits in ~186pt gutters while the
+   composer spans full width, so **the placeholder starts ~165pt left of the
+   user's own message directly above it.** My instruction to cap the column was
+   incomplete, not wrong — the composer needs the same spine.
+3. **MEDIUM — the control strip HIDES provider and model at 900pt.** Pane 651
+   minus padding = 635 usable; trailing cluster needs ~290, leaving ~345 for a
+   leading cluster needing ~636. Both pickers scroll out of sight with
+   `showsIndicators: false` giving no hint. Pre-existing, but it would make the
+   just-fixed picker bugs invisible at a common width.
+4. **MEDIUM — assistant body copy renders in `textSecondary`** while headings are
+   `textPrimary` (`Markdown.swift:327`) — washed out for long-form reading. And
+   inline code fills `surfaceInset` on a `surfaceBase` canvas: **1.069:1**,
+   imperceptible, despite a comment promising "a real, unmistakable departure".
+5. **MEDIUM — 11.1ms per re-render on every token delta** (`Markdown.swift:321`).
+   The PARSER is fine (1.1ms for a 10.6k message); `AttributedString(markdown:)`
+   is rebuilt for every block on every body evaluation. Most of a 16ms frame
+   budget, growing with message length. Same shape at `DesignSystem.swift:105`:
+   `theme.appTheme` rebuilds 7 nested structs and copies 74 strings per access,
+   and `Card` touches it 6× per body evaluation.
+6. **MEDIUM — latent, fires exactly when theme wiring lands**
+   (`DesignSystem.swift:116-122`): `Card` fills an opaque surface then overlays a
+   `Material` ON TOP. A material blurs its backdrop — here the opaque fill
+   beneath — so it renders as a flat scrim, never translucency. Inert only
+   because the bridge forces `.solid`.
+7. **LOW** — hover copy button overlaps the first line now that the card padding
+   is gone (`ConversationView.swift:1007`).
+8. **LOW** — constants bypassing the scale: `Space.xs + 2` IS `Space.sm`
+   (`Markdown.swift:178`), plus `Space.lg + 4` and raw `3`/`4`/`6.5`.
+
+**Correction to the earlier note on `CountPill`:** it is NOT purely pre-existing.
+The shipping `nexus-noir` scores ~5.3 on `accentFg`/`accentMuted` — fine — while
+all seven new themes land in 1.50–3.70. `paper-nexus` at 1.89 was already bad, so
+it is pre-existing for SOME of the 16 and a genuine regression for others.
+
+**Contrast test coverage is the real gap, not the palettes.** The WCAG helper is
+real computed luminance, not hardcoded. Missing pairs: `textMuted` on
+`surfaceBase` (fails at 3.15 Studio / 3.53 Daylight / 3.69 Basalt — and that
+token is what markdown H3/H4, list markers, `SectionHeader` and `Metric` all
+render in, all under 18pt), and anything on `surfaceRaised`/`surfaceOverlay`,
+where cards actually put text.
+
+### Verified good — do not churn
+- **No greedy-frame/modifier-order bug in any new code.** Looked for specifically.
+  `HeroEmptyState` still has padding before the flexible frame; the original fix
+  is intact.
+- Composition holds at 620pt and 360pt: hanging indents align under the first
+  line's TEXT, nested lists indent, nothing clips.
+- Streaming safety is real at BOTH levels — parser AND inline. `**bold`,
+  `` `code ``, `[link](htt`, `*it`, `~~strike`, `100% **done` all return literal
+  text; none throw.
+- `@Environment` DOES resolve inside `SoftButton: ButtonStyle` — proven by
+  histogramming rendered pixels under a non-default theme.
+- Swift 6 + determinism clean: all `Sendable` value types, stateless parser, no
+  formatters, no `UUID()`/clock reads in derived state.
+- Zero `TODO`/`FIXME`/`XCTSkip`/stub tests across all five new/changed files.
+
 ## D. Verification standard
 
 Nothing is marked ✅ without:
 1. `swift build` clean,
 2. `swift test` green (baseline 250),
 3. `npx vitest run` green (baseline ~2125),
-4. for UI: a screenshot at two window sizes with every region confirmed present.
+4. for UI: a render at two window sizes with every region confirmed present —
+   via the §C2 headless harness when no window server is available, or a real
+   screenshot when one is.
 
 Rule 4 exists because it was violated: a `.frame(maxHeight:.infinity)` applied
 BEFORE padding demanded available+88pt and silently evicted its siblings, and
 screenshots were reported twice without noticing most of the UI wasn't drawing.
 Look at every region of the image, not the region you changed.
+
+Rule 5, learned the hard way this session: **a green test suite is not evidence
+the feature works.** Three passing unit suites and a clean build described an
+`agent` event stream that emitted nothing at all, because the CLI intercepted the
+chunks before the projection ever saw them. Run the actual binary and read its
+actual output. The same rule caught `plannedCommand` previewing one command while
+another was spawned, and a real paid API call reporting `$0.000000`.
 
 The rule that governs everything: **any capability the app exposes must exist as
 a `nexus` command first.** The app composes commands and renders their events; it

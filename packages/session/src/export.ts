@@ -27,6 +27,27 @@ function iso(ms: number): string {
 }
 
 /**
+ * Format a per-run cost for display. `null` means genuinely UNKNOWN pricing
+ * (no pricing entry for the model) — distinct from a real `$0` for a free
+ * provider. Never render `null` as `$0.00`; that's what silently misrepresented
+ * a paid call's cost as free (see `@nexuscode/core`'s `projection.ts`).
+ */
+function formatCostUsd(costUsd: number | null): string {
+  return costUsd == null ? "unpriced" : `$${costUsd.toFixed(6)}`;
+}
+
+/**
+ * Format a session's total cost. `meta.costUsd` is a sum over only the runs
+ * with known pricing (see `SessionMeta.costIncomplete`) — when the session
+ * also has unpriced runs, that sum is NOT the true total, so it must say so
+ * rather than read as a confident number.
+ */
+function formatSessionCost(meta: SessionMeta): string {
+  const known = `$${meta.costUsd.toFixed(6)}`;
+  return meta.costIncomplete ? `${known} (incomplete — pricing unknown for some runs)` : known;
+}
+
+/**
  * Redact a single timeline event's dynamic text/content fields before it is
  * serialized. Structural fields (ids, lane, ts, codes, numeric counters) are
  * left untouched — only free-text content that could carry a leaked secret
@@ -99,7 +120,7 @@ function timelineLineMd(ev: UiEvent): string | null {
     case "diff":
       return `- **edit** \`${redactSecrets(ev.path)}\``;
     case "usage":
-      return `- **usage** in=${ev.inputTokens} out=${ev.outputTokens} $${ev.costUsd.toFixed(6)}`;
+      return `- **usage** in=${ev.inputTokens} out=${ev.outputTokens} ${formatCostUsd(ev.costUsd)}`;
     case "error":
       return `- **error** ${ev.code}: ${redactSecrets(ev.message)}`;
     case "done":
@@ -120,7 +141,7 @@ export function toMarkdown(bundle: SessionBundle): string {
   lines.push(`- **Provider/Model:** ${m.provider ?? "-"} / ${m.model ?? "-"}`);
   lines.push(`- **Turns:** ${m.turnCount}  **Runs:** ${m.runCount}`);
   lines.push(
-    `- **Tokens:** ${m.inputTokens} in / ${m.outputTokens} out  **Cost:** $${m.costUsd.toFixed(6)}`,
+    `- **Tokens:** ${m.inputTokens} in / ${m.outputTokens} out  **Cost:** ${formatSessionCost(m)}`,
   );
   lines.push("");
   lines.push("## Timeline");
@@ -192,8 +213,8 @@ function timelineHtml(ev: UiEvent): string | null {
         redactSecrets(ev.patch),
       )}`;
     case "usage":
-      return `<div class="ev"><span class="label">usage</span>${ev.inputTokens} in / ${ev.outputTokens} out · $${ev.costUsd.toFixed(
-        6,
+      return `<div class="ev"><span class="label">usage</span>${ev.inputTokens} in / ${ev.outputTokens} out · ${escapeHtml(
+        formatCostUsd(ev.costUsd),
       )}</div>`;
     case "error":
       return `<div class="ev err"><span class="label">error</span>${escapeHtml(redactSecrets(`${ev.code}: ${ev.message}`))}</div>`;
@@ -217,7 +238,7 @@ export function toHtml(bundle: SessionBundle): string {
 <div class="meta">
   <code>${escapeHtml(m.sessionId)}</code> · ${escapeHtml(iso(m.createdAt))} ·
   ${escapeHtml(redactSecrets(`${m.provider ?? "-"}/${m.model ?? "-"}`))} ·
-  ${m.turnCount} turns · $${m.costUsd.toFixed(6)}
+  ${m.turnCount} turns · ${escapeHtml(formatSessionCost(m))}
 </div>
 <h2>Timeline</h2>
 ${rows || '<div class="ev">(no events)</div>'}

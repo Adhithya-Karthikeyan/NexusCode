@@ -83,6 +83,29 @@ extension NexusTheme {
     }
 }
 
+/// Same two primitives, for `AppTheme` — kept in lockstep with the
+/// `NexusTheme` versions above rather than routed through the bridge, because
+/// once `\.nexusTheme` resolves to `AppTheme` directly (see
+/// `NexusKit/Theme.swift`) every call site in this file reads `theme.hairline`
+/// / `theme.accentGlow` on whichever type the environment actually hands it —
+/// and during the transition both types need to answer.
+extension AppTheme {
+    var hairline: Color {
+        isDark
+            ? Color.white.opacity(0.09)
+            : Color.black.opacity(0.11)
+    }
+
+    var accentGlow: RadialGradient {
+        RadialGradient(
+            colors: [color(\.accentDefault).opacity(isDark ? 0.10 : 0.07), .clear],
+            center: .center,
+            startRadius: 2,
+            endRadius: 150
+        )
+    }
+}
+
 /// A raised card. The single elevation primitive — views should not roll their
 /// own background+border+shadow combinations.
 ///
@@ -102,7 +125,7 @@ struct Card<Content: View>: View {
     var elevated = false
     @ViewBuilder var content: Content
 
-    private var app: AppTheme { theme.appTheme }
+    private var app: AppTheme { theme }
     private var step: ElevationStep { app.elevation.step(elevated ? 2 : 1) }
     private var treatment: SurfaceTreatment { elevated ? app.materials.overlay : .solid }
 
@@ -147,13 +170,13 @@ struct SectionHeader: View {
     /// monospaced for scanability; an editorial theme (Daylight, Nightfall)
     /// opens up a little. Neutral keeps the number this file always used.
     private var font: Font {
-        theme.appTheme.typography == .toolForged
+        theme.typography == .toolForged
             ? .system(size: 11, weight: .semibold, design: .monospaced)
             : Kind.section
     }
 
     private var tracking: Double {
-        switch theme.appTheme.typography {
+        switch theme.typography {
         case .toolForged: return 0.4
         case .neutral: return 0.7
         case .editorial: return 1.0
@@ -267,7 +290,7 @@ struct Metric: View {
     var secondary = false
 
     private var valueColor: Color {
-        if secondary { return theme.appTheme.accentSecondary }
+        if secondary { return theme.accentSecondary }
         return emphasis ? theme.color(\.accentDefault) : theme.color(\.textSecondary)
     }
 
@@ -305,7 +328,7 @@ struct SoftButton: ButtonStyle {
 
     @State private var hovering = false
 
-    private var app: AppTheme { theme.appTheme }
+    private var app: AppTheme { theme }
 
     private var background: Color {
         switch tone {
@@ -410,7 +433,7 @@ struct HeroEmptyState<Actions: View>: View {
                 // `GradientSet.accentGradient` exists for.
                 Image(systemName: icon)
                     .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(theme.appTheme.accentGradient)
+                    .foregroundStyle(theme.accentGradient)
             }
             .frame(height: 150)
 

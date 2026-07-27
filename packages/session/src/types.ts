@@ -53,7 +53,15 @@ export interface SessionMeta {
   eventCount: number;
   inputTokens: number;
   outputTokens: number;
+  /** Sum of the runs with KNOWN pricing only — see {@link costIncomplete}. */
   costUsd: number;
+  /**
+   * True when at least one run that consumed real tokens has NO known cost
+   * (no pricing entry for its model) — `costUsd` above is then a PARTIAL sum,
+   * not the session's true total, and must be displayed as such rather than
+   * as a confident number.
+   */
+  costIncomplete: boolean;
 }
 
 /** A captured point-in-time snapshot of a session. */

@@ -95,7 +95,14 @@ export type UiEvent =
       outputTokens: number;
       cacheRead?: number;
       cacheWrite?: number;
-      costUsd: number;
+      /**
+       * `null` means genuinely UNKNOWN pricing (no `config.pricing`/
+       * `DEFAULT_PRICING` entry for the model) — distinct from a real `0` for a
+       * free provider (`mock`, local models). A consumer must render `null`
+       * as "unpriced"/`—`, never as `$0.00` — collapsing the two here is what
+       * made a real, paid call display as a confident $0.
+       */
+      costUsd: number | null;
     }
   | { t: "error"; lane: string; code: string; message: string; retryable: boolean }
   | { t: "done"; lane: string; finishReason: string };
@@ -103,8 +110,9 @@ export type UiEvent =
 /** Discriminant tag of a `UiEvent`. */
 export type UiEventType = UiEvent["t"];
 
-function usageCost(u: Partial<Usage>): number {
-  return u.costUsd ?? u.reportedCostUsd ?? 0;
+/** `null` when neither a computed nor a reported cost is present — UNKNOWN, not free. */
+function usageCost(u: Partial<Usage>): number | null {
+  return u.costUsd ?? u.reportedCostUsd ?? null;
 }
 
 interface FailoverStep {

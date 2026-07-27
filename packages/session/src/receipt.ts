@@ -127,9 +127,14 @@ export function renderReceipt(data: ReceiptData): string {
   <div class="stats">
     <div><b>${data.diffs.length}</b> file${data.diffs.length === 1 ? "" : "s"} changed</div>
     <div><b>${data.meta.turnCount}</b> turn${data.meta.turnCount === 1 ? "" : "s"}</div>
-    <div><b>$${data.meta.costUsd.toFixed(4)}</b> cost</div>
+    <div><b>$${data.meta.costUsd.toFixed(4)}${data.meta.costIncomplete ? "*" : ""}</b> cost</div>
     <div><b>${model}</b><span style="opacity:.7">${created}</span></div>
   </div>
+  ${
+    data.meta.costIncomplete
+      ? '<div style="font-size:.7rem;opacity:.75;margin-top:.6rem">*pricing unknown for some runs — cost is a partial total</div>'
+      : ""
+  }
   ${testBadge(data.testResult)}
 </div>
 <div class="wrap">

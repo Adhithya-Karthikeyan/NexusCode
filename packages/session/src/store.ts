@@ -177,11 +177,22 @@ export class SessionStore implements EventStore {
       .prepare(
         `SELECT COUNT(*) AS run_count, COALESCE(SUM(input_tokens),0) AS in_tok,
                 COALESCE(SUM(output_tokens),0) AS out_tok,
-                COALESCE(SUM(COALESCE(cost_usd,0)),0) AS cost, MIN(created_at) AS created
+                COALESCE(SUM(COALESCE(cost_usd,0)),0) AS cost, MIN(created_at) AS created,
+                COALESCE(SUM(
+                  CASE WHEN cost_usd IS NULL AND (input_tokens > 0 OR output_tokens > 0)
+                       THEN 1 ELSE 0 END
+                ),0) AS unpriced_count
          FROM run_summary WHERE session_id = ?`,
       )
       .get(sessionId) as
-      | { run_count: number; in_tok: number; out_tok: number; cost: number; created: number | null }
+      | {
+          run_count: number;
+          in_tok: number;
+          out_tok: number;
+          cost: number;
+          created: number | null;
+          unpriced_count: number;
+        }
       | undefined;
 
     const hasEvents = (agg?.event_count ?? 0) > 0;
@@ -213,7 +224,10 @@ export class SessionStore implements EventStore {
       eventCount: agg?.event_count ?? 0,
       inputTokens: runAgg?.in_tok ?? 0,
       outputTokens: runAgg?.out_tok ?? 0,
+      // A partial sum over the runs with known pricing — see `costIncomplete`,
+      // which callers MUST check before presenting this as a confident total.
       costUsd: runAgg?.cost ?? 0,
+      costIncomplete: (runAgg?.unpriced_count ?? 0) > 0,
     };
     if (meta?.name) out.name = meta.name;
     if (latest?.adapter_id) out.provider = latest.adapter_id;
