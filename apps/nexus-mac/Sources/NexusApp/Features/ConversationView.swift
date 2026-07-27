@@ -31,15 +31,11 @@ struct ConversationView: View {
     // agent and may not exist yet. Rather than block on it, this view takes
     // plain option lists plus a load callback; once the controller lands the
     // caller wires `providers`, `models` and `onLoadModels` from it — nothing
-    // in this file needs to change. `effort` below is local for the same
-    // reason: the controller has no such property yet, so it stays view state
-    // until the lead lifts it — `commandPreview` already treats it as
-    // authoritative for the `--effort` flag it appends.
+    // in this file needs to change.
     var providers: [PickerOption] = []
     var models: [PickerOption] = []
     var isLoadingModels = false
     var onLoadModels: (String) -> Void = { _ in }
-    @State private var effort: EffortLevel = .off
 
     init(
         controller: ConversationController,
@@ -67,7 +63,6 @@ struct ConversationView: View {
                     ControlStrip(
                         controller: controller,
                         showsReasoning: $showsReasoning,
-                        effort: $effort,
                         providers: providers,
                         models: models,
                         isLoadingModels: isLoadingModels,
@@ -385,12 +380,11 @@ struct ConversationView: View {
     }
 
     private var commandPreview: String {
-        var args = controller.plannedCommand(for: draft.isEmpty ? "…" : draft).arguments
-        // `effort` has no home on the controller yet (see the seam note above),
-        // so the flag is spliced in here rather than inside `plannedCommand` —
-        // the one place this view already promises to show the exact `nexus`
-        // invocation, so it can't silently omit a flag the user picked.
-        if effort != .off { args += ["--effort", effort.rawValue] }
+        // No special-casing here anymore: `effort` now lives on `controller`
+        // (see `ConversationController.effort`), so `plannedCommand` already
+        // includes `--effort` when set — the preview is the same array the
+        // real spawn builds from, not a second copy that can drift from it.
+        let args = controller.plannedCommand(for: draft.isEmpty ? "…" : draft).arguments
         return "nexus " + args
             .map { $0.contains(" ") ? "\"\($0)\"" : $0 }
             .joined(separator: " ")
@@ -430,7 +424,6 @@ struct ControlStrip: View {
     @Environment(\.nexusTheme) private var theme
     @Bindable var controller: ConversationController
     @Binding var showsReasoning: Bool
-    @Binding var effort: EffortLevel
     let providers: [PickerOption]
     let models: [PickerOption]
     let isLoadingModels: Bool
@@ -482,7 +475,7 @@ struct ControlStrip: View {
 
             GroupDivider()
 
-            EffortPicker(effort: $effort)
+            EffortPicker(effort: $controller.effort)
 
             GroupDivider()
 
