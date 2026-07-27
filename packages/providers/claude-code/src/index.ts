@@ -341,10 +341,10 @@ export const CLAUDE_CODE_MODELS: ModelInfo[] = [
   { id: "sonnet", modalities: ["text", "image"] },
   { id: "opus", modalities: ["text", "image"] },
   { id: "haiku", modalities: ["text", "image"] },
-  { id: "claude-opus-4-1", modalities: ["text", "image"] },
-  { id: "claude-sonnet-4-5", modalities: ["text", "image"] },
-  { id: "claude-3-7-sonnet-latest", modalities: ["text", "image"] },
-  { id: "claude-3-5-haiku-latest", modalities: ["text", "image"] },
+  { id: "claude-opus-5", modalities: ["text", "image"] },
+  { id: "claude-sonnet-5", modalities: ["text", "image"] },
+  { id: "claude-haiku-4-5-20251001", modalities: ["text", "image"] },
+  { id: "claude-fable-5", modalities: ["text", "image"] },
 ];
 
 /** Union two catalogs by id, preserving order (`base` first, then new ids). */

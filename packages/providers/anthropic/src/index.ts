@@ -52,12 +52,10 @@ const ANTHROPIC_VERSION = "2023-06-01";
  * config-driven — this is only the id catalog.
  */
 export const DEFAULT_ANTHROPIC_MODELS: ModelInfo[] = [
-  { id: "claude-opus-4-1", modalities: ["text", "image"] },
-  { id: "claude-opus-4-0", modalities: ["text", "image"] },
-  { id: "claude-sonnet-4-5", modalities: ["text", "image"] },
-  { id: "claude-sonnet-4-0", modalities: ["text", "image"] },
-  { id: "claude-3-7-sonnet-latest", modalities: ["text", "image"] },
-  { id: "claude-3-5-haiku-latest", modalities: ["text", "image"] },
+  { id: "claude-opus-5", modalities: ["text", "image"] },
+  { id: "claude-sonnet-5", modalities: ["text", "image"] },
+  { id: "claude-haiku-4-5-20251001", modalities: ["text", "image"] },
+  { id: "claude-fable-5", modalities: ["text", "image"] },
 ];
 
 /** Static configuration for {@link createAnthropicAdapter}. */
