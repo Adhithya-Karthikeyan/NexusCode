@@ -170,11 +170,25 @@ and `permissionMode`. Provider-neutral by construction.
    flight: gate the branch on `output !== "ndjson"`.
    **Lesson worth keeping: three green unit-test suites and a clean build still
    described a feature that did not work. Only running the binary found it.**
-2. 🔄 **Delegation is implemented but unreachable.** The runner fully supports
-   sub-agent spawning with a chained permission ceiling (`runner.ts:480-507`),
-   but `policies.ts` contains ZERO occurrences of `delegate` — `defaultEvaluate`
-   never emits a `DelegateDirective`. Today every role run is single-agent in
-   practice. IN FLIGHT as an opt-in `delegatingEvaluate`; `runner.ts` unchanged.
+2. ✅ **Delegation is implemented but unreachable** — now reachable, opt-in, and
+   `runner.ts` was NOT touched. `delegatingEvaluate` (exported from
+   `packages/agent/src/index.ts`) triggers on ONE specific signal: the tool
+   result `no such tool: X`, which is the unambiguous marker that a step's work
+   lies outside the current role's allowlist. It hands that step to
+   `coordinator` (the only preset with `allowedTools: ["*"]`).
+
+   The distinction that makes this right: `defaultEvaluate` already retries
+   every tool failure, which is correct for a TRANSIENT one (a flaky write may
+   succeed next time) and pure busywork for a STRUCTURAL one — retrying grants
+   no new tool, so `no such tool` recurs identically until the budget is gone.
+   Every other case returns `defaultEvaluate`'s output byte-identically.
+
+   **Bounded by construction, not by a counter:** the runner's delegate site
+   never forwards `options.policies`, so a delegated child always runs under
+   `defaultEvaluate`, which never delegates. Delegation is capped at exactly one
+   hop no matter how it is wired. The permission ceiling was proven separately —
+   a `read-only` parent keeps a delegated `coordinator` child read-only even
+   though that preset requests `workspace-write`.
 3. 🔄 **The app never passes `--role`** — and it is worse than that. Chasing this
    turned up TWO defects in the same family as the provider-switch bug:
 
@@ -211,6 +225,47 @@ and `permissionMode`. Provider-neutral by construction.
    command must exist before the app can expose it.
 5. ⬜ Cheap win: ship a `nexus`-backed advisor script + document
    `OMC_ASK_ADVISOR_SCRIPT`, so every `omc ask` inherits all 18 providers.
+
+### Resolved: `--role` on a subprocess provider is now BLOCKED (exit 2)
+
+I leaned toward "allow it with a warning" — my earlier `goal-met` on codex looked
+like a working capability worth keeping. **That was wrong, and the evidence
+overturned it.** The successful run was a trivial, tool-free, `--max-steps 1`
+prompt. Re-run with a prompt that actually forces tool calls, it fails three
+ways at once:
+
+1. **The tool loop cannot resolve the calls.** Subprocess adapters emit calls
+   they have ALREADY executed, under their own names — codex sends `shell` and
+   `` `${server}:${tool}` ``, claude-code sends raw `Bash`/`Edit`. None match our
+   registry (`fs_read`, `fs_write`, `fs_search`, `fs_patch`, `shell_exec`, and
+   MCP's `server__tool` — the separator is `__`). Every call returns unknown-tool,
+   we feed that back and re-spawn: **~400k input tokens for one step of a
+   trivial file read.**
+2. **The role's sandbox is unenforceable.** `researcher` derives a read-only
+   gate, but codex had already run `sed` and repo-wide searches inside its OWN
+   sandbox, governed by `providers.codex.sandbox`, never our gate. So
+   `--role security-reviewer -p codex` would advertise "never write, patch, or
+   execute" and be **silently false**. That single fact settles it: a warning
+   cannot make an unenforceable guarantee true, and an opt-in flag is for things
+   that are RISKY, not things that are BROKEN.
+3. **`--cwd` never reaches it** — codex read a different tree than the one the
+   plan and context were built for.
+
+This also restores an invariant the codebase already stated twice
+(`commands.ts:1016-1021`, `:3615-3626`): a subprocess provider is NEVER routed
+through `dispatchAgent`. The role path was the one place that missed it.
+
+Verified: `agent --role researcher -p codex` → exit 2 with both working routes
+named (`nexus code -a codex …`, `agent --role researcher -p <api-provider>`);
+`agent --role reviewer -p anthropic` still runs normally.
+
+⚠️ **A test was silently neutered by this guard and had to be re-pointed.** The
+existing `resolveRunModel` assertion at `command-flag-consistency.test.ts:278`
+drove itself through `agent --role coder -p claude-code` — with the guard in
+place it would have passed **vacuously**, never reaching the code under test. It
+now runs through the role-LESS `agent -p claude-code` path with a positive
+assertion so it cannot go vacuous again. Worth remembering: adding a guard can
+turn a real regression test into a green no-op.
 
 ### Two risks recorded before they bite
 - **The three-valued verdict must survive into the UI.** `indeterminate` is
@@ -313,6 +368,32 @@ surface. `nexus auth status -o json` already returns all 15 providers with
 - ⬜ **Transcript search** and copy/export.
 - ⬜ **Error recovery** — retry a failed turn without retyping.
 
+## B2. Cost accounting is silently fabricating $0 (found 2026-07-27)
+
+Live evidence, a REAL paid Anthropic call:
+
+```
+[agent] role=reviewer steps=1 stop=indeterminate
+[usage] in=2966 out=4 cost=$0.000000
+```
+
+2966 input tokens billed at zero. Cause: `DEFAULT_PRICING` in
+`packages/config/src/schema.ts` is still keyed on the OLD model ids
+(`claude-opus-4-1`, …), so every current-generation id (`claude-opus-5`,
+`claude-sonnet-5`, `claude-fable-5`, `claude-haiku-4-5-20251001`) falls through
+to zero. The app has a cost readout and a session tally; both are confidently
+wrong right now.
+
+**The fix is NOT to invent prices.** It is to stop conflating "no pricing data"
+with "free": unknown cost must be a distinct state that renders as `—`, and a
+session tally containing unpriced turns must say it is incomplete rather than
+presenting a confident total. Same principle this codebase has already applied
+twice — a timed-out approval is not a refusal, an `indeterminate` verdict is not
+a success. **Unknown cost is not zero cost.** In flight.
+
+Real pricing figures are still wanted as a follow-up, from an authoritative
+source — not guessed.
+
 ## C. Known bugs
 
 - 🔄 `--resume` receives a run id, not a session id → context lost every turn.
@@ -324,8 +405,8 @@ surface. `nexus auth status -o json` already returns all 15 providers with
 
 Nothing is marked ✅ without:
 1. `swift build` clean,
-2. `swift test` green (baseline 199),
-3. `npx vitest run` green (baseline ~2100),
+2. `swift test` green (baseline 250),
+3. `npx vitest run` green (baseline ~2125),
 4. for UI: a screenshot at two window sizes with every region confirmed present.
 
 Rule 4 exists because it was violated: a `.frame(maxHeight:.infinity)` applied

@@ -39,21 +39,18 @@ public actor PersistentSession {
     private var pending: [String] = []
     private var isReady = false
 
-    /// - Parameter extraArguments: provider/model selection etc. The persistent
-    ///   flag and ndjson output are always applied — they are what make this a
-    ///   machine-readable session rather than a REPL.
+    /// - Parameter arguments: the FULL argv (`chat --persistent -o ndjson …`),
+    ///   built by `ConversationController.persistentSessionArguments()` — the
+    ///   same helper the command preview reads, so the two can never drift
+    ///   apart the way a second, independent argv assembly here would risk.
     public init(
         binary: NexusBinary,
         workingDirectory: URL? = nil,
-        resume sessionId: String? = nil,
-        extraArguments: [String] = []
+        arguments: [String]
     ) {
         self.binary = binary
         self.workingDirectory = workingDirectory
-        var args = ["chat", "--persistent", "-o", "ndjson"]
-        if let sessionId { args += ["--resume", sessionId] }
-        args += extraArguments
-        self.arguments = args
+        self.arguments = arguments
     }
 
     /// The event stream for the whole conversation. Call once.

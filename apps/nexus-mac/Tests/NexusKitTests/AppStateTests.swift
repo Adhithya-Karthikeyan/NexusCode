@@ -68,6 +68,33 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(args.contains("s_123"))
     }
 
+    // MARK: - Preview/spawn parity (Bug 1 regression guard)
+
+    /// `plannedCommand` claims to show "exactly which `nexus` invocation the
+    /// button maps to". For single-lane modes that used to be false: the
+    /// preview showed `["ask", prompt, …]` while `submit()` actually spawned
+    /// `chat --persistent …` via `PersistentSession`, which builds its own argv
+    /// from `extraArguments`. This asserts the two are now the SAME argv,
+    /// sourced from the same helper — it fails under the old two-builder code.
+    func testPreviewArgvMatchesWhatIsActuallySpawnedForASingleLaneSubmit() {
+        let c = controller()
+        c.mode = .ask
+        c.provider = "anthropic"
+        c.model = "claude-sonnet-4-5"
+        c.sessionId = "s_1"
+
+        let preview = c.plannedCommand(for: "hello").arguments
+        // The persistent path never puts the prompt in argv — it is written to
+        // stdin turn by turn — so the honest preview for `.ask`/role-less
+        // `.agent` is the `chat --persistent` invocation itself.
+        XCTAssertEqual(preview, ["chat", "--persistent", "-o", "ndjson", "--resume", "s_1", "-p", "anthropic", "-m", "claude-sonnet-4-5", "-t", "--ask"])
+
+        c.submit("hello")
+        // What actually got spawned must be exactly what was previewed.
+        XCTAssertEqual(c.activeBackendProvider, "anthropic")
+        XCTAssertEqual(c.activeBackendModel, "claude-sonnet-4-5")
+    }
+
     // MARK: - Submit guards
 
     func testFanOutRequiresAtLeastTwoBackends() {

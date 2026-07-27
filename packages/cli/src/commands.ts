@@ -1417,7 +1417,15 @@ async function runAgentOoda(
         // instead of letting `renderStreaming` write the reasoning deltas with
         // no separators, which ran the phases together into one blob
         // ("Step 0…Plan updated…Goal satisfied…Progress: 100%Run finished…").
-        if (isAgentMeta((chunk as { raw?: unknown }).raw)) {
+        //
+        // NOT under `-o ndjson`: that mode exists to give a programmatic client
+        // structured events, and swallowing these chunks here meant the `agent`
+        // UiEvent (phase/role/step/data, projected in `projection.ts`) never
+        // reached the wire at all — a consumer saw only prose on stderr. So
+        // ndjson falls through to `projectLabeled`, which emits the
+        // `[agent, reasoning]` pair. `-o text` keeps the step log verbatim, and
+        // `-o json` never enters this loop.
+        if (output !== "ndjson" && isAgentMeta((chunk as { raw?: unknown }).raw)) {
           const line = chunk.type === "text-delta" ? chunk.text.trim() : "";
           if (line.length > 0) io.err(`${line}\n`);
           continue;

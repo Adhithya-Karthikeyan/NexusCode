@@ -135,6 +135,18 @@ public final class ConversationController {
     /// Session to continue, so turns build on each other.
     public var sessionId: String?
 
+    /// Specialized role for `.agent` mode — `nexus agent --role <role>`.
+    ///
+    /// `nil` (the default) is today's behaviour exactly: `.agent` runs the fast
+    /// native tool loop, byte-identical to before this property existed. A
+    /// non-nil value promotes the run to the CLI's full OODA framework
+    /// (Observe→Reason→Plan→Act→Evaluate→Repeat). Deliberately a pass-through
+    /// `String?` rather than a Swift enum of the nine shipped roles — the CLI
+    /// owns that list (`AGENT_ROLES` in `packages/agent/src/roles.ts`) and
+    /// validates it with a clear error; duplicating it here would be exactly
+    /// the kind of stale copy that already bit the model picker.
+    public var role: String?
+
     /// Pending tool approvals for this conversation.
     public let approvals = ApprovalsController()
 
@@ -163,16 +175,20 @@ public final class ConversationController {
     /// a single prompt and settle, so they keep using the one-shot client.
     private var session: PersistentSession?
 
-    /// The provider/model the LIVE backend process was actually launched with.
+    /// The provider/model/role the LIVE backend process was actually launched
+    /// with.
     ///
-    /// `-p`/`-m` are baked into a process's argv at spawn time, so changing the
-    /// picker cannot change what an already-running process is talking to.
-    /// Without tracking this, switching provider mid-conversation silently kept
-    /// answering from the ORIGINAL provider while the UI displayed the new one —
-    /// the user is told they are talking to Codex and is in fact talking to
-    /// Claude. Comparing against the current selection is what makes a switch
-    /// real.
-    private var launchedWith: (provider: String?, model: String?)?
+    /// `-p`/`-m`/`--role` are baked into a process's argv at spawn time, so
+    /// changing a picker cannot change what an already-running process is
+    /// talking to. Without tracking this, switching provider mid-conversation
+    /// silently kept answering from the ORIGINAL provider while the UI
+    /// displayed the new one — the user is told they are talking to Codex and
+    /// is in fact talking to Claude. Comparing against the current selection is
+    /// what makes a switch real. `role` matters here too: setting a role moves
+    /// a `.agent` run off the persistent session entirely (see
+    /// `usesPersistentSession`), so a stale role-less session must not keep
+    /// running invisibly once a role is picked.
+    private var launchedWith: (provider: String?, model: String?, role: String?)?
 
     /// What the LIVE backend process is actually talking to, as opposed to what
     /// the picker currently shows. `nil` when no backend is running.
@@ -192,13 +208,58 @@ public final class ConversationController {
 
     /// The command a submit would run — surfaced in the UI so the user can
     /// always see exactly which `nexus` invocation the button maps to.
+    ///
+    /// This is the ONLY place that assembles argv, for every mode. `submit()`
+    /// dispatches through the identical builder rather than assembling its own
+    /// — either by handing this exact `NexusCommand` to `dispatchOneShot`, or
+    /// by handing `persistentSessionArguments()` (the same helper this calls)
+    /// to `PersistentSession`. A second, independently-drifting argv builder is
+    /// the defect `activeBackendProvider` already exists to catch in the
+    /// running-process case; this is that same fix applied to the preview.
     public func plannedCommand(for prompt: String) -> NexusCommand {
+        let args = usesPersistentSession ? persistentSessionArguments() : oneShotArguments(for: prompt)
+        return NexusCommand(args, workingDirectory: workingDirectory)
+    }
+
+    /// Whether `mode` runs through the long-lived `chat --persistent` process
+    /// rather than a one-shot dispatch.
+    ///
+    /// `.agent` with a role cannot: `nexus agent --role` has no `--persistent`
+    /// mode — it is one-shot per invocation, unlike `chat --persistent` — so a
+    /// role run is dispatched like `compare`/`race` are (see
+    /// `oneShotArguments`). `.agent` with no role is untouched: it is
+    /// byte-identical to `.ask`.
+    private var usesPersistentSession: Bool {
+        !mode.isMultiLane && !(mode == .agent && role != nil)
+    }
+
+    /// argv for the persistent `chat --persistent` process — used by BOTH the
+    /// preview and `submitToPersistentSession`'s actual spawn, so they cannot
+    /// drift apart. The prompt itself is never part of this argv: it is
+    /// written to the process's stdin turn by turn (see `PersistentSession`).
+    private func persistentSessionArguments() -> [String] {
+        var args = ["chat", "--persistent", "-o", "ndjson"]
+        if let sessionId { args += ["--resume", sessionId] }
+        if let provider { args += ["-p", provider] }
+        if let model { args += ["-m", model] }
+        // `-t` enables the tool loop, `--ask` makes write/exec/network require
+        // a decision. Without `--ask` the gate would auto-allow, which is the
+        // behaviour this whole path exists to remove.
+        if approvalsEnabled { args += ["-t", "--ask"] }
+        return args
+    }
+
+    /// argv for a one-shot dispatch — `compare`/`race` (always) and `.agent`
+    /// with a role (because the CLI has no persistent mode for it).
+    private func oneShotArguments(for prompt: String) -> [String] {
         var args: [String]
         switch mode {
         case .ask:
             args = ["ask", prompt]
         case .agent:
+            // Only reached when `role != nil` — see `usesPersistentSession`.
             args = ["agent", prompt]
+            if let role { args += ["--role", role] }
         case .compare, .race:
             args = [mode == .compare ? "compare" : "race", prompt]
             for backend in backends { args += ["-b", backend] }
@@ -208,8 +269,15 @@ public final class ConversationController {
             if let provider { args += ["-p", provider] }
             if let model { args += ["-m", model] }
         }
+        // `nexus agent --role` has no `--resume`: the OODA framework
+        // (`runAgentOoda` in packages/cli/src/commands.ts) opens a fresh engine
+        // session on every invocation and never reads a `--resume` flag, so a
+        // role run cannot build on a prior turn's context the way `.ask` can.
+        // That is a real limitation of the CLI today, not something to paper
+        // over here by attaching a flag that would silently do nothing.
+        if mode == .agent && role != nil { return args }
         if let sessionId { args += ["--resume", sessionId] }
-        return NexusCommand(args, workingDirectory: workingDirectory)
+        return args
     }
 
     public var canSubmit: Bool {
@@ -237,10 +305,20 @@ public final class ConversationController {
         isRunning = true
         diagnostics = []
 
-        if mode.isMultiLane {
-            dispatchOneShot(plannedCommand(for: text))
-        } else {
+        // A provider/model/role change means the LIVE backend (if any) no
+        // longer matches what should be running — including a role switch,
+        // which moves the run onto the one-shot path entirely. Tear the stale
+        // process down before dispatching, or it keeps running invisibly
+        // while a second, correctly-configured process also starts.
+        if let launched = launchedWith,
+           launched.provider != provider || launched.model != model || launched.role != role {
+            stopLiveSession()
+        }
+
+        if usesPersistentSession {
             submitToPersistentSession(text)
+        } else {
+            dispatchOneShot(plannedCommand(for: text))
         }
     }
 
@@ -258,36 +336,17 @@ public final class ConversationController {
     }
 
     /// Single-lane: write the prompt to the conversation that is already open,
-    /// starting it on first use.
+    /// starting it on first use. Any stale process from a provider/model/role
+    /// change has already been stopped by `submit()` before this runs.
     private func submitToPersistentSession(_ text: String) {
-        // A provider/model change must RESTART the backend — argv is fixed at
-        // spawn. `--resume` carries the same engine session across the restart,
-        // so the conversation and its context survive the switch.
-        if session != nil, let launched = launchedWith,
-           launched.provider != provider || launched.model != model {
-            let stale = session
-            session = nil
-            task?.cancel()
-            task = nil
-            Task { await stale?.stop() }
-        }
-
         if session == nil {
-            var extras: [String] = []
-            if let provider { extras += ["-p", provider] }
-            if let model { extras += ["-m", model] }
-            // `-t` enables the tool loop, `--ask` makes write/exec/network
-            // require a decision. Without `--ask` the gate would auto-allow,
-            // which is the behaviour this whole path exists to remove.
-            if approvalsEnabled { extras += ["-t", "--ask"] }
             let started = PersistentSession(
                 binary: binary,
                 workingDirectory: workingDirectory,
-                resume: sessionId,
-                extraArguments: extras
+                arguments: persistentSessionArguments()
             )
             session = started
-            launchedWith = (provider, model)
+            launchedWith = (provider, model, role)
             task = Task { [weak self] in
                 guard let self else { return }
                 for await item in await started.start() {
@@ -302,6 +361,19 @@ public final class ConversationController {
             }
         }
         Task { [session] in await session?.send(text) }
+    }
+
+    /// Stop and discard the currently live persistent backend, if any. Called
+    /// before a provider/model/role change dispatches down whichever path is
+    /// now correct — otherwise the old process keeps running invisibly.
+    private func stopLiveSession() {
+        guard session != nil else { return }
+        let stale = session
+        session = nil
+        launchedWith = nil
+        task?.cancel()
+        task = nil
+        Task { await stale?.stop() }
     }
 
     /// Answer the front-most approval. The decision travels on the SAME stdin
