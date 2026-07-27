@@ -23,6 +23,7 @@ import {
   contextWindowFor,
   preflightModelSwitch,
   preflightProviderSwitch,
+  reasoningSupportedFor,
   resolveSwitchModel,
   type SwitchContext,
 } from "../src/model-switch.js";
@@ -257,5 +258,92 @@ describe("/provider switch preflight", () => {
     const { ctx } = await fixture();
     const result = preflightProviderSwitch(ctx(), "definitely-not-installed");
     expect(result.accepted).toBe(false);
+  });
+});
+
+/**
+ * `reasoningSupportedFor` — the ONE predicate the `--effort` CLI flag
+ * (`applyEffort` in commands.ts) and the TUI's `/effort` picker both consult.
+ *
+ * The reported gap: `capabilities().reasoning: true` alone does not mean a
+ * reasoning EFFORT actually reaches the wire. Two transport families
+ * advertise it without honoring it as request input — a wrapped coding CLI
+ * (cli-subprocess) and the generic OpenAI-compatible transport unless its
+ * config explicitly opts into `supportsReasoningEffort` (no compat spec does
+ * today — see DeepSeek in `packages/providers/openai/src/compat.ts`). Both
+ * cases used to slip through as "supported" and silently drop the value.
+ */
+describe("reasoningSupportedFor — effort must actually reach the wire", () => {
+  function adapterWith(id: string, transport: string, reasoning: boolean) {
+    return {
+      id,
+      label: id,
+      transport,
+      capabilities: async () => ({
+        models: [],
+        streaming: true,
+        tools: false,
+        parallelToolCalls: false,
+        vision: false,
+        structuredOutput: false,
+        reasoning,
+        systemPrompt: true,
+        fileEdit: false,
+        shellExec: false,
+        git: false,
+        approvalGate: false,
+        mcp: false,
+        cancel: "abort-signal",
+      }),
+      chat: async () => {
+        throw new Error("unused");
+      },
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        throw new Error("unused");
+      },
+    };
+  }
+
+  it("TRUE for a real http-sdk provider that declares reasoning", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await runtime.registry.register(adapterWith("thinky", "http-sdk", true) as any, { skipHealth: true });
+    expect(reasoningSupportedFor(runtime, "thinky")).toBe(true);
+  });
+
+  it("FALSE for a cli-subprocess provider (codex/claude-code) even though it declares reasoning", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    await runtime.registry.register(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      adapterWith("wrapped-cli", "cli-subprocess", true) as any,
+      { skipHealth: true },
+    );
+    expect(reasoningSupportedFor(runtime, "wrapped-cli")).toBe(false);
+  });
+
+  it("FALSE for an http-openai-compat provider (e.g. DeepSeek) even though it declares reasoning", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    await runtime.registry.register(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      adapterWith("deepseek-like", "http-openai-compat", true) as any,
+      { skipHealth: true },
+    );
+    expect(reasoningSupportedFor(runtime, "deepseek-like")).toBe(false);
+  });
+
+  it("FALSE when the provider does not declare reasoning at all", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    expect(reasoningSupportedFor(runtime, "mock")).toBe(false);
+  });
+
+  it("FALSE for an unknown provider id (never throws)", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    expect(reasoningSupportedFor(runtime, "does-not-exist")).toBe(false);
   });
 });
