@@ -1695,8 +1695,10 @@ async function runAgentOoda(
   // run, through the SAME resolver + provider-neutral `engine.openSession({
   // resume })` `chat --persistent --resume` uses — not a second mechanism. That
   // makes cross-provider resume and the "no stored transcript" / "history
-  // disabled" / "storePrompts off" degradations behave identically here, caveat
-  // included: a resumed session's tool calls are not replayed, only its text.
+  // disabled" / "storePrompts off" degradations behave identically here — and,
+  // since the engine now threads a turn's full tool exchange (tool_use +
+  // result) onto the transcript instead of collapsing it to text, a resumed
+  // session's prior tool calls are rehydrated too, not just its text.
   //
   // What resumes is the CONVERSATION. What deliberately does NOT resume is
   // plan/task state: `store` below is a fresh `:memory:` TaskStore on every

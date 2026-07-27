@@ -47,9 +47,9 @@ struct TasksView: View {
         } content: {
             if let controller {
                 if controller.isLoading && controller.tasks.isEmpty {
-                    loadingState
+                    LoadingState(message: "Loading tasks…")
                 } else if let error = controller.error, controller.tasks.isEmpty {
-                    errorState(error) { Task { await controller.refresh() } }
+                    ErrorState(message: error) { Task { await controller.refresh() } }
                 } else if controller.tasks.isEmpty {
                     HeroEmptyState(
                         icon: "checklist",
@@ -118,33 +118,6 @@ struct TasksView: View {
                 .buttonStyle(SoftButton(size: .compact))
             )
         )
-    }
-
-    private var loadingState: some View {
-        VStack(spacing: Space.sm) {
-            ProgressView()
-            Text("Loading tasks…")
-                .font(Kind.caption)
-                .foregroundStyle(theme.color(\.textMuted))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func errorState(_ message: String, retry: @escaping () -> Void) -> some View {
-        VStack(spacing: Space.sm) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 26, weight: .light))
-                .foregroundStyle(theme.color(\.errorFg))
-                .accessibilityHidden(true)
-            Text(message)
-                .font(Kind.body)
-                .foregroundStyle(theme.color(\.textSecondary))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-            Button("Retry", action: retry)
-                .buttonStyle(SoftButton(tone: .accent))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func attach() async {
@@ -218,38 +191,6 @@ private struct AddTaskField: View {
         guard !trimmed.isEmpty else { return }
         onSubmit(trimmed)
         title = ""
-    }
-}
-
-/// A dismissible, non-fatal notice — for an action that failed (add/status/
-/// delete) without wiping out the list that's still showing.
-private struct ErrorBanner: View {
-    @Environment(\.nexusTheme) private var theme
-    let message: String
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: Space.xs) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 10))
-                .accessibilityHidden(true)
-            Text(message)
-                .font(Kind.caption)
-                .lineLimit(2)
-            Spacer(minLength: Space.sm)
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss")
-        }
-        .foregroundStyle(theme.color(\.warningFg))
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm)
-        .background(theme.color(\.warningBg).opacity(0.6), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
     }
 }
 

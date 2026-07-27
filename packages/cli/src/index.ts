@@ -325,7 +325,7 @@ class AgentCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Agentic run: native tool loop, or the full OODA framework with --role.",
     details:
-      "Without --role, runs the fast native tool-execution loop. With --role <coder|reviewer|tester|planner|researcher|architect|doc-writer|security-reviewer|coordinator>, runs the OODA loop (Observe→Reason→Plan→Act→Evaluate→Repeat): plan drafting, reflection, retry/self-correction, and dynamic replanning — all on the engine bus. --max-steps caps OODA iterations. A --role run honors --resume <id> / --continue exactly like `chat --persistent --resume`: the prior conversation is rehydrated (text only; tool calls are not replayed), but the role always plans afresh against THIS invocation's prompt — resumed plan/task state is not a thing this framework tracks. --effort <off|low|medium|high> applies to both paths (default off); a provider that cannot honor it gets a stderr warning and the request goes out without it, never silently. A --role run against a cli-subprocess agent (codex/claude-code) is refused before --effort is even evaluated — see the error for the two working routes.",
+      "Without --role, runs the fast native tool-execution loop. With --role <coder|reviewer|tester|planner|researcher|architect|doc-writer|security-reviewer|coordinator>, runs the OODA loop (Observe→Reason→Plan→Act→Evaluate→Repeat): plan drafting, reflection, retry/self-correction, and dynamic replanning — all on the engine bus. --max-steps caps OODA iterations. A --role run honors --resume <id> / --continue exactly like `chat --persistent --resume`: the prior conversation is rehydrated with its full tool-call exchange (tool_use + result, not just text), but the role always plans afresh against THIS invocation's prompt — resumed plan/task state is not a thing this framework tracks. --effort <off|low|medium|high> applies to both paths (default off); a provider that cannot honor it gets a stderr warning and the request goes out without it, never silently. A --role run against a cli-subprocess agent (codex/claude-code) is refused before --effort is even evaluated — see the error for the two working routes.",
     examples: [
       ["Native tool loop", "nexus agent -p mock -m mock-tools 'read the config'"],
       ["OODA coder role", "nexus agent --role coder --max-steps 4 -p mock -m mock-tools 'add a hello function'"],
@@ -445,8 +445,8 @@ class ChatCommand extends HandlerCommand {
       "Every line is one turn, and later turns remember earlier ones. " +
       "`--resume <session-id>` / `--continue` (-c) carry a conversation across processes; " +
       "the session id is printed on stderr as `[session] <id>`. Resume requires " +
-      "`history.storePrompts` (off by default — it is what writes your prompts to disk) " +
-      "and restores text turns only; tool calls are not replayed. " +
+      "`history.storePrompts` (off by default — it is what writes your prompts to disk); " +
+      "restored turns include their full tool-call exchange (tool_use + result), not just text. " +
       "`--persistent` reads stdin incrementally instead of to EOF and keeps the process " +
       "alive between turns — for a client (e.g. a native app) driving one long-lived " +
       "process over stdio instead of spawning a fresh one per message; it ends on stdin " +

@@ -129,7 +129,7 @@ describe("provider switching — shared conversation, context, and transfer", ()
   // -adapterId this file already exercises above) operates on that transcript
   // AS IT ALREADY IS; it cannot hand a new provider tool-call context that was
   // never written down.
-  it("a provider switch carries the FINAL TEXT of a tool-using turn forward, but never the tool call/result content — this is the actual, current guarantee, not a full replay", async () => {
+  it("a provider switch carries the FULL tool exchange of a tool-using turn forward — tool_use, the tool's own result, and the final text", async () => {
     const echoTool: Tool = {
       name: "echo",
       description: "Echo the given text back.",
@@ -171,9 +171,17 @@ describe("provider switching — shared conversation, context, and transfer", ()
     turn1.record(outcome1);
 
     // Confirmed the tool genuinely ran and the run captured it structurally —
-    // this is the exact data `replyMessages` has available and does not use.
+    // this is the exact data `replyMessages` now threads onto the transcript.
     expect(outcome1.winner?.toolCalls.map((t) => t.name)).toEqual(["echo"]);
     expect(outcome1.winner?.text).toContain("echoed: PING");
+
+    // The recorded turn is the whole exchange, not a single collapsed text
+    // message: user prompt, the tool-call assistant message, the tool's own
+    // result (paired back by toolCallId), and the final answer.
+    const roles = session.transcript.map((m) => m.role);
+    expect(roles).toEqual(["user", "assistant", "tool", "assistant"]);
+    const toolMsg = session.transcript.find((m) => m.role === "tool");
+    expect(toolMsg?.toolCallId).toBe(outcome1.winner?.toolCalls[0]?.id);
 
     // Turn 2, switched to `beta` (a plain, non-agent dispatch — same shape
     // `performSwitch`'s next `runTurn` would issue): inspect exactly what the
@@ -198,15 +206,13 @@ describe("provider switching — shared conversation, context, and transfer", ()
     // SURVIVES: the final text answer from the tool-using turn.
     expect(JSON.stringify(sentMessages)).toContain("echoed: PING");
 
-    // DOES NOT SURVIVE: no `tool_use`/`tool_result` content block anywhere in
-    // what the new provider received — the tool call is genuinely gone, not
-    // merely hidden from this assertion by shape.
+    // SURVIVES: the tool_use block that requested it, and the "tool" role
+    // message carrying the result back — `beta` sees the real exchange, not a
+    // synthesized text-only summary of it.
     const blockTypes = sentMessages.flatMap((m) => m.content.map((b: ContentBlock) => b.type));
-    expect(blockTypes).not.toContain("tool_use");
-    expect(blockTypes).not.toContain("tool_result");
-    // Every message the new provider sees is plain text — that IS the
-    // "conversation transcript" a switch receipt claims to preserve.
-    expect(new Set(blockTypes)).toEqual(new Set(["text"]));
+    expect(blockTypes).toContain("tool_use");
+    const toolRoleMsg = sentMessages.find((m) => m.role === "tool");
+    expect(toolRoleMsg?.toolCallId).toBe(outcome1.winner?.toolCalls[0]?.id);
 
     await session.dispose();
     await engine.dispose();
