@@ -232,7 +232,34 @@ export class Agent {
 
     const labeled = ctx.bus.publish(source, { runId: agentRunId, laneIndex: 0 });
     const pump = async (): Promise<void> => {
-      for await (const l of labeled) queue.push(l);
+      for await (const l of labeled) {
+        // `oodaLoop` yields two kinds of chunk on this one lane: its OWN
+        // coordinator narration (`agentMetaChunk()` — step-start/plan/reflect/
+        // progress/replan/retry/goal/stop, tagged with `raw.agent`) and a raw
+        // pass-through re-yield of each inner per-step `dispatchAgent` call's
+        // chunks (`yield c` below). The inner call already persisted ITS chunks
+        // itself, under its own run id — persisting them again here would
+        // duplicate every text/tool_call/tool_result/usage/done row under
+        // `agentRunId` instead. Only the coordinator's own narration reaches no
+        // other `ctx.store`, so it is the only thing persisted here — without
+        // this, the whole OODA narrative (and the final `stop` event's verdict)
+        // exists only while the run is live and a later `replay` cannot
+        // reproduce it.
+        if (ctx.store && isAgentMeta((l.chunk as { raw?: unknown }).raw)) {
+          try {
+            await ctx.store.append({
+              sessionId: ctx.sessionId,
+              turnId: ctx.turnId,
+              runId: l.runId,
+              seq: l.seq,
+              chunk: l.chunk,
+            });
+          } catch (e) {
+            ctx.emit?.({ type: "store-error", traceId: ctx.turnId, ts: Date.now(), data: String(e) });
+          }
+        }
+        queue.push(l);
+      }
       resolveResult(finalResult as AgentRunResult);
       queue.close();
     };
