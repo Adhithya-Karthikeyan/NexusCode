@@ -241,6 +241,19 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(RunMode.race.isMultiLane)
     }
 
+    func testEveryTabBelongsToExactlyOneGroupAndNoneAreOrphaned() {
+        // A tab added later but left out of `group`'s switch would vanish from
+        // the sidebar entirely — the switch is exhaustive so that cannot
+        // compile, but this also guards the reverse: a group with no tabs would
+        // render an empty header.
+        let grouped = WorkspaceTab.Group.allCases.flatMap { WorkspaceTab.tabs(in: $0) }
+        XCTAssertEqual(Set(grouped), Set(WorkspaceTab.allCases))
+        XCTAssertEqual(grouped.count, WorkspaceTab.allCases.count, "a tab appears in two groups")
+        for group in WorkspaceTab.Group.allCases {
+            XCTAssertFalse(WorkspaceTab.tabs(in: group).isEmpty, "\(group) renders an empty header")
+        }
+    }
+
     func testEveryTabHasAnIconAndTitle() {
         for tab in WorkspaceTab.allCases {
             XCTAssertFalse(tab.title.isEmpty)

@@ -123,17 +123,23 @@ private struct Sidebar: View {
                 ProjectSwitcherRow()
                     .padding(.bottom, Space.lg)
 
-                SectionHeader("Workspace")
-                    .padding(.bottom, Space.xs)
+                // Grouped, not one flat list of eight. Ungrouped peers read as
+                // equal, which is wrong: Settings is configured once, Chat is
+                // used every session.
+                ForEach(WorkspaceTab.Group.allCases) { group in
+                    SectionHeader(group.title)
+                        .padding(.top, group == .work ? 0 : Space.lg)
+                        .padding(.bottom, Space.xs)
 
-                VStack(spacing: 2) {
-                    ForEach(WorkspaceTab.allCases) { tab in
-                        SidebarNavRow(
-                            tab: tab,
-                            isSelected: workspace.tab == tab,
-                            badge: badge(for: tab),
-                            action: { workspace.tab = tab }
-                        )
+                    VStack(spacing: 2) {
+                        ForEach(WorkspaceTab.tabs(in: group)) { tab in
+                            SidebarNavRow(
+                                tab: tab,
+                                isSelected: workspace.tab == tab,
+                                badge: badge(for: tab),
+                                action: { workspace.tab = tab }
+                            )
+                        }
                     }
                 }
             }

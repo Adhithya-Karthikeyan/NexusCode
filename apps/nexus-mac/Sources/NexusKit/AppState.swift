@@ -27,6 +27,43 @@ public enum WorkspaceTab: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Sidebar grouping.
+    ///
+    /// Eight ungrouped peers read as a list, not a hierarchy — and worse, they
+    /// read as EQUAL: "Settings" (configured once) sits at the same visual
+    /// weight as "Chat" (used every session). Grouping by how often you go
+    /// there is what restores that distinction.
+    public enum Group: String, CaseIterable, Identifiable, Sendable {
+        /// Where time is actually spent.
+        case work
+        /// Records of what already happened.
+        case history
+        /// Configured once, revisited rarely.
+        case setup
+
+        public var id: String { rawValue }
+        public var title: String {
+            switch self {
+            case .work: return "Work"
+            case .history: return "History"
+            case .setup: return "Setup"
+            }
+        }
+    }
+
+    public var group: Group {
+        switch self {
+        case .chat, .agents, .tasks: return .work
+        case .sessions, .git: return .history
+        case .accounts, .integrations, .settings: return .setup
+        }
+    }
+
+    /// Tabs in this group, in declaration order.
+    public static func tabs(in group: Group) -> [WorkspaceTab] {
+        allCases.filter { $0.group == group }
+    }
+
     public var systemImage: String {
         switch self {
         case .chat: return "bubble.left.and.bubble.right"
