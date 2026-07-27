@@ -134,6 +134,7 @@ import {
 } from "./reliability.js";
 import {
   buildRuntime,
+  buildAuthedRuntime,
   isProviderUsable,
   listModelsForProvider,
   routerMetadataFrom,
@@ -223,26 +224,6 @@ async function readPrompt(args: ParsedArgs): Promise<string> {
 async function loadEffectiveConfig(): Promise<NexusConfig> {
   const { config } = await loadConfig({ userConfigDir: userConfigDir() });
   return config;
-}
-
-/**
- * Build the runtime with the per-provider {@link ProviderAuthRegistry} wired
- * (Wave 13): credential resolution for a provider that has been logged in goes
- * through its auth strategy — an auto-refreshed OAuth Bearer (Anthropic "login
- * like Claude Code"), an API key, a wrapped-CLI session, or the cloud credential
- * chain — instead of the legacy env/api-key-only path. Fully additive: a
- * provider with no strategy (e.g. `mock`) resolves exactly as before, and the
- * env-var + `keys set` paths keep working (the api-key strategy reads the same
- * env var / SecretStore ref). Shares ONE SecretStore between the auth registry
- * and the runtime so a token stored at login is resolvable here.
- */
-async function buildAuthedRuntime(
-  config: NexusConfig,
-  opts: Parameters<typeof buildRuntime>[1] = {},
-): Promise<Runtime> {
-  const secrets = opts.secrets ?? resolveAuthSecrets(config);
-  const authRegistry = buildAuthRegistry(config, secrets);
-  return buildRuntime(config, { ...opts, secrets, authRegistry });
 }
 
 function firstModel(registry: ProviderRegistry, providerId: string): string | undefined {
@@ -2158,7 +2139,10 @@ export async function cmdCode(args: ParsedArgs, io: Io = defaultIo): Promise<num
   }
 
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // `buildAuthedRuntime` — `--agent`/`--provider` can name a provider the user
+  // is only signed into via OAuth (e.g. `anthropic`), which plain `buildRuntime`
+  // cannot see (see `buildAuthedRuntime`'s doc in runtime.ts).
+  const runtime = await buildAuthedRuntime(config);
   // `--agent` is the natural flag for `code`; `--provider` also works.
   const providerId = args.flags.get("agent") ?? args.flags.get("provider") ?? "claude-code";
   if (!runtime.registry.has(providerId)) {
@@ -2325,7 +2309,9 @@ export async function cmdCompare(args: ParsedArgs, io: Io = defaultIo): Promise<
   }
 
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // `-b/--backend` names providers by id — must see auth-derived (OAuth-only)
+  // providers, not just statically configured ones (see `buildAuthedRuntime`).
+  const runtime = await buildAuthedRuntime(config);
   const backends = parseBackends(args);
   if (backends.length < 2) {
     io.err("nexus compare: need at least two -b/--backend providers\n");
@@ -2533,7 +2519,8 @@ export async function cmdRace(args: ParsedArgs, io: Io = defaultIo): Promise<num
     return 2;
   }
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // `-b/--backend` names providers by id — see `buildAuthedRuntime`'s doc.
+  const runtime = await buildAuthedRuntime(config);
   const resolved = backendRuns(args, runtime, config, prompt, io, "race");
   if (typeof resolved === "number") return resolved;
 
@@ -2566,7 +2553,8 @@ export async function cmdConsensus(args: ParsedArgs, io: Io = defaultIo): Promis
     return 2;
   }
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // `-b/--backend` names providers by id — see `buildAuthedRuntime`'s doc.
+  const runtime = await buildAuthedRuntime(config);
   const resolved = backendRuns(args, runtime, config, prompt, io, "consensus");
   if (typeof resolved === "number") return resolved;
 
@@ -2606,7 +2594,8 @@ export async function cmdChain(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     return 2;
   }
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // `--provider`/`--stages` name providers by id — see `buildAuthedRuntime`'s doc.
+  const runtime = await buildAuthedRuntime(config);
   const provider = args.flags.get("provider") ?? "mock";
 
   const stages: ChainStage[] = [];
@@ -2724,7 +2713,10 @@ export async function cmdRoute(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   const sub = args.positionals[0] ?? "explain";
   const output = parseOutput(args);
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // Router candidates are drawn from `runtime.registry` — an OAuth-only signed-in
+  // provider must be a routable candidate, not silently excluded (see
+  // `buildAuthedRuntime`'s doc).
+  const runtime = await buildAuthedRuntime(config);
   const providerCircuit = openProviderCircuit(config);
   const rule = ruleFromArgs(args);
   const meta = routerMetadataFrom(config);
@@ -4195,6 +4187,10 @@ export async function cmdMcp(args: ParsedArgs, io: Io = defaultIo): Promise<numb
 
   if (sub === "tools") {
     const config = await loadEffectiveConfig();
+    // Intentionally the plain (unauthed) builder: this only needs a SecretStore
+    // to resolve `--bearer-ref` refs for MCP servers — it never resolves a
+    // provider id, so it doesn't need auth-derived provider visibility (see
+    // `buildAuthedRuntime`'s doc in runtime.ts).
     const runtime = await buildRuntime(config);
     const mcp = await startMcpSession(config, runtime.secrets);
     try {
@@ -4273,6 +4269,7 @@ export async function cmdMcp(args: ParsedArgs, io: Io = defaultIo): Promise<numb
     }
 
     const config = await loadEffectiveConfig();
+    // Intentionally unauthed — same reasoning as the `tools` subcommand above.
     const runtime = await buildRuntime(config);
     const mcp = await startMcpSession(config, runtime.secrets);
     try {
@@ -4562,7 +4559,10 @@ export async function cmdKeys(
 ): Promise<number> {
   const sub = args.positionals[0] ?? "list";
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // `keys test <provider>` checks `runtime.registry.has(providerId)` for a
+  // user-named provider — must see auth-derived (OAuth-only) providers too
+  // (see `buildAuthedRuntime`'s doc).
+  const runtime = await buildAuthedRuntime(config);
   const secrets = runtime.secrets;
 
   if (sub === "set") {
@@ -5121,7 +5121,13 @@ export async function cmdConfig(args: ParsedArgs, io: Io = defaultIo): Promise<n
 
 export async function cmdDoctor(_args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const config = await loadEffectiveConfig();
-  const runtime = await buildRuntime(config);
+  // The "providers:" section below walks `runtime.statuses`/`runtime.registry`
+  // and MUST agree with the "auth:" section's sign-in state — an unauthed
+  // runtime would report a provider the user is actually signed into (via
+  // OAuth only, no static `providers[]` entry) as entirely absent, which is
+  // the exact "doctor says a provider you're signed into is missing" failure
+  // this command must never produce (see `buildAuthedRuntime`'s doc).
+  const runtime = await buildAuthedRuntime(config);
 
   io.out("nexus doctor\n");
   io.out(`config dir: ${userConfigDir()}\n`);
@@ -5417,7 +5423,11 @@ async function resolveRagEmbedder(config: NexusConfig, io: Io): Promise<Embedder
   // The registry is intentionally left undisposed: the returned embedder holds
   // the resolved adapter and calls `embed()` after this function returns. In a
   // short-lived CLI invocation this leaks nothing meaningful.
-  const runtime = await buildRuntime(config);
+  //
+  // Authed: `rag.embedderProvider` can name a provider the user is only
+  // signed into via OAuth — must not report it as "not available" (see
+  // `buildAuthedRuntime`'s doc).
+  const runtime = await buildAuthedRuntime(config);
   if (!runtime.registry.has(providerId)) {
     io.err(`nexus rag: provider "${providerId}" not available — using the offline hashing embedder\n`);
     return undefined;

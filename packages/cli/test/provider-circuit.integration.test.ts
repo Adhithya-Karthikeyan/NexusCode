@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AdapterError, ProviderCircuitBreaker } from "@nexuscode/core";
+import { spawnCli } from "./helpers/spawn-cli.js";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const ROOT = mkdtempSync(join(tmpdir(), "nx-provider-circuit-"));
@@ -37,27 +37,14 @@ beforeAll(() => {
 });
 
 function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, ...args], {
-      cwd: WORK_DIR,
-      env: {
-        ...process.env,
-        NEXUS_CONFIG_DIR: CONFIG_DIR,
-        NEXUS_DATA_DIR: DATA_DIR,
-        NO_COLOR: "1",
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
-    child.stdin.end();
+  return spawnCli(BIN, args, {
+    cwd: WORK_DIR,
+    env: {
+      ...process.env,
+      NEXUS_CONFIG_DIR: CONFIG_DIR,
+      NEXUS_DATA_DIR: DATA_DIR,
+      NO_COLOR: "1",
+    },
   });
 }
 

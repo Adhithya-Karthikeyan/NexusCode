@@ -84,8 +84,36 @@ Fix by logging out / rebooting, or launch from Xcode.
 - 🔄 **Themes are terminal palettes, not app themes.** Root cause is
   architectural: they are GENERATED from `packages/theme`, an ANSI/terminal
   system — flat solid tokens with no material, elevation, gradient or state
-  layer. Correct for a terminal, which is why the app reads cheap. Being
-  replaced with a hand-designed app theme model.
+  layer. Correct for a terminal, which is why the app reads cheap.
+
+  Seven hand-designed app themes now exist — Meridian, Basalt, Cinder (dark),
+  Daylight, Studio (light), Vantage (high-contrast AAA), Nightfall
+  (gradient-forward) — on a model with elevation, materials, gradients, state
+  layers and typographic intent.
+
+  ⚠️ **They are NOT wired, so from the user's seat NOTHING is fixed yet.** The
+  environment key is typed `NexusTheme`, `NexusApp.swift` resolves
+  `NexusTheme.named(…) ?? NexusTheme.all[0]`, and `RootView`'s picker iterates
+  the same 16 generated palettes. `AppTheme.all` is unreachable dead data. What
+  DOES execute is the `NexusTheme.appTheme` bridge, which derives a generic
+  `AppTheme` from any old flat palette — so real shadow and per-theme
+  hover/press ARE live today, using auto-derived rather than hand-tuned values,
+  with materials forced to `.solid` and typography to `.neutral`. In flight:
+  swap the env key to `AppTheme`, group hand-designed above terminal-derived,
+  default to Meridian, wire `pairId` for OS light/dark following.
+
+  **Two measured contrast failures**, found only when the check was widened from
+  body/secondary text to the pairs components actually compose:
+  `accentFg`/`accentDefault` is **3.40 in Daylight** and **4.15 in Studio**
+  (floor 4.5) — that is exactly what `SoftButton`'s `.accent` tone renders, so a
+  primary button label is sub-AA in both light themes. The coverage was the gap,
+  not the palette. Body text passes everywhere (14.17–19.42), secondary too
+  (5.49–14.29).
+
+  **Pre-existing and worth fixing anyway:** `CountPill` pairs `accentFg` on
+  `accentMuted`, which measures 1.50–3.70 across ALL seven new themes AND the
+  original 16 (paper-nexus 1.89, midnight 2.53). Not introduced here — a
+  standing legibility bug in what ships today.
 - 🔄 **Layout/UX reads cheap and boring.** Research-first: a spec is being
   produced before any more building.
 - ✅ **OMC for every provider, not just Claude.** ANSWERED, by execution — see
@@ -160,16 +188,20 @@ and `permissionMode`. Provider-neutral by construction.
    otherwise the fold would have to assume "the next event is my narration",
    coupling a pure reducer to wire adjacency.
 
-   🔄 **BUT the wire is still empty — unit tests passing did NOT mean this
-   worked.** Running it end to end (`agent --role coder … -o ndjson`) produced
-   session/tool_call/text/usage/done and **zero `agent` events**. Cause:
-   `runAgentOoda` (`commands.ts:1411-1428`) intercepts agent-meta chunks and
-   prints them to stderr as prose, then `continue`s — so they never reach
-   `projectLabeled`. That interception is CORRECT for `-o text` (without it the
-   phases render as one unseparated blob) and wrong only for `-o ndjson`. Fix in
-   flight: gate the branch on `output !== "ndjson"`.
+   ✅ **The wire now actually carries them** — but note that unit tests passing
+   did NOT mean this worked. Running it end to end (`agent --role coder …
+   -o ndjson`) first produced session/tool_call/text/usage/done and **zero
+   `agent` events**. Cause: `runAgentOoda` (`commands.ts:1411-1428`) intercepted
+   agent-meta chunks, printed them to stderr as prose, then `continue`d — so
+   they never reached `projectLabeled`. That interception is CORRECT for
+   `-o text` (without it the phases render as one unseparated blob) and wrong
+   only for `-o ndjson`; the branch is now gated on the output mode. Verified:
+   the same command emits 7 `agent` events.
    **Lesson worth keeping: three green unit-test suites and a clean build still
    described a feature that did not work. Only running the binary found it.**
+   (Related trap: the narration goes to STDERR, so stdout ndjson was never
+   actually corrupted — running with `2>&1` made it look like it was, and
+   produced one wrong diagnosis before it was caught.)
 2. ✅ **Delegation is implemented but unreachable** — now reachable, opt-in, and
    `runner.ts` was NOT touched. `delegatingEvaluate` (exported from
    `packages/agent/src/index.ts`) triggers on ONE specific signal: the tool
@@ -213,14 +245,28 @@ and `permissionMode`. Provider-neutral by construction.
 
    Still open after that: `AgentRowBuilder` needs a third origin beside
    `.lane`/`.omc`, and the badge at `AgentsView.swift:334` a `NEXUS` case.
-4. 🔄 **Role discovery must be a command, not a hardcoded Swift list.** There is
-   currently NO machine-readable way to enumerate roles — the only listing is a
-   stderr error string (`nexus agent --role nope` → `(roles: coordinator,
-   planner, coder, reviewer, tester, researcher, architect, doc-writer,
-   security-reviewer)`). Hardcoding those nine in the app would recreate the
-   stale-model-picker bug one layer up. A `roles … -o json` listing derived from
-   `AGENT_ROLES`/`ROLE_PRESETS` is in flight; the app takes `role` as a
-   pass-through `String?` and owns no copy of the list.
+4. ✅ **Role discovery is now a command.** Previously the ONLY enumeration was a
+   stderr error string (`nexus agent --role nope` → `(roles: coordinator, …)`);
+   hardcoding those nine in Swift would have recreated the stale-model-picker
+   bug one layer up. `nexus roles -o json` is derived from
+   `AGENT_ROLES`/`ROLE_PRESETS`, so it cannot drift, and carries exactly what a
+   picker needs to explain a role and warn before running a writing one:
+
+   | role | tools | maxSteps | permissionMode |
+   |---|---|---|---|
+   | coordinator | `*` | 12 | workspace-write |
+   | planner | read, search | 4 | read-only |
+   | coder | read, search, write, patch, exec | 10 | workspace-write |
+   | reviewer | read, search | 6 | read-only |
+   | tester | read, search, write, exec | 8 | workspace-write |
+   | researcher | read, search | 6 | read-only |
+   | architect | read, search | 5 | read-only |
+   | doc-writer | read, search, write | 6 | workspace-write |
+   | security-reviewer | read, search | 6 | read-only |
+
+   Prompt text is deliberately NOT emitted — long, useless to a picker, and
+   unpleasant in logs. The app takes `role` as a pass-through `String?` and owns
+   no copy of the list.
 5. ⬜ `nexus team --roles coder,reviewer,tester` — per the standing rule, the CLI
    command must exist before the app can expose it.
 5. ⬜ Cheap win: ship a `nexus`-backed advisor script + document

@@ -36,7 +36,7 @@ import {
 import type { ProviderAdapter, ProviderRegistry, UiEvent } from "@nexuscode/core";
 import type { ParsedArgs } from "./args.js";
 import { userConfigDir } from "./config-io.js";
-import { buildRuntime } from "./runtime.js";
+import { buildAuthedRuntime } from "./runtime.js";
 import {
   buildObservability,
   loadTraceSpans,
@@ -452,13 +452,20 @@ export async function cmdTrace(args: ParsedArgs, io: Io = defaultIo): Promise<nu
 
 // ── git flows (commit | review | explain | pr) ────────────────────────────────
 
-/** Resolve a provider adapter + model for a git flow (mock-friendly default). */
+/**
+ * Resolve a provider adapter + model for a git flow (mock-friendly default).
+ * Uses the auth-aware runtime builder: `--provider`/`config.defaultProvider`
+ * can name a provider the user is only signed into via OAuth (no static
+ * `providers[]` entry, e.g. `anthropic`) — the plain builder cannot see that
+ * and would wrongly report it "not available" (see `buildAuthedRuntime`'s doc
+ * in `./runtime.ts`).
+ */
 async function resolveGitProvider(
   args: ParsedArgs,
   config: NexusConfig,
   io: Io,
 ): Promise<{ adapter: ProviderAdapter; model: string } | null> {
-  const runtime = await buildRuntime(config);
+  const runtime = await buildAuthedRuntime(config);
   const providerId = args.flags.get("provider") ?? config.defaultProvider;
   const registry: ProviderRegistry = runtime.registry;
   if (!registry.has(providerId)) {

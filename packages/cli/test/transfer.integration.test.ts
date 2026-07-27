@@ -8,7 +8,6 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { spawn } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -22,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import { spawnCli } from "./helpers/spawn-cli.js";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const ROOT = mkdtempSync(join(tmpdir(), "nx-transfer-cli-"));
@@ -32,27 +32,14 @@ const HISTORY_DB = join(CONFIG_DIR, "history.db");
 const SECRET_PROMPT = "transfer-secret-NX-7429";
 
 function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, ...args], {
-      cwd: WORK_DIR,
-      env: {
-        ...process.env,
-        NEXUS_CONFIG_DIR: CONFIG_DIR,
-        NEXUS_DATA_DIR: DATA_DIR,
-        NEXUS_VAULT_PASSPHRASE: "integration-only-passphrase",
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => {
-      stdout += String(d);
-    });
-    child.stderr.on("data", (d) => {
-      stderr += String(d);
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
-    child.stdin.end();
+  return spawnCli(BIN, args, {
+    cwd: WORK_DIR,
+    env: {
+      ...process.env,
+      NEXUS_CONFIG_DIR: CONFIG_DIR,
+      NEXUS_DATA_DIR: DATA_DIR,
+      NEXUS_VAULT_PASSPHRASE: "integration-only-passphrase",
+    },
   });
 }
 

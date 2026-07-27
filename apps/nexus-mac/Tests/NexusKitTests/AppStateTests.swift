@@ -24,18 +24,30 @@ final class AppStateTests: XCTestCase {
         c.model = "claude-sonnet-4-5"
 
         let args = c.plannedCommand(for: "hello").arguments
-        XCTAssertEqual(args.first, "ask")
-        XCTAssertTrue(args.contains("hello"))
+        // `.ask` is single-lane, so `submit()` actually runs this through the
+        // persistent `chat --persistent` process (see `submitToPersistentSession`)
+        // rather than a one-shot `nexus ask` — the preview must say so, not the
+        // subcommand name a one-shot dispatch would use. The prompt itself is
+        // never in this argv: it travels over stdin once the backend is ready.
+        XCTAssertEqual(args.first, "chat")
+        XCTAssertTrue(args.contains("--persistent"))
+        XCTAssertFalse(args.contains("hello"))
         // ndjson is what makes the app a renderer rather than a screen-scraper.
         XCTAssertTrue(args.contains("-o") && args.contains("ndjson"))
         XCTAssertTrue(args.contains("-p") && args.contains("anthropic"))
         XCTAssertTrue(args.contains("-m") && args.contains("claude-sonnet-4-5"))
     }
 
-    func testAgentModeUsesTheAgentSubcommand() {
+    func testAgentModeWithNoRoleAlsoRunsThroughThePersistentSession() {
         let c = controller()
         c.mode = .agent
-        XCTAssertEqual(c.plannedCommand(for: "do it").arguments.first, "agent")
+        // `.agent` with no role is byte-identical to `.ask` (see
+        // `testAgentWithNilRoleIsByteIdenticalToTodaysBehaviour`), so it too
+        // previews and runs the persistent `chat --persistent` invocation —
+        // never the one-shot `nexus agent` subcommand.
+        let args = c.plannedCommand(for: "do it").arguments
+        XCTAssertEqual(args.first, "chat")
+        XCTAssertFalse(args.contains("do it"))
     }
 
     func testCompareFansOutAcrossBackendsAndOmitsProviderFlags() {

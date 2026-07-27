@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+// The role catalog's single source of truth — `nexus roles` must not drift from it.
+import { AGENT_ROLES } from "@nexuscode/agent";
+import { spawnCli } from "./helpers/spawn-cli.js";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const PKG = fileURLToPath(new URL("../package.json", import.meta.url));
@@ -20,30 +22,18 @@ interface CliResult {
 }
 
 function runCli(args: string[], input = "", extraEnv: Record<string, string> = {}): Promise<CliResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, ...args], {
-      cwd: WORK_DIR,
-      env: {
-        ...process.env,
-        NEXUS_CONFIG_DIR: CONFIG_DIR,
-        NEXUS_DATA_DIR: DATA_DIR,
-        NEXUSCODE_DATA_DIR: DATA_DIR,
-        NEXUS_HISTORY_DISABLED: "1",
-        NEXUS_VAULT_PASSPHRASE: "test-passphrase",
-        ...extraEnv,
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => {
-      stdout += String(d);
-    });
-    child.stderr.on("data", (d) => {
-      stderr += String(d);
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
-    child.stdin.end(input);
+  return spawnCli(BIN, args, {
+    cwd: WORK_DIR,
+    input,
+    env: {
+      ...process.env,
+      NEXUS_CONFIG_DIR: CONFIG_DIR,
+      NEXUS_DATA_DIR: DATA_DIR,
+      NEXUSCODE_DATA_DIR: DATA_DIR,
+      NEXUS_HISTORY_DISABLED: "1",
+      NEXUS_VAULT_PASSPHRASE: "test-passphrase",
+      ...extraEnv,
+    },
   });
 }
 
@@ -879,6 +869,168 @@ describe("nexus agent --role (Wave 7 OODA framework)", () => {
     const r = await runCli(["agent", "x", "-p", "mock", "-m", "mock-tools", "--role", "wizard"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/unknown role/);
+  }, 20_000);
+});
+
+describe("nexus agent --role -o ndjson (OODA phases as STRUCTURED events)", () => {
+  const roleNdjson = (): Promise<CliResult> =>
+    runCli([
+      "agent",
+      "add a hello function",
+      "-p",
+      "mock",
+      "-m",
+      "mock-tools",
+      "--role",
+      "coder",
+      "--max-steps",
+      "1",
+      "-o",
+      "ndjson",
+    ]);
+
+  // The step log is written to stderr for humans. Under ndjson that swallowed the
+  // chunks entirely, so a programmatic client got prose it could not consume and
+  // the `agent` UiEvent never reached the wire.
+  it("emits agent events carrying phase/role/step/text, including a stop verdict", async () => {
+    const r = await roleNdjson();
+    expect(r.code).toBe(0);
+    const events = r.stdout
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const agents = events.filter((e) => e.t === "agent");
+    expect(agents.length).toBeGreaterThan(0);
+    for (const a of agents) {
+      expect(typeof a.phase).toBe("string");
+      expect(a.role).toBe("coder");
+      expect(typeof a.step).toBe("number");
+      expect(typeof a.text).toBe("string");
+      expect((a.text as string).length).toBeGreaterThan(0);
+    }
+    // The terminal phase carries the run's verdict — what a UI must render rather
+    // than collapsing an unverified run into a checkmark.
+    const stop = agents.find((a) => a.phase === "stop");
+    expect(stop).toBeDefined();
+    expect((stop?.data as { verdict?: unknown } | undefined)?.verdict).toBeDefined();
+  }, 30_000);
+
+  it("pairs every agent event with the reasoning event carrying the same text", async () => {
+    const r = await roleNdjson();
+    const events = r.stdout
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    let pairs = 0;
+    events.forEach((e, i) => {
+      if (e.t !== "agent") return;
+      const next = events[i + 1];
+      // The pair is the contract: `agent` is a typed header for the narration
+      // line that follows, so a text-only consumer keeps working byte-identically.
+      expect(next?.t).toBe("reasoning");
+      expect(next?.delta).toBe(e.text);
+      pairs++;
+    });
+    expect(pairs).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("keeps stdout 100% parseable ndjson — every line, no prose leakage", async () => {
+    const r = await roleNdjson();
+    const lines = r.stdout.trim().split("\n");
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(() => JSON.parse(line) as unknown).not.toThrow();
+      expect(typeof (JSON.parse(line) as { t?: unknown }).t).toBe("string");
+    }
+    // The narration text legitimately appears INSIDE an agent event's `text`
+    // field, so the property that matters is that no line is bare prose — every
+    // line is a JSON object. Under ndjson the step log is NOT also written to
+    // stderr: the whole point is that a client gets one structured stream.
+    for (const line of lines) expect(line.startsWith("{")).toBe(true);
+    expect(r.stderr).not.toContain("Step 0: observing");
+  }, 30_000);
+
+  // Regression guard for the ORIGINAL bug the stderr branch fixed: without it
+  // renderStreaming ran the phases together into one unreadable blob.
+  it("-o text still prints one narration line per phase on stderr and no agent JSON", async () => {
+    const r = await runCli([
+      "agent",
+      "add a hello function",
+      "-p",
+      "mock",
+      "-m",
+      "mock-tools",
+      "--role",
+      "coder",
+      "--max-steps",
+      "1",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/\nProgress: \d+%\n/);
+    expect(r.stderr).toMatch(/\nRun finished: [a-z-]+\.\n/);
+    expect(r.stderr).not.toMatch(/100%Run finished/);
+    expect(r.stdout).not.toContain('"t":"agent"');
+  }, 30_000);
+});
+
+describe("nexus roles (machine-readable role catalog)", () => {
+  it("lists EXACTLY the shipped roles — no omissions, no extras, no second copy", async () => {
+    const r = await runCli(["roles", "-o", "json"]);
+    expect(r.code).toBe(0);
+    const doc = JSON.parse(r.stdout.trim()) as { roles: { id: string }[] };
+    // Compared against the framework's own export: if a role is ever added to
+    // (or removed from) ROLE_PRESETS and this listing is not derived from it,
+    // this fails rather than silently shipping a stale picker.
+    expect(doc.roles.map((x) => x.id)).toEqual([...AGENT_ROLES]);
+  }, 20_000);
+
+  it("reports the fields that differentiate a role, and never the system prompt", async () => {
+    const r = await runCli(["roles", "-o", "json"]);
+    const doc = JSON.parse(r.stdout.trim()) as {
+      roles: { id: string; tools: string[]; maxSteps: number; permissionMode: string }[];
+    };
+    for (const role of doc.roles) {
+      expect(Array.isArray(role.tools)).toBe(true);
+      expect(role.tools.length).toBeGreaterThan(0);
+      expect(role.maxSteps).toBeGreaterThan(0);
+      expect(["read-only", "workspace-write", "full-access"]).toContain(role.permissionMode);
+      expect(role).not.toHaveProperty("systemPrompt");
+    }
+    // Spot-check the contract a UI depends on to warn before a role can write.
+    const reviewer = doc.roles.find((x) => x.id === "reviewer");
+    expect(reviewer?.permissionMode).toBe("read-only");
+    const coder = doc.roles.find((x) => x.id === "coder");
+    expect(coder?.permissionMode).toBe("workspace-write");
+  }, 20_000);
+
+  it("every listed role is actually runnable by `agent --role` (catalog matches reality)", async () => {
+    const r = await runCli(["roles", "-o", "json"]);
+    const ids = (JSON.parse(r.stdout.trim()) as { roles: { id: string }[] }).roles.map((x) => x.id);
+    // The listing would be worse than useless if it advertised a role the runner
+    // rejects, so every id is exercised against the real unknown-role check.
+    for (const id of ids) {
+      const run = await runCli([
+        "agent",
+        "hi",
+        "-p",
+        "mock",
+        "-m",
+        "mock-tools",
+        "--role",
+        id,
+        "--max-steps",
+        "1",
+      ]);
+      expect(run.stderr).not.toMatch(/unknown role/);
+    }
+  }, 120_000);
+
+  it("prints a human table by default with the sandbox class visible", async () => {
+    const r = await runCli(["roles"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/coder\s+workspace-write/);
+    expect(r.stdout).toMatch(/reviewer\s+read-only/);
+    for (const role of AGENT_ROLES) expect(r.stdout).toContain(role);
   }, 20_000);
 });
 

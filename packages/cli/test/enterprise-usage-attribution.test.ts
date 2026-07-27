@@ -15,11 +15,11 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { spawnCli } from "./helpers/spawn-cli.js";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 
@@ -44,25 +44,16 @@ function runCli(
   args: string[],
   extraEnv: Record<string, string> = {},
 ): Promise<CliResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, ...args], {
-      cwd: box.workDir,
-      env: {
-        ...process.env,
-        NEXUS_CONFIG_DIR: box.configDir,
-        NEXUS_DATA_DIR: box.dataDir,
-        NEXUSCODE_DATA_DIR: box.dataDir,
-        NEXUS_VAULT_PASSPHRASE: "test-passphrase",
-        ...extraEnv,
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => (stdout += String(d)));
-    child.stderr.on("data", (d) => (stderr += String(d)));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
-    child.stdin.end("");
+  return spawnCli(BIN, args, {
+    cwd: box.workDir,
+    env: {
+      ...process.env,
+      NEXUS_CONFIG_DIR: box.configDir,
+      NEXUS_DATA_DIR: box.dataDir,
+      NEXUSCODE_DATA_DIR: box.dataDir,
+      NEXUS_VAULT_PASSPHRASE: "test-passphrase",
+      ...extraEnv,
+    },
   });
 }
 
