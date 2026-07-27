@@ -114,7 +114,7 @@ describe("truncateToolResultForHistory — caps what a tool result carries into 
   it("passes non-text blocks through untouched", () => {
     const content: ContentBlock[] = [
       { type: "text", text: "x".repeat(20_000) },
-      { type: "image", source: { type: "base64", mediaType: "image/png", data: "abc" } } as ContentBlock,
+      { type: "image", mime: "image/png", data: "abc" },
     ];
     const result = truncateToolResultForHistory(content);
     expect(result.some((b) => b.type === "image")).toBe(true);
