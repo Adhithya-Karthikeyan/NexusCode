@@ -460,6 +460,25 @@ public final class ConversationController {
         for event in events { ingest(event) }
     }
 
+    /// Points this conversation at a different, already-recorded session and
+    /// drops whatever backend was live, so the NEXT submit starts fresh
+    /// against it — picking up `--resume <sessionId>` the same way a brand
+    /// new conversation picks up its first provider/model (see
+    /// `persistentSessionArguments`).
+    ///
+    /// This is the shared seam both "Resume" and "Replay" build on in the
+    /// Sessions tab: `endSession()` and `clear()` already exist for exactly
+    /// this (stop the live process, reset the fold) — this just sequences
+    /// them with the target id rather than adding a second, parallel way to
+    /// open a session. Resume stops here, leaving the transcript empty for
+    /// `--resume` to carry forward; Replay follows up with `ingest(_:)` to
+    /// re-populate it immediately from the recorded log.
+    public func reopen(sessionId: String) {
+        endSession()
+        clear()
+        self.sessionId = sessionId
+    }
+
     /// Clear the transcript. Does not touch the durable session — history stays
     /// in the CLI's store, reachable from the Sessions tab.
     public func clear() {

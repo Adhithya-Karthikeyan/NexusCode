@@ -176,4 +176,18 @@ public final class SessionsController {
     public func replayCommand(for sessionId: String) -> NexusCommand {
         .replay(sessionId: sessionId, cwd: workingDirectory)
     }
+
+    /// Runs `replayCommand(for:)` to completion and collects the raw
+    /// `UiEvent`s it streams — hand the result to
+    /// `ConversationController.ingest(_:)` to re-render the session (see that
+    /// method's doc). Diagnostics and the exit reason are dropped: a replay is
+    /// either the full recorded log or nothing meaningful to show, so there is
+    /// no partial-failure state worth reporting separately from an empty array.
+    public func replayEvents(for sessionId: String) async -> [UiEvent] {
+        var events: [UiEvent] = []
+        for await item in client.stream(replayCommand(for: sessionId)) {
+            if case .event(let event) = item { events.append(event) }
+        }
+        return events
+    }
 }

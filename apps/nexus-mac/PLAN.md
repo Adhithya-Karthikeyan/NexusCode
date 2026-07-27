@@ -86,8 +86,42 @@ neither hidden nor labelled.
 ⚠️ **A false negative to remember:** AppleScript/System Events reports
 `NSAttributedString`-backed AX descriptions as "missing value" even when a real
 label exists. My original "zero accessibility labels" claim came from System
-Events and was wrong. Verify with a native `AXUIElementCopyAttributeValue`
-inspector.
+Events and was wrong — `RootView.swift:346` labels all eight nav rows. Verify
+with a native `AXUIElementCopyAttributeValue` inspector, or read the source.
+
+**More structural findings** (full detail + evidence tiers in `UI-INVENTORY.md`
+§0.1 — it tags every accessibility claim by how well proven it is, and later
+work should respect those tiers rather than treating all findings as equal):
+
+- 🔴 **23 theme swatches are not buttons at all.** `RootView.swift:538`,`:556`
+  use `.onTapGesture` on a `VStack` — no `Button`, so **no `AXButton` role
+  exists to name and there is NO keyboard access**. Worse than an unnamed
+  button, because there is no element. Structural certainty, no runtime tool
+  needed.
+- 🔴 **Keyboard focus is invisible app-wide.** `SoftButton`'s doc promises a
+  focus-visible border; `makeBody` never reads focus state. Only the composer
+  shows focus.
+- 🔴 **At 900pt the leading control cluster needs ~650pt and gets ~376pt**, so
+  the provider and model pickers scroll out of reach while an inert "Ask first"
+  readout and an unclickable session id stay pinned. Fine at the 1280 default,
+  which is why it survived.
+- 🟠 **Destructive actions are inconsistently gated**: `Delete task` and
+  `Commit` confirm; **`Clear transcript` and `Sign out` do not** — both destroy
+  real state.
+- 🟠 **12 glyphs render at 7-9pt**, below the 10pt floor `Kind.micro`'s own doc
+  comment declares (`DesignSystem.swift:53`).
+- 🟠 **Settings is the last vertical-composition violation** — a bare
+  `ScrollView` containing header + both grids + project card. It only avoids the
+  symptom because 23 swatches happen to fill the window. Sessions and Accounts
+  implement the rule by hand (`Group{}.frame(maxHeight:.infinity)`) rather than
+  via `PageScaffold`; that is correct, not a violation.
+- 🟠 **The Agents screen has ZERO interactive controls** — nothing clickable,
+  expandable, or focusable — despite being the flagship feature.
+
+**The composition rule, now written down** (`UI-INVENTORY.md` §B.1): *a screen is
+a fixed-height header plus exactly one region that owns all remaining height;
+that region either scrolls or centres, and never top-aligns short content inside
+a tall scroll view.*
 
 ### Hard rules learned the hard way
 - **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An

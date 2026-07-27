@@ -13,9 +13,14 @@ struct SessionsView: View {
     @Environment(\.nexusTheme) private var theme
 
     @State private var controller: SessionsController?
+    /// Built alongside `controller`, from the same binary — Resume/Replay use
+    /// it to stream `nexus replay` directly rather than routing through
+    /// `SessionsController`'s list/detail-shaped API.
+    @State private var client: NexusClient?
     @State private var selectedSessionId: String?
     @State private var detail: NexusSessionDetail?
     @State private var isLoadingDetail = false
+    @State private var isReplaying = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
