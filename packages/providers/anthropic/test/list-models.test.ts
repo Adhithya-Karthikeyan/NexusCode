@@ -92,4 +92,18 @@ describe("anthropic — listModels", () => {
     );
     expect(await adapter.listModels!()).toEqual(DEFAULT_ANTHROPIC_MODELS);
   });
+
+  it("the curated fallback catalog is the current Claude 5 generation, not a stale 4.x/3.x snapshot (regression: the model picker showed old model versions)", () => {
+    const ids = DEFAULT_ANTHROPIC_MODELS.map((m) => m.id);
+    expect(ids).toContain("claude-opus-5");
+    expect(ids).toContain("claude-sonnet-5");
+    expect(ids).toContain("claude-haiku-4-5-20251001");
+    // The stale generation this replaces — must never reappear.
+    expect(ids).not.toContain("claude-opus-4-1");
+    expect(ids).not.toContain("claude-opus-4-0");
+    expect(ids).not.toContain("claude-sonnet-4-5");
+    expect(ids).not.toContain("claude-sonnet-4-0");
+    expect(ids).not.toContain("claude-3-7-sonnet-latest");
+    expect(ids).not.toContain("claude-3-5-haiku-latest");
+  });
 });

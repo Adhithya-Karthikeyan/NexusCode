@@ -456,6 +456,86 @@ describe("nexus providers list (native cloud models: gemini / bedrock / vertex)"
   }, 20_000);
 });
 
+describe("nexus providers list/status — default 'anthropic' entry (BUG: was entirely absent from the picker)", () => {
+  // Regression: `cmdProviders`/`cmdModels` built the runtime with plain
+  // `buildRuntime(config)` instead of `buildAuthedRuntime(config)`, so
+  // `registerDefaultAnthropicProvider` (which only registers "anthropic" when
+  // an authRegistry is passed) never ran for these two commands — "anthropic"
+  // was missing from `providers list`/`status` entirely (not merely flagged
+  // needsKey) and `nexus models anthropic` hard-errored "not available", even
+  // though `nexus login anthropic` had a valid OAuth session and `ask -p
+  // anthropic` (which already used `buildAuthedRuntime`) worked fine. The
+  // macOS app's provider picker reads `providers status -o json` verbatim
+  // (`ProvidersController.refresh()`), so a signed-in-but-not-yet-appearing
+  // "anthropic" silently vanished from the dropdown.
+
+  it("`providers list -o json` includes anthropic even with no login/key — present, just needsKey (not silently dropped)", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-fresh-")), "cfg");
+    const r = await runCli(["providers", "list", "-o", "json"], "", {
+      NEXUS_CONFIG_DIR: freshConfigDir,
+      ANTHROPIC_API_KEY: "",
+    });
+    expect(r.code).toBe(0);
+    const statuses = JSON.parse(r.stdout.trim()) as { id: string; kind: string; available: boolean; needsKey?: boolean }[];
+    const anthropic = statuses.find((s) => s.id === "anthropic");
+    expect(anthropic).toBeDefined();
+    expect(anthropic?.kind).toBe("anthropic");
+    expect(anthropic?.available).toBe(true);
+    expect(anthropic?.needsKey).toBe(true);
+  }, 20_000);
+
+  it("`providers status -o json` also includes anthropic in its `providers` array (the exact shape the macOS picker reads)", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-fresh-")), "cfg");
+    const r = await runCli(["providers", "status", "-o", "json"], "", {
+      NEXUS_CONFIG_DIR: freshConfigDir,
+      ANTHROPIC_API_KEY: "",
+    });
+    expect(r.code).toBe(0);
+    const body = JSON.parse(r.stdout.trim()) as { providers: { id: string; needsKey?: boolean }[] };
+    expect(body.providers.some((s) => s.id === "anthropic")).toBe(true);
+  }, 20_000);
+
+  it("a signed-in-but-not-keyed anthropic (credential resolves, no separate API key) reports needsKey false — usable, not just present", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-fresh-")), "cfg");
+    // ANTHROPIC_API_KEY stands in for a resolved credential here (the CLI's
+    // own `hasCredential` check, the same branch a stored OAuth bearer token
+    // takes) — the point under test is that a RESOLVABLE credential of any
+    // kind flips `needsKey` to false and the row stays present, exactly what
+    // `NexusProvider.isUsable` (available && !needsKey) needs to show the
+    // provider as pickable rather than greyed out.
+    const r = await runCli(["providers", "list", "-o", "json"], "", {
+      NEXUS_CONFIG_DIR: freshConfigDir,
+      ANTHROPIC_API_KEY: "sk-ant-test-fake-key-for-registration-only",
+    });
+    expect(r.code).toBe(0);
+    const statuses = JSON.parse(r.stdout.trim()) as { id: string; available: boolean; needsKey?: boolean }[];
+    const anthropic = statuses.find((s) => s.id === "anthropic");
+    expect(anthropic?.available).toBe(true);
+    expect(anthropic?.needsKey).toBe(false);
+  }, 20_000);
+
+  it("`nexus models anthropic -o json` resolves instead of hard-erroring \"not available\", and its curated fallback is the current Claude 5 generation (not the stale 4.x/3.x snapshot)", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-fresh-")), "cfg");
+    const r = await runCli(["models", "anthropic", "-o", "json"], "", {
+      NEXUS_CONFIG_DIR: freshConfigDir,
+      // A syntactically key-shaped but invalid credential: the live
+      // `/v1/models` call fails (401/offline) and the adapter deterministically
+      // falls back to `DEFAULT_ANTHROPIC_MODELS` either way — no live network
+      // dependency for this assertion.
+      ANTHROPIC_API_KEY: "sk-ant-test-fake-key-for-registration-only",
+    });
+    expect(r.code).toBe(0);
+    const obj = JSON.parse(r.stdout.trim()) as { provider: string; models: { id: string }[] };
+    expect(obj.provider).toBe("anthropic");
+    expect(obj.models.length).toBeGreaterThan(0);
+    const ids = obj.models.map((m) => m.id);
+    expect(ids).toContain("claude-opus-5");
+    expect(ids).toContain("claude-sonnet-5");
+    expect(ids).not.toContain("claude-opus-4-1");
+    expect(ids).not.toContain("claude-3-5-haiku-latest");
+  }, 20_000);
+});
+
 describe("nexus models (provider-scoped, live listModels + curated fallback)", () => {
   // The reported bug: the model listing dumped EVERY provider's models (the whole
   // global cross-provider catalog). The fix scopes it to ONE provider via the

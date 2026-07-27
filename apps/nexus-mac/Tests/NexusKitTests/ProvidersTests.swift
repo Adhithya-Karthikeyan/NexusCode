@@ -63,6 +63,36 @@ final class ProvidersTests: XCTestCase {
         XCTAssertNotNil(broken.detail)
     }
 
+    func testSignedInButNotKeyedProviderIsUsable() throws {
+        // Regression: `nexus providers status -o json` used to omit "anthropic"
+        // entirely (a CLI-side bug in `cmdProviders`/`cmdModels` — see
+        // `packages/cli/src/commands.ts` — not a decoding/filtering bug here),
+        // so it silently vanished from the picker despite a valid `nexus login
+        // anthropic` OAuth session. This row is shaped exactly like the FIXED
+        // CLI's real output for a signed-in-but-not-separately-keyed provider
+        // (an OAuth bearer token satisfies the credential, no console API key
+        // needed) — `available: true, needsKey: false` — and must decode as
+        // usable, not merely present.
+        let raw = #"""
+        {
+          "id": "anthropic",
+          "kind": "anthropic",
+          "available": true,
+          "needsKey": false,
+          "detail": "signed in (`nexus login anthropic`) or key present"
+        }
+        """#
+        let json = try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))
+        let anthropic = try XCTUnwrap(NexusProvider(json: json))
+        XCTAssertTrue(anthropic.available)
+        XCTAssertFalse(anthropic.needsKey)
+        XCTAssertTrue(anthropic.isUsable)
+
+        let selectable = SelectableProvider(provider: anthropic)
+        XCTAssertTrue(selectable.isUsable)
+        XCTAssertNil(selectable.reason, "a usable provider must not be greyed out with a reason")
+    }
+
     func testRowsWithNoIdAreDroppedRatherThanCrashingTheWholeDecode() throws {
         let items = try XCTUnwrap(try fixtureJSON("providers-list").arrayValue)
         XCTAssertEqual(items.count, 6, "fixture shape changed")
