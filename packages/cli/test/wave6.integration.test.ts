@@ -129,6 +129,64 @@ describe("wave 6 — sessions", () => {
     expect(events.some((e) => e.t === "text")).toBe(true);
   }, 20_000);
 
+  it("replay reproduces a role run's OODA `agent`/`reasoning` narrative, `data` and pairing intact", async () => {
+    const live = await runCli([
+      "agent",
+      "--role",
+      "coder",
+      "--max-steps",
+      "1",
+      "-p",
+      "mock",
+      "-m",
+      "mock-tools",
+      "add hello",
+      "-o",
+      "ndjson",
+    ]);
+    expect(live.code).toBe(0);
+    const liveEvents = live.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { t: string; [k: string]: unknown });
+    const liveAgentEvents = liveEvents.filter((e) => e.t === "agent");
+    expect(liveAgentEvents.length).toBeGreaterThan(0);
+    const sessionEvent = liveEvents.find((e) => e.t === "session") as { sessionId: string } | undefined;
+    expect(sessionEvent?.sessionId).toBeTruthy();
+
+    const replay = await runCli(["replay", sessionEvent!.sessionId, "-o", "ndjson"]);
+    expect(replay.code).toBe(0);
+    const replayEvents = replay.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { t: string; [k: string]: unknown });
+
+    // Every agent event seen live is reproduced, in order, `data` intact.
+    const replayAgentEvents = replayEvents.filter((e) => e.t === "agent");
+    expect(replayAgentEvents).toEqual(liveAgentEvents);
+
+    // The pairing the Swift/TUI fold relies on: an `agent` event is
+    // immediately followed by the `reasoning` event carrying the same text.
+    for (let i = 0; i < replayEvents.length; i++) {
+      const ev = replayEvents[i]!;
+      if (ev.t !== "agent") continue;
+      const next = replayEvents[i + 1];
+      expect(next?.t).toBe("reasoning");
+      expect(next?.["delta"]).toBe(ev["text"]);
+    }
+
+    // The final `stop` event's verdict — the whole point of a role run's
+    // "was this actually verified?" narrative — survives the round trip.
+    const stopEvent = replayAgentEvents.find((e) => e["phase"] === "stop");
+    expect(stopEvent).toBeDefined();
+    expect(stopEvent!["data"]).toMatchObject({
+      stopReason: expect.any(String),
+      verdict: expect.stringMatching(/^(met|unmet|indeterminate)$/),
+    });
+  }, 20_000);
+
   it("session rename/branch/delete mutations emit valid JSON", async () => {
     const id = await firstSessionId();
     const rename = await runCli([

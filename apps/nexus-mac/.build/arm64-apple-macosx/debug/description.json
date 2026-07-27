@@ -575,6 +575,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusBinaryTests.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusClientIntegrationTests.swift"
         },
         {
@@ -645,6 +649,7 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/DiagnosticClassifierTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/IntegrationsTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/MarkdownTests.swift.o",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/NexusBinaryTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/NexusClientIntegrationTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/OMCTests.swift.o",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/ProjectLocationTests.swift.o",
@@ -737,6 +742,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/NexusBinaryTests.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/NexusClientIntegrationTests.swift.o"
         },
         {
@@ -793,6 +802,7 @@
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/DiagnosticClassifierTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/IntegrationsTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/MarkdownTests.swift",
+        "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusBinaryTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusClientIntegrationTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/OMCTests.swift",
         "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ProjectLocationTests.swift",
@@ -1074,6 +1084,7 @@
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/DiagnosticClassifierTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/IntegrationsTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/MarkdownTests.swift",
+      "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusBinaryTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusClientIntegrationTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/OMCTests.swift",
       "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ProjectLocationTests.swift",
@@ -1587,6 +1598,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusBinaryTests.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/NexusClientIntegrationTests.swift"
         },
         {
@@ -1768,6 +1783,10 @@
         {
           "kind" : "file",
           "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/MarkdownTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusKitTests.build/NexusBinaryTests.swift.o"
         },
         {
           "kind" : "file",

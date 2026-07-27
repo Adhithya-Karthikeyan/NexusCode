@@ -143,6 +143,19 @@ public struct NexusBinary: Sendable {
     public init(url: URL) { self.url = url }
 
     /// Common install locations, plus the repo-local build for development.
+    ///
+    /// `NEXUS_BIN` is resolved SEPARATELY from, and before, every other
+    /// candidate — deliberately fail-closed rather than fall through. It is
+    /// the one candidate here that is a DELIBERATE user override (unlike the
+    /// install locations and `PATH`, which are best-effort guesses), so a
+    /// value that does not resolve to a real executable returns `nil`
+    /// outright instead of quietly trying the repo-local build or an install
+    /// location instead. The alternative — silently substituting a DIFFERENT
+    /// `nexus` than the one the user explicitly pointed at — is exactly the
+    /// class of confident-but-wrong state this app spent a long night
+    /// removing everywhere else (unknown cost was never `$0.00`, a tripped
+    /// circuit was never plainly "usable"; a missing `NEXUS_BIN` target is
+    /// not silently "whatever else happened to be installed" either).
     public static func discover(
         explicit: URL? = nil,
         repoRoot: URL? = nil,
@@ -151,10 +164,18 @@ public struct NexusBinary: Sendable {
     ) -> NexusBinary? {
         if let explicit, fileExists(explicit.path) { return NexusBinary(url: explicit) }
 
-        var candidates: [String] = []
-        if let override = environment["NEXUS_BIN"], !override.isEmpty {
-            candidates.append(override)
+        // Blank or whitespace-only is treated as unset, never as a literal
+        // path — `trimmingCharacters` first, not just `isEmpty`, so
+        // `NEXUS_BIN="   "` (a real way an env var ends up set-but-blank,
+        // e.g. from an unquoted shell substitution) falls through to the
+        // normal candidates below instead of being treated as an explicit
+        // override that then predictably fails to resolve.
+        if let override = environment["NEXUS_BIN"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty {
+            return fileExists(override) ? NexusBinary(url: URL(fileURLWithPath: override)) : nil
         }
+
+        var candidates: [String] = []
         // Repo-local dist build — the development case.
         if let repoRoot {
             candidates.append(repoRoot.appendingPathComponent("packages/cli/dist/index.js").path)

@@ -641,7 +641,9 @@ function mergeUsage(target: Usage, partial: Partial<Usage>): void {
 // caller that persists it into conversation history (see `engine.ts`'s
 // `replyMessages`). Both apply once, in `makeLaneBuilder.finish()` — the
 // single point every `toolExchange`, from every adapter, passes through — so
-// nothing downstream has to re-derive either guarantee per provider.
+// nothing downstream has to re-derive either guarantee per provider. Both are
+// exported (and re-exported from `../index.js`) for offline whitebox tests,
+// matching `mapMessagesToNative`'s precedent in the anthropic adapter.
 
 /**
  * A single tool result, once threaded into `toolExchange`, repeats in FULL on
@@ -663,9 +665,9 @@ function mergeUsage(target: Usage, partial: Partial<Usage>): void {
  * Unicode code point, never a raw byte offset, so a multi-byte character is
  * never cut in half.
  */
-const MAX_TOOL_RESULT_HISTORY_BYTES = 8_000;
+export const MAX_TOOL_RESULT_HISTORY_BYTES = 8_000;
 
-function truncateToolResultForHistory(content: ContentBlock[]): ContentBlock[] {
+export function truncateToolResultForHistory(content: ContentBlock[]): ContentBlock[] {
   const textBlocks = content.filter(
     (b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text",
   );
@@ -712,7 +714,7 @@ function truncateToolResultForHistory(content: ContentBlock[]): ContentBlock[] {
  * it here, once, makes every consumer safe by construction instead of
  * correct-by-audit.
  */
-function guardToolExchange(exchange: Message[]): Message[] {
+export function guardToolExchange(exchange: Message[]): Message[] {
   const answered = new Set<string>();
   for (const m of exchange) {
     if (m.role === "tool" && m.toolCallId) answered.add(m.toolCallId);

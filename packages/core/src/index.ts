@@ -23,6 +23,11 @@ export {
   dispatchAgent,
   dispatchRoute,
   selectRoute,
+  // Write-time `RunResult.toolExchange` guards — see the doc comment above
+  // their definitions. Exported for offline whitebox tests.
+  guardToolExchange,
+  truncateToolResultForHistory,
+  MAX_TOOL_RESULT_HISTORY_BYTES,
   type AgentOptions,
   type ToolInterceptor,
   type ToolInterceptRequest,
