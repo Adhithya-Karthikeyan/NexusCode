@@ -68,19 +68,88 @@ interface KeyringEntry {
 }
 type KeyringEntryCtor = new (service: string, username: string) => KeyringEntry;
 
-class KeychainBackend {
-  private ctor: KeyringEntryCtor | null | undefined;
+/**
+ * Bound for a single native keychain call (`getPassword`/`setPassword`/
+ * `deletePassword`). These go straight through `@napi-rs/keyring` into the
+ * OS's real credential store (Keychain Services on macOS) — for an item that
+ * exists but was written by a DIFFERENT signed binary (a rebuilt dev binary,
+ * a different terminal's responsible process, …), reading it back requires a
+ * fresh authorization decision, which macOS presents as a system dialog:
+ * "[app] wants to use your confidential information stored in […] in your
+ * keychain." Nothing here runs interactively — `resolveAuthSecrets` calls
+ * into this on EVERY command (`buildAuthedRuntime` unconditionally probes the
+ * default provider catalog's credential status, regardless of which provider
+ * `-p` actually selects), including headless/dispatched runs with no one to
+ * click "Allow". A blocked native call is indistinguishable from the outside
+ * from every other unbounded-I/O hang this codebase has already had to fix
+ * (`DEFAULT_CONNECT_TIMEOUT_MS` in `@nexuscode/mcp`, `DEFAULT_SOURCE_TIMEOUT_MS`
+ * in `@nexuscode/context`): the whole run blocks forever with no output. Same
+ * fix shape: race the call against a bound and degrade to "unavailable"
+ * (exactly how a genuine platform/NoEntry error already degrades below)
+ * instead of hanging.
+ */
+export const DEFAULT_KEYCHAIN_TIMEOUT_MS = 5_000;
 
-  constructor(private readonly service: string) {}
+/** Race `work` against `ms`, resolving to `fallback` (never rejecting) on timeout. */
+function withTimeout<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, ms);
+    work.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
+/**
+ * Exported for tests only (the `loadCtor` injection seam has no reason to be
+ * used outside one) — real callers go through `createSecretStore`.
+ */
+export class KeychainBackend {
+  private ctor: KeyringEntryCtor | null | undefined;
+  private readonly timeoutMs: number;
+
+  /**
+   * `loadCtor` is exposed for tests only — real callers always get the
+   * genuine `@napi-rs/keyring` loader below. Lets a test inject a fake
+   * `KeyringEntry` (e.g. one whose `getPassword()` never resolves) without
+   * touching the real OS keychain.
+   */
+  constructor(
+    private readonly service: string,
+    opts: { timeoutMs?: number; loadCtor?: () => Promise<KeyringEntryCtor | null> } = {},
+  ) {
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_KEYCHAIN_TIMEOUT_MS;
+    if (opts.loadCtor) this.loadCtor = opts.loadCtor;
+  }
+
+  private loadCtor = async (): Promise<KeyringEntryCtor | null> => {
+    try {
+      const mod = (await import("@napi-rs/keyring")) as { AsyncEntry?: KeyringEntryCtor };
+      return typeof mod.AsyncEntry === "function" ? mod.AsyncEntry : null;
+    } catch {
+      return null;
+    }
+  };
 
   private async load(): Promise<KeyringEntryCtor | null> {
     if (this.ctor !== undefined) return this.ctor;
-    try {
-      const mod = (await import("@napi-rs/keyring")) as { AsyncEntry?: KeyringEntryCtor };
-      this.ctor = typeof mod.AsyncEntry === "function" ? mod.AsyncEntry : null;
-    } catch {
-      this.ctor = null;
-    }
+    this.ctor = await this.loadCtor();
     return this.ctor;
   }
 
@@ -97,7 +166,7 @@ class KeychainBackend {
     const e = await this.entry(ref);
     if (!e) return null;
     try {
-      const v = await e.getPassword();
+      const v = await withTimeout(e.getPassword(), this.timeoutMs, undefined);
       return v && v.length > 0 ? v : null;
     } catch {
       // NoEntry (or platform ambiguity) → treat as absent.
@@ -109,8 +178,16 @@ class KeychainBackend {
     const e = await this.entry(ref);
     if (!e) return false;
     try {
-      await e.setPassword(value);
-      return true;
+      // `withTimeout` never rejects, so a timeout here reports `false` — the
+      // caller (`ChainedSecretStore.set`) already falls through to the
+      // encrypted-file backend on `false`, exactly like a genuine write
+      // failure. `ok` distinguishes "genuinely wrote" from "gave up waiting".
+      const ok = await withTimeout(
+        e.setPassword(value).then(() => true),
+        this.timeoutMs,
+        false,
+      );
+      return ok;
     } catch {
       // Platform/keychain failure (e.g. no default keychain in a headless or
       // sandboxed environment) → fall through to the encrypted-file backend,
@@ -123,7 +200,7 @@ class KeychainBackend {
     const e = await this.entry(ref);
     if (!e) return false;
     try {
-      return await e.deletePassword();
+      return await withTimeout(e.deletePassword(), this.timeoutMs, false);
     } catch {
       return false;
     }
@@ -244,6 +321,8 @@ export interface SecretChainOptions {
   passphrase?: string | (() => Promise<string | null>);
   /** Disable the keychain backend (e.g. for deterministic tests). */
   disableKeychain?: boolean;
+  /** Bound for a single native keychain call (default {@link DEFAULT_KEYCHAIN_TIMEOUT_MS}). */
+  keychainTimeoutMs?: number;
 }
 
 function defaultEnvVarFor(ref: string): string {
@@ -297,7 +376,9 @@ export function createSecretStore(opts: SecretChainOptions = {}): SecretStore {
     return env["NEXUS_VAULT_PASSPHRASE"] ?? null;
   };
 
-  const keychain = opts.disableKeychain ? null : new KeychainBackend(service);
+  const keychain = opts.disableKeychain
+    ? null
+    : new KeychainBackend(service, { timeoutMs: opts.keychainTimeoutMs });
   return new ChainedSecretStore(
     new EnvBackend(env, envVarFor),
     keychain,

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSecretStore, redactSecret, redactInText } from "@nexuscode/config";
+import { createSecretStore, redactSecret, redactInText, KeychainBackend } from "@nexuscode/config";
 
 function vaultPath(): string {
   return join(mkdtempSync(join(tmpdir(), "nx-sec-")), "secrets.enc.json");

@@ -47,6 +47,48 @@ wrapped in a missing `timeout` silently does not run AND reports success.
 - ⬜ `lsp diagnostics` reports "no language server available for typescript" in a
   TypeScript repo — exits 0. Degraded-but-honest, or a real gap? Needs a call.
 
+### Step 2 — UI audit findings (`UI-INVENTORY.md`, 885 lines, ~102 controls)
+
+**Three RED house-rule violations**, all found by inventorying controls against
+their CLI backing — none were visible from screenshots:
+
+1. 🔴 **The effort picker is a FABRICATED capability.** `--effort` is not a CLI
+   flag at all — absent from `FLAG_SPEC.value` (`cli/src/index.ts:68-128`).
+   Reasoning effort exists ONLY as an interactive `/effort` picker inside
+   `nexus tui`, which `chat --persistent` never mounts.
+   **And the preview lies about it**: `commandPreview` splices
+   `--effort <level>` into the displayed string while
+   `persistentSessionArguments()` and `oneShotArguments()` never add it.
+   ⚠️ **This is the SAME bug class we already fixed once** (preview showing
+   `nexus agent …` while `chat --persistent …` ran) reappearing through a
+   different door — which is why "the preview equals the spawned command" needs
+   a standing test, not a one-time fix. Fix direction per the house rule: give
+   the CLI a real `--effort`, never make the app lie less loudly.
+2. 🔴 **`Sessions → Resume` and `→ Replay` are `Button(...) {}` — empty
+   closures** (`SessionsView.swift:334-337`). Resume is styled `.accent`, the
+   loudest control on the screen, and does nothing. Both have real CLI backing
+   (`nexus replay` exists; `--resume` is verified working).
+3. 🟠 **Theme picker writes only `UserDefaults`**, while the CLI has
+   `tui.theme` in config — GUI and terminal will always disagree.
+
+**13 CLI capabilities have NO UI at all**: `agent --role` (the property exists
+on the controller but nothing sets it), `roles`, `consensus`, `chain`, `route`,
+`plan`, `search`/`index`, `memory`, `doctor`, `history`, `cache`, `receipt`/
+`trace`, and the enterprise set (`rbac`/`policy`/`usage`/`audit`/`budget`).
+That is the concrete answer to Step 1.4 "what are we missing".
+
+**Accessibility**: ~92 of ~102 controls have no author-written label. Read that
+as "not deliberately named" rather than "silent" — SwiftUI supplies fallbacks.
+The genuinely wrong ones are 6 icon-only buttons announced by SF Symbol shape
+rather than action, and 29 of 34 decorative `Image(systemName:)` that are
+neither hidden nor labelled.
+
+⚠️ **A false negative to remember:** AppleScript/System Events reports
+`NSAttributedString`-backed AX descriptions as "missing value" even when a real
+label exists. My original "zero accessibility labels" claim came from System
+Events and was wrong. Verify with a native `AXUIElementCopyAttributeValue`
+inspector.
+
 ### Hard rules learned the hard way
 - **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An
   agent's coordinate click landed in the owner's real Notes document, typed into

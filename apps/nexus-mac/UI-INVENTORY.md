@@ -17,7 +17,27 @@ Two agents were actively editing `RootView.swift`, `ConversationView.swift`, `De
 | Sidebar nav selection = solid full-strength `accentDefault` periwinkle block | `accentMuted` wash + 3pt `accentDefault` rail on the leading edge, label colour computed by `Color.readableText` | `RootView.swift:294-296`, `:321-337` |
 | Two bottom status readouts — sidebar footer ("OMC watching" / "no agents running") **and** a bottom strip ("ready") | `SidebarFooter` deleted; one full-width `StatusBar` carries both facts | `RootView.swift:13-20`, `:164-171`, `:377-389` |
 
-So the brief's "loudest object on every screen" and "TWO status bars" findings are **already resolved in the working tree**. Sections 10.4 and 10.5 below verify the fixes and name what is still wrong about each.
+So the brief's "loudest object on every screen" and "TWO status bars" findings are **already resolved in the working tree**. Sections B.5 and A.2 below verify the fixes and name what is still wrong about each.
+
+---
+
+## 0.1 — Evidence provenance (read before acting on any accessibility claim)
+
+**Every accessibility finding in this document comes from static reading of the Swift source — grep for `.accessibilityLabel` / `.accessibilityHidden` / `Button` vs `.onTapGesture`. None of it comes from AppleScript, System Events, or any runtime AX dump.**
+
+That matters because the briefing's original claim — *"sidebar nav items expose as bare `AXButton` with NO name"* — has since been shown to be a System Events marshalling artifact (it cannot read `NSAttributedString`-backed AX descriptions and reports "missing value" spuriously). **This document never made that claim.** `RootView.swift:346` sets an explicit label on every nav row and A.1 records all eight as ✅. My inventory and that retracted finding disagree, and the source is on my side.
+
+Because the basis is static, claims fall into three confidence tiers. They are tagged inline below:
+
+| Tier | What source analysis proves | Findings at this tier |
+|---|---|---|
+| **🟢 Structural — certain from source** | An element's *role* and whether an explicit label exists | 23 theme swatches are `.onTapGesture` on a `VStack`, so no `Button` and no `AXButton` role exists to name (R4). Exactly 4 call sites set `.accessibilityLabel` (A.12). |
+| **🟡 Naming quality — certain that no *intentional* name is set; the *announced* string is a runtime detail** | That no author-written label exists — **not** that the control is silent | The six icon-only buttons (R5). SwiftUI derives a fallback name from the SF Symbol, and `.help()` populates AXHelp on macOS. So these are **mis-named, not un-named**. |
+| **🟠 Inference — needs runtime confirmation** | Nothing definitive; SwiftUI may merge or drop container children | The 29 unhidden decorative `Image(systemName:)` instances (R6). |
+
+**R5 and R6 were overstated in my first pass and are corrected in place below.** R4 and the control counts are unaffected — they rest on tier 🟢.
+
+To close the 🟡/🟠 gap properly, the tool is a native `AXUIElementCopyAttributeValue` inspector (the one the other agent already built), not System Events. I did not run one: it would duplicate work already done, and the constraint bars me from driving the GUI.
 
 ---
 
@@ -313,10 +333,12 @@ Non-interactive: the Project `Card` with `Directory` / `nexus` / `OMC` rows (`:5
 | Sheets / dialogs / menus | 6 + 10 menu items | 6 |
 | **TOTAL** | **≈ 102 control definitions** | **≈ 92 without an explicit label** |
 
-**Explicit `.accessibilityLabel` exists on exactly 4 call sites** covering 10 controls:
+**Read that column as "no *author-written* label", not "silent".** See 0.1 — SwiftUI supplies a fallback name for most of these. The count measures *deliberate* naming, which is the thing under the team's control.
+
+**Explicit `.accessibilityLabel` exists on exactly 4 call sites** covering 10 controls (re-verified against the current working tree):
 `RootView.swift:264` (project switcher), `:346` (all 8 nav rows), `TasksView.swift:238` (banner dismiss), `:369` (delete task). Plus `DesignSystem.swift:314` on the non-interactive `StatusDot`.
 
-**Icon-only buttons with no name whatsoever (7):**
+**Icon-only buttons named after their shape rather than their action (6) — see R5:**
 1. `ConversationView.swift:921-924` — chip remove ✕
 2. `ConversationView.swift:395-402` — reasoning toggle 🧠
 3. `ConversationView.swift:404-411` — clear transcript 🗑
@@ -373,18 +395,22 @@ The dead-space symptom is being fixed elsewhere. Here is the **rule** it should 
 > That region either scrolls (it has more content than fits) or it centres (it has less).
 > It never top-aligns short content inside a tall scroll view.**
 
-The mechanism already exists — `PageScaffold` (`DesignSystem.swift:519-536`) — and its doc comment states the rule precisely. Adoption is what is incomplete:
+The mechanism already exists — `PageScaffold` (`DesignSystem.swift:519-536`) — and its doc comment states the rule precisely.
 
-| Screen | Uses `PageScaffold` | Notes |
-|---|---|---|
-| Tasks | ✅ `:24` | correct |
-| Git | ✅ `:38` | correct |
-| Integrations | ✅ `:30` | correct |
-| Agents | ✅ `:71` | correct |
-| **Sessions** | ❌ | hand-rolled `VStack` + `headerBar` + `Group` (`:21-41`) |
-| **Accounts** | ❌ | hand-rolled `VStack` + banner + `Group` (`:78-125`) |
-| **Settings** | ❌ | bare `ScrollView` with everything inside (`:521-587`) — the classic failure the scaffold exists to prevent |
-| **Chat** | ❌ by design | uses `safeAreaInset` top + bottom (`:65-81`) — a legitimately different and correct pattern |
+**Correction to my first pass.** I originally marked Sessions and Accounts as violations because they do not use the `PageScaffold` *type*. That was wrong: both implement the *rule* by hand, correctly, via `Group { … }.frame(maxWidth: .infinity, maxHeight: .infinity)`. Conforming to the rule is what matters; using the shared type is a DRY question, not a layout defect. Re-verified against the current working tree:
+
+| Screen | Uses the `PageScaffold` type | Obeys the rule | Notes |
+|---|---|---|---|
+| Agents | ✅ `:71` | ✅ | |
+| Tasks | ✅ `:24` | ✅ | |
+| Git | ✅ `:38` | ✅ | |
+| Integrations | ✅ `:30` | ✅ | |
+| Sessions | ❌ | ✅ | Hand-rolled `VStack` + `headerBar` + `Group` filling at `:40`. Structurally identical to the scaffold — correctly cited as the model it was derived from |
+| Accounts | ❌ | ✅ | Hand-rolled; banner pinned above a `Group` filling at `:124`, so a failed refresh stays visible across loading/empty/populated |
+| Chat | ❌ by design | ✅ | `safeAreaInset` top + bottom (`:65-81`) — a different and correct pattern for a screen with two fixed bars |
+| **Settings** | ❌ | ❌ | **The one genuine remaining violation.** Bare `ScrollView` with header, both grids and the project card all inside it (`RootView.swift:521-587`) |
+
+So the rule now holds on seven of eight screens. **Settings is the only screen still top-aligning inside one big `ScrollView`** — which is ironic given B.12 names it the app's best screen on every other axis. It does not currently *show* the symptom only because 23 swatches happen to fill the window; add a `ViewThatFits` breakpoint or shrink the catalogue and the void returns.
 
 Three corollaries the rule implies, all currently violated somewhere:
 
@@ -711,19 +737,27 @@ ThemeSwatch(...).onTapGesture { workspace.themeId = candidate.id }
 
 ---
 
-### R5 — Six icon-only buttons have no accessible name
+### R5 — Six icon-only buttons are named after their shape, not their action — 🟡 *corrected from first pass*
 **`ConversationView.swift:316-324`, `:308-314`, `:395-402`, `:404-411`, `:1072-1084`, `:921-924`**
 
-`.help()` produces a tooltip, **not** an accessibility label. Send, Stop, Reasoning toggle, Clear transcript, Copy answer, and the backend chip's remove ✕ all read as unnamed buttons. Send and Stop are the app's two most-used controls.
+**My first pass said these "have no accessible name". That was overstated — retracting it.** SwiftUI derives a fallback name for a `Button` whose label is an `Image(systemName:)` from the SF Symbol itself, and `.help()` populates AXHelp on macOS. These controls are **mis-named, not un-named**.
 
-**Fix:** add `.accessibilityLabel(…)` to each — "Send message", "Stop the run", "Show reasoning traces" / "Hide reasoning traces", "Clear transcript", "Copy answer", "Remove \(backend) backend". Add `.accessibilityAddTraits(showsReasoning ? .isSelected : [])` to the reasoning toggle. This is the exact fix already applied at `RootView.swift:346`, applied six more times.
+The defect is still real, just smaller than I claimed: Send, Stop, Reasoning toggle, Clear transcript, Copy answer and the backend chip's remove ✕ announce a *shape* ("arrow up", "trash", "stop fill") where they should announce an *action* ("Send message", "Clear transcript", "Stop the run"). Send and Stop are the app's two most-used controls and neither says what it does. The reasoning toggle additionally never exposes its on/off state.
+
+**Fix (unchanged, and cheap):** add `.accessibilityLabel(…)` to each — "Send message", "Stop the run", "Show reasoning traces" / "Hide reasoning traces", "Clear transcript", "Copy answer", "Remove \(backend) backend" — plus `.accessibilityAddTraits(showsReasoning ? .isSelected : [])` on the toggle. This is the exact fix already applied at `RootView.swift:346`, applied six more times.
+
+**Severity note:** this drops below R7-R9 on harm. It is kept high in the ranking only because the fix is six one-line additions with zero regression surface.
 
 ---
 
-### R6 — 29 of 34 decorative SF Symbols pollute the accessibility tree
+### R6 — 29 of 34 decorative SF Symbols are not hidden from the accessibility tree — 🟠 *inference, needs runtime confirmation*
 **All feature views; only `RootView.swift` hides any (5 instances)**
 
-Every hero glyph, badge icon, warning triangle, status dot, and `KindBadge` symbol announces its raw SF Symbol name ("exclamationmark.triangle.fill", "hexagon.fill", "person.3.sequence"). `RootView.swift:304-309` documents this exact failure mode and fixes it in one place.
+**Confidence downgraded from my first pass.** What source proves: 29 of 34 `Image(systemName:)` instances carry neither `.accessibilityHidden(true)` nor a label. What source does **not** prove is what VoiceOver actually announces — SwiftUI sometimes merges a container's children into a single element, which would absorb a decorative glyph silently. So "pollute the tree" is an inference, not an observation.
+
+The *reason to fix it anyway* does not depend on that inference: `RootView.swift:304-309` documents this exact failure mode, having been bitten by it, and fixes it in one file. Extending a fix the codebase has already paid for is cheap regardless of how each individual glyph currently resolves.
+
+**Verify before bulk-editing:** run the native `AXUIElementCopyAttributeValue` inspector over one populated screen (Accounts or Sessions have the most decorative glyphs) and confirm the symbols appear as separate unnamed elements. If they are being merged, this drops to a tidiness item.
 
 **Fix:** `.accessibilityHidden(true)` on every `Image(systemName:)` that sits beside text which already names it. Start with `RootView.swift:207` (the one unhidden symbol in the file that fixed the rest), `HeroEmptyState:470`, `SetupBanner:361`, all three `ErrorBanner`s, `KindBadge:416`, `IntegrationHintRow:445`, `UnreadableNotice:576`, `DiagnosticsStrip:1316`, `TurnView.errorBlock:1129`.
 
@@ -841,8 +875,8 @@ Six phrasings for one category ("Nothing running" / "No sessions yet" / "No task
 | 2 | **R2** — Delete the fabricated `--effort` flag from the preview | 🔴 Must | `ConversationView.swift:337`, `:506-559` |
 | 3 | **R3** — Stop the provider/model pickers clipping at 900pt | 🔴 Must | `ConversationView.swift:370-412` |
 | 4 | **R4** — Make the 23 theme swatches real buttons | 🔴 Must | `RootView.swift:538`, `:556` |
-| 5 | **R5** — Name the six icon-only buttons | 🔴 Must | `ConversationView.swift:308-324`, `:395-411`, `:921`, `:1072` |
-| 6 | **R6** — Hide 29 decorative SF Symbols from the AX tree | 🔴 Must | all feature views |
+| 5 | **R5** — Name the six icon-only buttons by action, not shape | 🔴 Must (🟡 severity corrected) | `ConversationView.swift:308-324`, `:395-411`, `:921`, `:1072` |
+| 6 | **R6** — Hide 29 decorative SF Symbols from the AX tree | 🟠 Verify first, then fix | all feature views |
 | 7 | **R8** — Draw the focus ring `SoftButton` promises | 🔴 Must | `DesignSystem.swift:385-407` |
 | 8 | **R7** — Raise 12 sub-10pt glyphs to the documented floor | 🔴 Must | `ConversationView.swift:687`, `:922`, + 10 more |
 | 9 | **R9** — Gate Clear transcript and Sign out | 🔴 Must | `ConversationView.swift:404`, `AuthView.swift:361` |
