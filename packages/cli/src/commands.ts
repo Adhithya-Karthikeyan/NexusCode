@@ -12,10 +12,14 @@ import { join, resolve } from "node:path";
 import { repoMap, detectLanguage } from "@nexuscode/fileintel";
 import { runGit } from "@nexuscode/git";
 import {
+  adaptRequestForSwitch,
+  assessSwitchTarget,
   createEngine,
   dispatch,
   dispatchAgent,
   dispatchRoute,
+  inferSwitchRequirements,
+  makeSwitchReceipt,
   Router,
   userText,
   DEFAULT_RETRY_POLICY,
@@ -31,6 +35,7 @@ import {
   type OrchestrationOutcome,
   type OrchestrationSpec,
   type ProviderRegistry,
+  type ProviderSwitchAssessment,
   type RetryPolicy,
   type RouteCandidate,
   type RouteOptimize,
@@ -93,7 +98,7 @@ import {
 } from "@nexuscode/context";
 import { PromptEngine } from "@nexuscode/prompt";
 import type { CachedResponse } from "@nexuscode/cache";
-import { httpPoolOptions, type ChatRequest } from "@nexuscode/shared";
+import { httpPoolOptions, type ChatRequest, type ToolDef } from "@nexuscode/shared";
 import type { ParsedArgs } from "./args.js";
 import {
   buildPowerSources,
