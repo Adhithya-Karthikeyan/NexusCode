@@ -151,6 +151,41 @@ describe("nexus first-run fallback (no keys, default provider unavailable)", () 
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain("is not available");
   }, 20_000);
+
+  // § CAPABILITIES.md C6 — `agent`/`agent --role` previously hard-failed on the
+  // exact same fresh-machine shape `ask` already degrades gracefully from,
+  // because they read `config.defaultProvider` directly instead of routing
+  // through `resolveDefaultProviderForRun` like every sibling command. The
+  // permission gate (read-only unless `--approve`/`--yolo`/a role opts in) is
+  // what actually bounds what a tool-executing run can do — independent of
+  // which provider is driving it — so the same graceful degradation is safe
+  // here too, not just consistent.
+  it("bare `agent` (no -p, no --role) falls back to mock with a one-line notice, exit 0 — never dead-ends", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-fresh-")), "cfg");
+    const r = await runCli(["agent", "say hi"], "", { NEXUS_CONFIG_DIR: freshConfigDir });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("mock");
+    expect(r.stdout).toContain("Echo: say hi");
+  }, 20_000);
+
+  it("`agent --role coder` (no -p) falls back to mock with a one-line notice, exit 0 — never dead-ends", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-fresh-")), "cfg");
+    const r = await runCli(
+      ["agent", "--role", "coder", "--max-steps", "1", "-o", "ndjson", "add hello"],
+      "",
+      { NEXUS_CONFIG_DIR: freshConfigDir },
+    );
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("mock");
+  }, 20_000);
+
+  it("`agent -p anthropic` (explicit, unavailable) still hard-fails clearly — only the DEFAULT path degrades", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-fresh-")), "cfg");
+    const r = await runCli(["agent", "-p", "anthropic", "say hi"], "", { NEXUS_CONFIG_DIR: freshConfigDir });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("anthropic");
+    expect(r.stderr).toContain("not available");
+  }, 20_000);
 });
 
 describe("nexus doctor", () => {

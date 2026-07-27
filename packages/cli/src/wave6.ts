@@ -36,7 +36,8 @@ import {
 import type { ProviderAdapter, ProviderRegistry, UiEvent } from "@nexuscode/core";
 import type { ParsedArgs } from "./args.js";
 import { userConfigDir } from "./config-io.js";
-import { buildAuthedRuntime } from "./runtime.js";
+import { buildAuthedRuntime, isProviderUsable } from "./runtime.js";
+import { resolveDefaultProviderForRun } from "./commands.js";
 import {
   buildObservability,
   loadTraceSpans,
@@ -482,6 +483,18 @@ export async function cmdTrace(args: ParsedArgs, io: Io = defaultIo): Promise<nu
  * `providers[]` entry, e.g. `anthropic`) — the plain builder cannot see that
  * and would wrongly report it "not available" (see `buildAuthedRuntime`'s doc
  * in `./runtime.ts`).
+ *
+ * First-run UX matches `ask`/`chat`/`tui`/`models`/`agent` (§ CAPABILITIES.md
+ * C6): a DEFAULT provider (no explicit `-p`) that has no usable credential
+ * degrades to `mock` with a visible notice instead of erroring. This ALSO
+ * fixes a real bug the previous `registry.has(providerId)` check let through:
+ * `buildAuthedRuntime` registers `anthropic` unconditionally whenever an auth
+ * registry exists, credentialed or not, so `has()` was true even with no key
+ * — the actual failure only surfaced later as a raw exception from the live
+ * network call, caught by `runGitFlow` but with whatever confusing message
+ * the adapter happened to throw, not this function's clean one. `isProviderUsable`
+ * (credentialed, not just registered) closes that gap for both branches. An
+ * explicit `-p <id>` still hard-fails when unavailable, same as every sibling.
  */
 async function resolveGitProvider(
   args: ParsedArgs,
@@ -489,11 +502,19 @@ async function resolveGitProvider(
   io: Io,
 ): Promise<{ adapter: ProviderAdapter; model: string } | null> {
   const runtime = await buildAuthedRuntime(config);
-  const providerId = args.flags.get("provider") ?? config.defaultProvider;
   const registry: ProviderRegistry = runtime.registry;
-  if (!registry.has(providerId)) {
-    io.err(`provider "${providerId}" is not available (try -p mock)\n`);
-    return null;
+  const explicitProvider = args.flags.get("provider");
+  let providerId: string;
+  if (explicitProvider !== undefined) {
+    if (!isProviderUsable(runtime, explicitProvider)) {
+      io.err(`provider "${explicitProvider}" is not available (try -p mock)\n`);
+      return null;
+    }
+    providerId = explicitProvider;
+  } else {
+    const resolved = resolveDefaultProviderForRun(runtime, config, io);
+    if (!resolved) return null;
+    providerId = resolved;
   }
   const adapter = registry.get(providerId);
   const model = args.flags.get("model") ?? config.defaultModel ?? firstModel(registry, providerId) ?? "mock-fast";

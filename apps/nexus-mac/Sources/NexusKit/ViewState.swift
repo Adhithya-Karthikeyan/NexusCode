@@ -142,7 +142,12 @@ public struct UsageTotals: Sendable, Hashable {
     public var outputTokens: Int = 0
     public var cacheRead: Int = 0
     public var cacheWrite: Int = 0
+    /// Sum of the `usage` events with KNOWN pricing only — see `costIncomplete`.
     public var costUsd: Double = 0
+    /// True once at least one `usage` event this session had `costUsd: nil`
+    /// (no pricing data for that model) — `costUsd` above is then a PARTIAL
+    /// sum, not the session's true spend, and must be shown as such.
+    public var costIncomplete: Bool = false
 }
 
 public struct SessionInfo: Sendable, Hashable {
@@ -190,8 +195,9 @@ public struct ViewState: Sendable, Hashable {
     public var lanes: [String: LaneState] = [:]
     public var laneOrder: [String] = []
     public var totals = UsageTotals()
-    /// Cost attributed to the most recent `usage` event.
-    public var runUsd: Double = 0
+    /// Cost attributed to the most recent `usage` event. `nil` when that
+    /// run's pricing is genuinely unknown — distinct from a real free run.
+    public var runUsd: Double?
     public var lastUsage: (inputTokens: Int, outputTokens: Int) = (0, 0)
     public var providerHealth: [String: ProviderHealth] = [:]
     public var notifications: [NotificationItem] = []
@@ -380,7 +386,12 @@ extension ViewState {
             totals.outputTokens += e.outputTokens
             totals.cacheRead += e.cacheRead ?? 0
             totals.cacheWrite += e.cacheWrite ?? 0
-            totals.costUsd += e.costUsd
+            // A partial sum over only the priced turns — `costIncomplete`
+            // below is what tells a consumer this is not the session's true
+            // total. Token counts above are unconditional: an unpriced turn
+            // still happened and still used tokens.
+            totals.costUsd += e.costUsd ?? 0
+            totals.costIncomplete = totals.costIncomplete || e.costUsd == nil
             runUsd = e.costUsd
             lastUsage = (e.inputTokens, e.outputTokens)
             setHealth(providerFor(e.lane), .ok, "ok", ts)

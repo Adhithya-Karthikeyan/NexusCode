@@ -102,7 +102,7 @@ final class ViewStateTests: XCTestCase {
         XCTAssertEqual(state.lanes["main"]?.live?.tools.first?.result, .string("boom"))
     }
 
-    func testUsageAccumulatesTotalsAndTracksTheLastRun() {
+    func testUsageAccumulatesTotalsAndTracksTheLastRun() throws {
         var state = ViewState()
         state.reduce(
             .usage(.init(lane: "main", inputTokens: 10, outputTokens: 5, cacheRead: 2, cacheWrite: 1, costUsd: 0.01)),
@@ -116,8 +116,55 @@ final class ViewStateTests: XCTestCase {
         XCTAssertEqual(state.totals.outputTokens, 12)
         XCTAssertEqual(state.totals.cacheRead, 2)
         XCTAssertEqual(state.totals.costUsd, 0.03, accuracy: 1e-9)
-        XCTAssertEqual(state.runUsd, 0.02, accuracy: 1e-9)
+        XCTAssertFalse(state.totals.costIncomplete, "both runs were priced — the total is complete")
+        XCTAssertEqual(try XCTUnwrap(state.runUsd), 0.02, accuracy: 1e-9)
         XCTAssertEqual(state.lastUsage.inputTokens, 20)
+    }
+
+    // MARK: - Unpriced usage (costUsd: nil)
+    //
+    // `unknown cost is not zero cost` — same rule the codebase already
+    // applies to a timed-out approval (not a refusal) and an `indeterminate`
+    // agent verdict (not success). See `UsageTotals.costIncomplete`.
+
+    func testUnpricedUsageIsUnknownNotZeroAndMarksTheTotalIncomplete() {
+        var state = ViewState()
+        state.reduce(
+            .usage(.init(lane: "main", inputTokens: 10, outputTokens: 5, cacheRead: nil, cacheWrite: nil, costUsd: nil)),
+            ts: 0
+        )
+        XCTAssertNil(state.runUsd, "unpriced pricing must surface as nil, never as a confident $0")
+        XCTAssertEqual(state.totals.costUsd, 0, "nothing to add to the partial sum for an unpriced turn")
+        XCTAssertTrue(state.totals.costIncomplete)
+        // The rest of the event is unaffected — token counts are never lost
+        // just because the price is unknown.
+        XCTAssertEqual(state.totals.inputTokens, 10)
+        XCTAssertEqual(state.totals.outputTokens, 5)
+    }
+
+    func testGenuineZeroCostStaysCompleteAndDistinctFromUnpriced() {
+        var state = ViewState()
+        state.reduce(
+            .usage(.init(lane: "main", inputTokens: 3, outputTokens: 8, cacheRead: nil, cacheWrite: nil, costUsd: 0)),
+            ts: 0
+        )
+        XCTAssertEqual(state.runUsd, 0, "a real free run (mock, local models) must read as a definite zero")
+        XCTAssertFalse(state.totals.costIncomplete, "a confirmed zero is not incomplete pricing")
+    }
+
+    func testMixedKnownAndUnpricedUsageReportsIncompleteWithAPartialSum() {
+        var state = ViewState()
+        state.reduce(
+            .usage(.init(lane: "main", inputTokens: 10, outputTokens: 5, cacheRead: nil, cacheWrite: nil, costUsd: 0.02)),
+            ts: 0
+        )
+        state.reduce(
+            .usage(.init(lane: "main", inputTokens: 4, outputTokens: 2, cacheRead: nil, cacheWrite: nil, costUsd: nil)),
+            ts: 1
+        )
+        XCTAssertEqual(state.totals.costUsd, 0.02, accuracy: 1e-9, "partial sum over the one priced turn")
+        XCTAssertTrue(state.totals.costIncomplete, "the second, unpriced turn taints the whole total")
+        XCTAssertNil(state.runUsd, "the LATEST run is the unpriced one, even though an earlier run was priced")
     }
 
     // MARK: - Multi-agent lanes

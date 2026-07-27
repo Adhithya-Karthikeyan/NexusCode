@@ -923,12 +923,21 @@ private struct UsageReadout: View {
             Metric(label: "out", value: "\(view.lastUsage.outputTokens)")
             Metric(label: "turn cost", value: formatted(view.runUsd), emphasis: true)
             Spacer(minLength: 0)
-            Metric(label: "session total", value: formatted(view.totals.costUsd))
+            Metric(
+                label: "session total",
+                value: formatted(view.totals.costUsd) + (view.totals.costIncomplete ? "*" : "")
+            )
         }
         .foregroundStyle(theme.color(\.textMuted))
     }
 
-    private func formatted(_ usd: Double) -> String {
+    /// `nil` means genuinely unknown pricing (an unpriced model's turn) —
+    /// shown as "—", never coerced into a confident "$0.00" the way a real
+    /// mock/local $0 run is. Mirrors `SessionsView`'s `costLabel`, which draws
+    /// the identical distinction for the Sessions tab's own cost readout; the
+    /// `*` suffix on the session total above matches that same convention.
+    private func formatted(_ usd: Double?) -> String {
+        guard let usd else { return "—" }
         guard usd > 0 else { return "$0.00" }
         return usd < 0.01 ? "<$0.01" : String(format: "$%.2f", usd)
     }

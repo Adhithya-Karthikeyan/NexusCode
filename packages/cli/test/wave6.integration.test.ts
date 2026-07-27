@@ -380,6 +380,32 @@ describe("wave 6 — git flows see an auth-derived (OAuth-only, no static provid
   }, 20_000);
 });
 
+describe("wave 6 — git flows get the same first-run fallback as ask/chat/tui/models/agent (§ CAPABILITIES.md C6)", () => {
+  // `resolveGitProvider` used to hard-fail on a fresh machine (no `-p`, no
+  // usable default) with `provider "anthropic" is not available` — every
+  // sibling command already degrades to `mock` with a notice instead. Also
+  // exercises the `isProviderUsable` fix alongside it: the OLD `registry.has()`
+  // check would have let an unconfigured-but-registered `anthropic` through
+  // and failed later with a raw adapter exception instead of this clean path.
+  it("`nexus commit` (no -p, fresh config, no diff piped) falls back to mock with a notice instead of erroring", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-w6-fresh-")), "cfg");
+    const diff = execFileSync("git", ["diff"], { cwd: REPO_DIR }).toString();
+    const r = await runCli(["commit"], diff, REPO_DIR, { NEXUS_CONFIG_DIR: freshConfigDir });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("mock");
+    expect(r.stderr).not.toContain("is not available");
+  }, 20_000);
+
+  it("`nexus commit -p anthropic` (explicit, unavailable) still hard-fails clearly — only the DEFAULT path degrades", async () => {
+    const freshConfigDir = join(mkdtempSync(join(tmpdir(), "nx-w6-fresh-")), "cfg");
+    const diff = execFileSync("git", ["diff"], { cwd: REPO_DIR }).toString();
+    const r = await runCli(["commit", "-p", "anthropic"], diff, REPO_DIR, { NEXUS_CONFIG_DIR: freshConfigDir });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("anthropic");
+    expect(r.stderr).toContain("not available");
+  }, 20_000);
+});
+
 describe("wave 6 — session export (redaction + file perms security fixes)", () => {
   it("session export --format json writes a private (0600) file with no injected secret leaked", async () => {
     const secret = "sk-live0123456789ABCDEFghij0123456789";

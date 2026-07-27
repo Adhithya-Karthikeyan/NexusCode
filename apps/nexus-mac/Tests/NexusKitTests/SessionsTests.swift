@@ -35,7 +35,54 @@ final class SessionsTests: XCTestCase {
         XCTAssertEqual(full.eventCount, 22)
         XCTAssertEqual(full.inputTokens, 1200)
         XCTAssertEqual(full.outputTokens, 340)
-        XCTAssertEqual(full.costUsd, 0.0123, accuracy: 0.00001)
+        XCTAssertEqual(try XCTUnwrap(full.costUsd), 0.0123, accuracy: 0.00001)
+        XCTAssertFalse(full.costIncomplete)
+    }
+
+    // MARK: - Unknown cost (`costUsd: null` / `costIncomplete`)
+    //
+    // The `?? 0` this used to do at decode time conflated "the CLI told us
+    // this is unknown" with "the CLI told us this is free" — the same class
+    // of bug fixed for `UiEvent.Usage.costUsd`. These cover the round trip
+    // `NexusSession` is responsible for.
+
+    func testCostUsdNullDecodesAsUnknownNotZero() throws {
+        let json = JSONValue.object([
+            "sessionId": .string("s-unpriced"),
+            "costUsd": .null,
+            "costIncomplete": .bool(true),
+        ])
+        let session = try XCTUnwrap(NexusSession(json: json))
+        XCTAssertNil(session.costUsd, "a null costUsd on the wire must stay nil, never coerce to 0")
+        XCTAssertTrue(session.costIncomplete)
+    }
+
+    func testCostUsdZeroAndAbsentCostUsdAreDistinctFromEachOtherAndFromIncomplete() throws {
+        let zero = JSONValue.object(["sessionId": .string("s-zero"), "costUsd": .number(0)])
+        let missing = JSONValue.object(["sessionId": .string("s-missing")])
+
+        let zeroSession = try XCTUnwrap(NexusSession(json: zero))
+        let missingSession = try XCTUnwrap(NexusSession(json: missing))
+
+        XCTAssertEqual(zeroSession.costUsd, 0, "a real zero must round-trip as a definite zero, not nil")
+        XCTAssertFalse(zeroSession.costIncomplete)
+
+        XCTAssertNil(missingSession.costUsd, "an absent costUsd key is unknown, not a confirmed zero")
+        XCTAssertFalse(missingSession.costIncomplete, "costIncomplete defaults false when the wire omits it")
+    }
+
+    func testMixedSessionWithAPartialSumStillReportsIncomplete() throws {
+        // A session where some runs were priced and some were not: the CLI
+        // reports a nonzero PARTIAL sum alongside costIncomplete: true — the
+        // number is real, just not the whole story.
+        let json = JSONValue.object([
+            "sessionId": .string("s-mixed"),
+            "costUsd": .number(0.05),
+            "costIncomplete": .bool(true),
+        ])
+        let session = try XCTUnwrap(NexusSession(json: json))
+        XCTAssertEqual(try XCTUnwrap(session.costUsd), 0.05, accuracy: 1e-9)
+        XCTAssertTrue(session.costIncomplete)
     }
 
     func testMissingOptionalFieldsDegradeThatFieldRatherThanTheWholeRow() throws {

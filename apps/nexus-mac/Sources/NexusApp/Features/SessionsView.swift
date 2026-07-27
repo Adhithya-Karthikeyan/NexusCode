@@ -321,8 +321,8 @@ private struct SessionRow: View {
                     HStack(spacing: Space.md) {
                         Metric(label: "turns", value: "\(session.turnCount)")
                         Metric(label: "tok", value: formatCount(session.inputTokens + session.outputTokens))
-                        if session.costUsd > 0 {
-                            Metric(label: "cost", value: String(format: "$%.4f", session.costUsd), emphasis: true)
+                        if let cost = costLabel(session) {
+                            Metric(label: "cost", value: cost, emphasis: true)
                         }
                         Spacer(minLength: 0)
                     }
@@ -408,8 +408,8 @@ private struct SessionDetailCard: View {
                     HStack(spacing: Space.lg) {
                         Metric(label: "in", value: formatCount(session.inputTokens))
                         Metric(label: "out", value: formatCount(session.outputTokens))
-                        if session.costUsd > 0 {
-                            Metric(label: "cost", value: String(format: "$%.4f", session.costUsd), emphasis: true)
+                        if let cost = costLabel(session) {
+                            Metric(label: "cost", value: cost, emphasis: true)
                         }
                         Spacer(minLength: 0)
                     }
@@ -483,6 +483,30 @@ private struct RunRow: View {
         .padding(.horizontal, Space.sm)
         .padding(.vertical, Space.xs)
         .background(theme.color(\.surfaceInset), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+    }
+}
+
+/// The session-row/detail-card cost readout. `nil` means show nothing —
+/// preserved for the genuinely-empty case (no cost data at all, e.g. a
+/// session with no runs yet), exactly as before this fix. What changed is
+/// that an INCOMPLETE total — some run this session had no known price —
+/// now always renders something, instead of silently collapsing into the
+/// same "nothing shown" the CLI's `mock` provider's real $0 gets. A known,
+/// complete cost still reads as a plain dollar figure, unaffected.
+///
+/// `session.costUsd` is a PARTIAL sum whenever `costIncomplete` is true (see
+/// `NexusSession.costUsd`), so a partial-but-nonzero total is still shown —
+/// marked with `*` — rather than being replaced by a bare "—" that would
+/// throw away the figure the CLI does know.
+private func costLabel(_ session: NexusSession) -> String? {
+    switch session.costUsd {
+    case let cost? where cost > 0:
+        return session.costIncomplete ? String(format: "$%.4f*", cost) : String(format: "$%.4f", cost)
+    default:
+        // Either no cost data at all (`nil`) or a confirmed `0` — in both
+        // cases there is nothing to show UNLESS incompleteness itself is the
+        // news (a mixed session whose priced runs happened to sum to ~0).
+        return session.costIncomplete ? "—" : nil
     }
 }
 

@@ -46,6 +46,23 @@ final class DiagnosticClassifierTests: XCTestCase {
         XCTAssertEqual(text, "nexus ask: provider \"anthropic\" is not available (try -p mock)")
     }
 
+    func testEffortUnsupportedByProviderStaysAWarning() {
+        // The exact stderr line `applyEffort` writes when the resolved
+        // provider cannot honor `--effort` (`packages/cli/src/commands.ts`)
+        // — now reachable from the app since `ConversationController.effort`
+        // actually sends the flag instead of only decorating the preview.
+        // This must stay a warning: it is telling the user their setting had
+        // no effect, not routine plumbing like `[session]`/`[resume]`.
+        let result = DiagnosticClassifier.classify(
+            "nexus chat: provider \"claude-code\" does not support reasoning effort — " +
+                "\"--effort high\" is ignored for this request"
+        )
+        guard case .warning(let text) = result else {
+            return XCTFail("expected .warning, got \(result)")
+        }
+        XCTAssertTrue(text.contains("does not support reasoning effort"))
+    }
+
     func testLaunchFailureStaysAWarning() {
         // Generated client-side (`ConversationController.absorb`), not by the
         // CLI — must survive classification exactly like a CLI-sourced error.

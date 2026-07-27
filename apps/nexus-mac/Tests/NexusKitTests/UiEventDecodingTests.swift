@@ -102,7 +102,7 @@ final class UiEventDecodingTests: XCTestCase {
         let unwrapped = try XCTUnwrap(usage)
         XCTAssertEqual(unwrapped.cacheRead, 128)
         XCTAssertEqual(unwrapped.cacheWrite, 16)
-        XCTAssertEqual(unwrapped.costUsd, 0.0042, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(unwrapped.costUsd), 0.0042, accuracy: 1e-9)
     }
 
     func testUsageToleratesAbsentCacheFields() {
@@ -113,6 +113,43 @@ final class UiEventDecodingTests: XCTestCase {
         }
         XCTAssertNil(usage.cacheRead)
         XCTAssertNil(usage.cacheWrite)
+    }
+
+    // MARK: - Unpriced usage (costUsd: null)
+    //
+    // The bug this guards against: an unpriced model's real `usage` event has
+    // `costUsd: null` on the wire (see `Usage.costUsd`'s doc). Before this
+    // fix, `costUsd` was non-optional `Double`, so decoding `null` into it
+    // THREW, and `decodeLine`'s catch turned the WHOLE event into
+    // `.unknown(type: "malformed", …)` — silently dropping the token counts
+    // along with the cost. This is the assertion that would have caught it.
+
+    func testUsageWithNullCostDecodesAsUsageNotAsAMalformedUnknownEvent() throws {
+        let line = #"{"t":"usage","lane":"main","inputTokens":12,"outputTokens":6,"costUsd":null}"#
+        let event = UiEventDecoder.decodeLine(line)
+        guard case .usage(let usage)? = event else {
+            return XCTFail(
+                "a usage event with costUsd: null must decode as .usage — got \(String(describing: event)) "
+                    + "instead, meaning it silently degraded to .unknown and its token counts vanished"
+            )
+        }
+        XCTAssertNil(usage.costUsd, "null means UNKNOWN pricing, never a coerced 0")
+        // The whole point: the token counts must survive even though the
+        // price is unknown — they must not vanish along with the cost.
+        XCTAssertEqual(usage.inputTokens, 12)
+        XCTAssertEqual(usage.outputTokens, 6)
+    }
+
+    func testUsageWithZeroCostIsGenuinelyFreeAndDistinctFromNullCost() throws {
+        let line = #"{"t":"usage","lane":"main","inputTokens":3,"outputTokens":8,"costUsd":0}"#
+        guard case .usage(let usage)? = UiEventDecoder.decodeLine(line) else {
+            return XCTFail("expected a usage event")
+        }
+        // A real `0` (mock provider, local models) must decode as a definite
+        // zero, not as nil — the two states must stay distinguishable end to
+        // end, not just at the type level.
+        XCTAssertEqual(usage.costUsd, 0)
+        XCTAssertNotNil(usage.costUsd)
     }
 
     func testUnknownEventTypeSurvivesAsUnknown() throws {

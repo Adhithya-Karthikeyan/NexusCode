@@ -185,7 +185,14 @@ public enum UiEvent: Sendable, Hashable {
         public let outputTokens: Int
         public let cacheRead: Int?
         public let cacheWrite: Int?
-        public let costUsd: Double
+        /// `nil` means genuinely UNKNOWN pricing (no `config.pricing`/
+        /// `DEFAULT_PRICING` entry for the model) — distinct from a real `0`
+        /// for a free provider (`mock`, local models). A consumer must render
+        /// `nil` as "unpriced"/`—`, never as `$0.00` — collapsing the two is
+        /// what made a real, paid call display as a confident $0. Mirrors
+        /// `costUsd: number | null` on the TypeScript `Usage` event
+        /// (`packages/core/src/projection.ts`).
+        public let costUsd: Double?
     }
 
     public struct RunError: Sendable, Hashable, Codable {

@@ -80,37 +80,146 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(args.contains("s_123"))
     }
 
-    // MARK: - Preview/spawn parity (Bug 1 regression guard)
+    // MARK: - Preview/spawn parity matrix (Bug 1 + fabricated ---effort regression guard)
 
-    /// `plannedCommand` claims to show "exactly which `nexus` invocation the
-    /// button maps to". For single-lane modes that used to be false: the
-    /// preview showed `["ask", prompt, …]` while `submit()` actually spawned
-    /// `chat --persistent …` via `PersistentSession`, which built its OWN argv
-    /// from `extraArguments`. This asserts the preview is the identical array
-    /// `submitToPersistentSession` hands to `PersistentSession` — not two
-    /// literals that merely happen to match — so it fails under the old
-    /// two-builder code, where the preview started with `"ask"`/the prompt and
-    /// the real spawn started with `"chat"`/`"--persistent"`/no prompt at all.
-    func testPreviewArgvMatchesWhatIsActuallySpawnedForASingleLaneSubmit() {
-        let c = controller()
-        c.mode = .ask
-        c.provider = "anthropic"
-        c.model = "claude-sonnet-4-5"
-        c.sessionId = "s_1"
+    /// "The preview shows a command that isn't what runs" has recurred TWICE:
+    /// first as `nexus agent …` displayed while `chat --persistent …` actually
+    /// ran (Bug 1, originally guarded by a single hand-picked case here), then
+    /// as `--effort` spliced into `commandPreview` while neither real argv
+    /// builder ever added it (fixed by giving `effort` a home on the
+    /// controller instead of the view — see `ConversationController.effort`).
+    /// Both were fixed as one-off patches; neither fix prevented the next one.
+    /// This replaces the single-case guard with a full state matrix so the
+    /// whole CLASS of bug is impossible, not just the two instances already
+    /// found — every mode, `.agent` with/without a role, every effort level
+    /// including `off`, provider/model set/unset, approvals on/off, and
+    /// `sessionId` present/absent.
+    ///
+    /// For every combination this compares `plannedCommand(for:).arguments`
+    /// against the value ACTUALLY used to spawn — never two literals that
+    /// merely happen to match:
+    ///
+    /// - States that route through the persistent session (`.ask`, `.agent`
+    ///   with no role) really do have two independent builders: the real spawn
+    ///   (`submitToPersistentSession`) constructs its `PersistentSession` with
+    ///   a SECOND, separate call to `persistentSessionArguments()`, not the
+    ///   value the preview already computed. Comparing the two calls is the
+    ///   genuine Bug-1-class guard.
+    /// - One-shot states (`.compare`, `.race`, `.agent` WITH a role) have no
+    ///   second builder to compare against — `submit()` hands
+    ///   `dispatchOneShot` the exact `plannedCommand(for:)` result, so nothing
+    ///   here could diverge from the preview by construction. Documenting
+    ///   that honestly rather than writing a tautological assertion: this
+    ///   branch instead asserts the ARGV CONTENT is correct for the state,
+    ///   which is the only thing that can actually regress on that path.
+    func testPreviewArgvMatchesTheActualSpawnAcrossTheFullStateMatrix() {
+        let efforts = EffortLevel.allCases
+        let providerOptions: [String?] = [nil, "prov-x"]
+        let modelOptions: [String?] = [nil, "model-x"]
+        let approvalsOptions = [true, false]
+        let sessionIdOptions: [String?] = [nil, "s_matrix"]
+        // `.agent` is the only mode `role` affects — nil (native tool loop,
+        // persistent) vs. set (OODA framework, one-shot) are two structurally
+        // different dispatch shapes and both need a pass through the matrix;
+        // every other mode only ever runs with role == nil.
+        func roleOptions(for mode: RunMode) -> [String?] { mode == .agent ? [nil, "coder"] : [nil] }
 
-        let preview = c.plannedCommand(for: "hello").arguments
-        let spawned = c.persistentSessionArguments()
-        XCTAssertEqual(preview, spawned)
-        // The persistent path never puts the prompt in argv — it is written to
-        // the process's stdin turn by turn once the backend is ready.
-        XCTAssertFalse(spawned.contains("hello"))
-        XCTAssertEqual(spawned.first, "chat")
-        XCTAssertTrue(spawned.contains("--persistent"))
+        for mode in RunMode.allCases {
+            for role in roleOptions(for: mode) {
+                // Mirrors `ConversationController.usesPersistentSession`
+                // (private to that type), computed here from PUBLIC state
+                // only — the same duplication `ConversationView.approvalsApply`
+                // already has to do, for the same reason: the controller
+                // exposes what the property is computed FROM, not the
+                // property itself.
+                let usesPersistentSession = !mode.isMultiLane && !(mode == .agent && role != nil)
 
-        c.submit("hello")
-        // What actually got spawned matches what was previewed.
-        XCTAssertEqual(c.activeBackendProvider, "anthropic")
-        XCTAssertEqual(c.activeBackendModel, "claude-sonnet-4-5")
+                for effort in efforts {
+                    for provider in providerOptions {
+                        for model in modelOptions {
+                            for approvalsEnabled in approvalsOptions {
+                                for sessionId in sessionIdOptions {
+                                    let c = controller()
+                                    c.mode = mode
+                                    c.role = role
+                                    c.effort = effort
+                                    c.provider = provider
+                                    c.model = model
+                                    c.approvalsEnabled = approvalsEnabled
+                                    c.sessionId = sessionId
+                                    if mode.isMultiLane { c.backends = ["b1", "b2"] }
+
+                                    let context = "mode=\(mode.rawValue) role=\(role ?? "nil") effort=\(effort.rawValue) " +
+                                        "provider=\(provider ?? "nil") model=\(model ?? "nil") " +
+                                        "approvals=\(approvalsEnabled) session=\(sessionId ?? "nil")"
+
+                                    let preview = c.plannedCommand(for: "matrix prompt").arguments
+
+                                    if usesPersistentSession {
+                                        // The actual Bug-1 guard: a genuine second, independent call.
+                                        XCTAssertEqual(
+                                            preview, c.persistentSessionArguments(),
+                                            "preview/spawn argv diverged for \(context)"
+                                        )
+                                        XCTAssertEqual(preview.first, "chat", context)
+                                        XCTAssertTrue(preview.contains("--persistent"), context)
+                                        // The persistent path never puts the prompt in argv — it is
+                                        // written to the process's stdin turn by turn instead.
+                                        XCTAssertFalse(preview.contains("matrix prompt"), "persistent path must never argv the prompt, \(context)")
+                                    } else {
+                                        XCTAssertEqual(preview.first, mode.rawValue, context)
+                                        XCTAssertTrue(preview.contains("matrix prompt"), "one-shot dispatch must argv the prompt, \(context)")
+                                    }
+
+                                    // --- Content assertions, shared by both dispatch shapes ---
+
+                                    if effort == .off {
+                                        XCTAssertFalse(preview.contains("--effort"), "--effort off must be omitted, \(context)")
+                                    } else {
+                                        XCTAssertTrue(
+                                            preview.contains("--effort") && preview.contains(effort.rawValue),
+                                            "missing --effort \(effort.rawValue), \(context)"
+                                        )
+                                    }
+
+                                    if usesPersistentSession {
+                                        XCTAssertEqual(preview.contains("-t"), approvalsEnabled, context)
+                                        XCTAssertEqual(preview.contains("--ask"), approvalsEnabled, context)
+                                    } else {
+                                        // Documented, honest gap (pre-existing, not introduced by this
+                                        // test): one-shot dispatch has no approval-gate flag at all
+                                        // today — `oneShotArguments` never reads `approvalsEnabled` —
+                                        // so compare/race/role-agent runs are never gated regardless of
+                                        // this setting. Asserted explicitly so a silently-untested
+                                        // combination can't hide a real gap the way this bug class has
+                                        // twice before.
+                                        XCTAssertFalse(preview.contains("-t"), context)
+                                        XCTAssertFalse(preview.contains("--ask"), context)
+                                    }
+
+                                    if mode.isMultiLane {
+                                        XCTAssertFalse(preview.contains("-p"), "compare/race must never carry -p/-m, \(context)")
+                                        XCTAssertFalse(preview.contains("-m"), context)
+                                    } else {
+                                        XCTAssertEqual(preview.contains("-p"), provider != nil, context)
+                                        XCTAssertEqual(preview.contains("-m"), model != nil, context)
+                                    }
+
+                                    if mode == .agent, let role {
+                                        XCTAssertTrue(preview.contains("--role") && preview.contains(role), context)
+                                        // The OODA framework opens a fresh engine session on every
+                                        // invocation and never reads `--resume`.
+                                        XCTAssertFalse(preview.contains("--resume"), "agent --role has no --resume, \(context)")
+                                    } else {
+                                        XCTAssertEqual(preview.contains("--resume"), sessionId != nil, context)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Role (Bug 2 / Bug 3)

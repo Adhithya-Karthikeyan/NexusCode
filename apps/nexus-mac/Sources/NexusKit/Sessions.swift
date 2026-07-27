@@ -30,7 +30,17 @@ public struct NexusSession: Sendable, Hashable, Identifiable {
     public let eventCount: Int
     public let inputTokens: Int
     public let outputTokens: Int
-    public let costUsd: Double
+    /// Sum of the runs with KNOWN pricing only — see `costIncomplete`. `nil`
+    /// when the wire omitted the field entirely (an older CLI that predates
+    /// cost tracking) — distinct from a definite `0`, so this never coerces
+    /// an unknown into a confident "free". Mirrors `SessionMeta.costUsd`
+    /// (`packages/session/src/types.ts`), which is itself a partial sum.
+    public let costUsd: Double?
+    /// True when at least one run that consumed real tokens has NO known
+    /// cost (no pricing entry for its model) — `costUsd` above is then a
+    /// PARTIAL sum, not the session's true total, and must be displayed as
+    /// such rather than as a confident number.
+    public let costIncomplete: Bool
     public let createdAt: Date?
     public let updatedAt: Date?
 
@@ -49,7 +59,8 @@ public struct NexusSession: Sendable, Hashable, Identifiable {
         eventCount: Int = 0,
         inputTokens: Int = 0,
         outputTokens: Int = 0,
-        costUsd: Double = 0,
+        costUsd: Double? = 0,
+        costIncomplete: Bool = false,
         createdAt: Date? = nil,
         updatedAt: Date? = nil
     ) {
@@ -63,6 +74,7 @@ public struct NexusSession: Sendable, Hashable, Identifiable {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.costUsd = costUsd
+        self.costIncomplete = costIncomplete
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -81,7 +93,11 @@ public struct NexusSession: Sendable, Hashable, Identifiable {
         self.eventCount = json["eventCount"]?.intValue ?? 0
         self.inputTokens = json["inputTokens"]?.intValue ?? 0
         self.outputTokens = json["outputTokens"]?.intValue ?? 0
-        self.costUsd = json["costUsd"]?.doubleValue ?? 0
+        // NOT `?? 0` — a missing/null costUsd is UNKNOWN, not a confirmed
+        // free session. `doubleValue` already yields nil for an explicit
+        // JSON null as well as an absent key, so this stays nil either way.
+        self.costUsd = json["costUsd"]?.doubleValue
+        self.costIncomplete = json["costIncomplete"]?.boolValue ?? false
         self.createdAt = NexusEpoch.date(json["createdAt"])
         self.updatedAt = NexusEpoch.date(json["updatedAt"])
     }

@@ -379,7 +379,7 @@ function resolveRunModel(
  * literally no provider is usable — should not happen since `mock` is always
  * registered.
  */
-function resolveDefaultProviderForRun(runtime: Runtime, config: NexusConfig, io: Io): string | undefined {
+export function resolveDefaultProviderForRun(runtime: Runtime, config: NexusConfig, io: Io): string | undefined {
   const resolution = resolveDefaultProvider(runtime, config.defaultProvider);
   if (!resolution) {
     io.err(
@@ -1219,10 +1219,32 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     config,
     enterprise.enabled ? { gateways: enterprise.gatewaySet } : {},
   );
-  const providerId = args.flags.get("provider") ?? config.defaultProvider;
-  if (!isProviderUsable(runtime, providerId)) {
-    io.err(`nexus agent: provider "${providerId}" is not available (try -p mock -m mock-tools)\n`);
-    return 1;
+  // First-run UX is consistent with every sibling command that dispatches a
+  // provider (`ask`, `chat`, `tui`, `models`): a DEFAULT provider (no explicit
+  // `-p`) degrades to `mock` with a visible notice rather than dead-ending, an
+  // explicit `-p <id>` still hard-fails when unavailable. This was previously
+  // agent-only, hard-failing even on the default path (§ CAPABILITIES.md C6) —
+  // deliberately not "symmetry for its own sake": the fallback is only safe
+  // here BECAUSE which provider drives the tool loop never widens what it can
+  // do. `resolvePermissionMode`/`def.permissionMode` (read-only unless the
+  // caller explicitly passes `--approve`/`--yolo`, or a role opts in) gate
+  // writes/exec independently of provider — a fallback to `mock` cannot cause
+  // an agent run to write or execute anything a real provider run with the
+  // SAME flags couldn't already. The one difference the user could miss —
+  // "this ran against mock, not the model I configured" — is exactly what the
+  // notice below says out loud.
+  const explicitProvider = args.flags.get("provider");
+  let providerId: string;
+  if (explicitProvider !== undefined) {
+    if (!isProviderUsable(runtime, explicitProvider)) {
+      io.err(`nexus agent: provider "${explicitProvider}" is not available (try -p mock -m mock-tools)\n`);
+      return 1;
+    }
+    providerId = explicitProvider;
+  } else {
+    const resolved = resolveDefaultProviderForRun(runtime, config, io);
+    if (!resolved) return 1;
+    providerId = resolved;
   }
   // A subprocess coding CLI (claude-code / codex) runs its OWN agentic loop and
   // emits file-edit/tool-result/approval chunks directly; it must go through the
@@ -1488,10 +1510,22 @@ async function runAgentOoda(
   const effortResult = resolveEffortFlag(args, config, io, "agent");
   if ("code" in effortResult) return { code: effortResult.code, result: null };
   const runtime = await buildAuthedRuntime(config);
-  const providerId = args.flags.get("provider") ?? config.defaultProvider;
-  if (!isProviderUsable(runtime, providerId)) {
-    io.err(`nexus agent: provider "${providerId}" is not available (try -p mock -m mock-tools)\n`);
-    return { code: 1, result: null };
+  // Same fallback as the role-less `agent` path above (see its comment for the
+  // full reasoning) — the OODA loop's own gate (`def.permissionMode` / role
+  // sandbox class, resolved further below) is what bounds what a run can
+  // actually do, independent of which provider drives it.
+  const explicitProvider = args.flags.get("provider");
+  let providerId: string;
+  if (explicitProvider !== undefined) {
+    if (!isProviderUsable(runtime, explicitProvider)) {
+      io.err(`nexus agent: provider "${explicitProvider}" is not available (try -p mock -m mock-tools)\n`);
+      return { code: 1, result: null };
+    }
+    providerId = explicitProvider;
+  } else {
+    const resolved = resolveDefaultProviderForRun(runtime, config, io);
+    if (!resolved) return { code: 1, result: null };
+    providerId = resolved;
   }
 
   const registry = createAgentRegistry();
