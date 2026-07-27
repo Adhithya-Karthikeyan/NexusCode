@@ -7767,13 +7767,13 @@ relocations:
   - { offset: 0x13AF00, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV07defaultD2IdSSvgZ', symObjAddr: 0x7D58, symBinAddr: 0x10071AAE8, symSize: 0x38 }
   - { offset: 0x13AF14, size: 0x8, addend: 0x0, symName: '_$s8NexusKit0A5ThemeV03appC0AA03AppC0Vvg', symObjAddr: 0x8520, symBinAddr: 0x10071B208, symSize: 0xA24 }
   - { offset: 0x13B0AF, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV8meridian_WZ', symObjAddr: 0x0, symBinAddr: 0x100721A5C, symSize: 0x1408 }
-  - { offset: 0x13B0D3, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV8meridianACvpZ', symObjAddr: 0xD358, symBinAddr: 0x10088E950, symSize: 0x0 }
-  - { offset: 0x13B187, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV6basaltACvpZ', symObjAddr: 0xD950, symBinAddr: 0x10088EF48, symSize: 0x0 }
-  - { offset: 0x13B1A1, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV6cinderACvpZ', symObjAddr: 0xDF48, symBinAddr: 0x10088F540, symSize: 0x0 }
-  - { offset: 0x13B1BC, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV8daylightACvpZ', symObjAddr: 0xE540, symBinAddr: 0x10088FB38, symSize: 0x0 }
-  - { offset: 0x13B1D7, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV6studioACvpZ', symObjAddr: 0xEB38, symBinAddr: 0x100890130, symSize: 0x0 }
-  - { offset: 0x13B1F2, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV7vantageACvpZ', symObjAddr: 0xF130, symBinAddr: 0x100890728, symSize: 0x0 }
-  - { offset: 0x13B20D, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV9nightfallACvpZ', symObjAddr: 0xF728, symBinAddr: 0x100890D20, symSize: 0x0 }
+  - { offset: 0x13B0D3, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV8meridianACvpZ', symObjAddr: 0xD360, symBinAddr: 0x10088E950, symSize: 0x0 }
+  - { offset: 0x13B187, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV6basaltACvpZ', symObjAddr: 0xD958, symBinAddr: 0x10088EF48, symSize: 0x0 }
+  - { offset: 0x13B1A1, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV6cinderACvpZ', symObjAddr: 0xDF50, symBinAddr: 0x10088F540, symSize: 0x0 }
+  - { offset: 0x13B1BC, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV8daylightACvpZ', symObjAddr: 0xE548, symBinAddr: 0x10088FB38, symSize: 0x0 }
+  - { offset: 0x13B1D7, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV6studioACvpZ', symObjAddr: 0xEB40, symBinAddr: 0x100890130, symSize: 0x0 }
+  - { offset: 0x13B1F2, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV7vantageACvpZ', symObjAddr: 0xF138, symBinAddr: 0x100890728, symSize: 0x0 }
+  - { offset: 0x13B20D, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV9nightfallACvpZ', symObjAddr: 0xF730, symBinAddr: 0x100890D20, symSize: 0x0 }
   - { offset: 0x13B21B, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV8meridian_WZ', symObjAddr: 0x0, symBinAddr: 0x100721A5C, symSize: 0x1408 }
   - { offset: 0x13B235, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV8meridianACvau', symObjAddr: 0x1448, symBinAddr: 0x100722E64, symSize: 0x50 }
   - { offset: 0x13B253, size: 0x8, addend: 0x0, symName: '_$s8NexusKit8AppThemeV6basalt_WZ', symObjAddr: 0x21CC, symBinAddr: 0x100722EDC, symSize: 0x13C0 }

@@ -33,6 +33,52 @@ public extension Color {
     }
 }
 
+public extension Color {
+    /// WCAG 2.1 contrast ratio between two hex colours, computed directly
+    /// from the hex strings rather than a resolved `Color`. That matters:
+    /// `Color`'s component accessors need a window server / colour space to
+    /// resolve against, which headless `swift test` doesn't have, so this
+    /// gives the same answer in a running app and in a unit test — the two
+    /// places this codebase has been burned by contrast that "looked fine."
+    static func contrastRatio(_ hexA: String, _ hexB: String) -> Double {
+        func luminance(_ hex: String) -> Double {
+            var text = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.hasPrefix("#") { text.removeFirst() }
+            guard text.count == 6, let value = UInt64(text, radix: 16) else { return 0 }
+            let r = Double((value >> 16) & 0xFF) / 255
+            let g = Double((value >> 8) & 0xFF) / 255
+            let b = Double(value & 0xFF) / 255
+            func linearize(_ c: Double) -> Double {
+                c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
+        }
+        let lumA = luminance(hexA)
+        let lumB = luminance(hexB)
+        let lighter = max(lumA, lumB)
+        let darker = min(lumA, lumB)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    /// Picks whichever of two candidate text colours reads better against a
+    /// background, by measured contrast rather than by assuming the
+    /// background is dark or light.
+    ///
+    /// Exists because a few tokens (`accentMuted` chief among them) were
+    /// designed as a tinted wash, not as one half of a text/background pair —
+    /// there is no single "the text colour for this" token, and guessing one
+    /// (this codebase guessed `accentFg`, which was designed for text on the
+    /// full-strength `accentDefault` fill, not the muted one) is exactly how
+    /// `CountPill`'s `.accent` badge ended up at a 1.5–3.7:1 ratio across
+    /// every theme, old and new. This computes the answer instead.
+    static func readableText(on backgroundHex: String, preferring primaryHex: String, otherwise inverseHex: String) -> Color {
+        let primaryRatio = contrastRatio(primaryHex, backgroundHex)
+        let inverseRatio = contrastRatio(inverseHex, backgroundHex)
+        let winner = primaryRatio >= inverseRatio ? primaryHex : inverseHex
+        return Color(hex: winner) ?? Color(.sRGB, red: 1, green: 0, blue: 1, opacity: 1)
+    }
+}
+
 public extension NexusTheme {
     /// A token as a SwiftUI colour. Falls back to a visible magenta rather than
     /// a plausible-looking grey, so a bad token is caught in review, not shipped.

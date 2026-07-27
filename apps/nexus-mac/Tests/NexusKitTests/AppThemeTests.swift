@@ -72,7 +72,7 @@ final class AppThemeTests: XCTestCase {
         // plus zero shadow/material usage, which is the actual accessibility
         // property we care about: predictable contrast, nothing translucent.
         let candidates = AppTheme.all.filter { theme in
-            let body = contrastRatio(theme.tokens.textPrimary, theme.tokens.surfaceBase)
+            let body = Color.contrastRatio(theme.tokens.textPrimary, theme.tokens.surfaceBase)
             let flatMaterials = theme.materials.sidebar == .solid && theme.materials.overlay == .solid && theme.materials.composer == .solid
             let noShadow = (0...3).allSatisfy { theme.elevation.step($0).shadowOpacity == 0 }
             return body >= 7.0 && flatMaterials && noShadow
@@ -84,14 +84,14 @@ final class AppThemeTests: XCTestCase {
 
     func testBodyTextClearsFourPointFiveToOneOnBaseSurface() {
         for theme in AppTheme.all {
-            let ratio = contrastRatio(theme.tokens.textPrimary, theme.tokens.surfaceBase)
+            let ratio = Color.contrastRatio(theme.tokens.textPrimary, theme.tokens.surfaceBase)
             XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(theme.id): textPrimary on surfaceBase is \(ratio), below the 4.5:1 WCAG AA floor for body text")
         }
     }
 
     func testSecondaryTextClearsThreeToOneOnBaseSurface() {
         for theme in AppTheme.all {
-            let ratio = contrastRatio(theme.tokens.textSecondary, theme.tokens.surfaceBase)
+            let ratio = Color.contrastRatio(theme.tokens.textSecondary, theme.tokens.surfaceBase)
             XCTAssertGreaterThanOrEqual(ratio, 3.0, "\(theme.id): textSecondary on surfaceBase is \(ratio), below the 3:1 floor for secondary text")
         }
     }
@@ -159,31 +159,58 @@ final class AppThemeTests: XCTestCase {
         XCTAssertNotNil(NexusTheme.named(NexusTheme.defaultThemeId))
         XCTAssertEqual(ThemeKey.defaultValue.id, NexusTheme.defaultThemeId)
     }
-}
 
-// MARK: - WCAG 2.1 contrast ratio
+    // MARK: - Composed pairs (what a component actually renders)
+    //
+    // `testBodyTextClearsFourPointFiveToOneOnBaseSurface` and its secondary
+    // sibling above check *reading* text — they would not have caught the two
+    // real failures found by widening the check to what `SoftButton` and
+    // `CountPill` actually composite as a filled background + a label on top
+    // of it: `accentFg`/`accentDefault` measured 3.40 (Daylight) and 4.15
+    // (Studio), both now fixed by darkening the accent fill (hue/saturation
+    // held, only lightness moved — same instinct as never using pure white on
+    // near-black: adjust the one component doing the least visual damage).
+    // These tests assert every such pair directly from the theme's own
+    // values, so a future theme (or a future edit to an existing one) cannot
+    // reintroduce the same class of bug silently.
 
-/// Relative luminance and contrast ratio per WCAG 2.1, operating directly on
-/// hex strings so tests read close to the spec's own formula rather than
-/// routing through `Color` (whose component accessors are unreliable across
-/// colour spaces in headless `swift test` runs).
-private func contrastRatio(_ hexA: String, _ hexB: String) -> Double {
-    func luminance(_ hex: String) -> Double {
-        var text = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.hasPrefix("#") { text.removeFirst() }
-        guard text.count == 6, let value = UInt64(text, radix: 16) else { return 0 }
-        let r = Double((value >> 16) & 0xFF) / 255
-        let g = Double((value >> 8) & 0xFF) / 255
-        let b = Double(value & 0xFF) / 255
-        func linearize(_ c: Double) -> Double {
-            c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    func testSoftButtonNeutralToneClearsFourPointFiveToOne() {
+        for theme in AppTheme.all {
+            let ratio = Color.contrastRatio(theme.tokens.textSecondary, theme.tokens.surfaceOverlay)
+            XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(theme.id): SoftButton .neutral (textSecondary on surfaceOverlay) is \(ratio)")
         }
-        return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
     }
 
-    let lumA = luminance(hexA)
-    let lumB = luminance(hexB)
-    let lighter = max(lumA, lumB)
-    let darker = min(lumA, lumB)
-    return (lighter + 0.05) / (darker + 0.05)
+    func testSoftButtonAccentToneClearsFourPointFiveToOne() {
+        for theme in AppTheme.all {
+            let ratio = Color.contrastRatio(theme.tokens.accentFg, theme.tokens.accentDefault)
+            XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(theme.id): SoftButton .accent (accentFg on accentDefault) is \(ratio)")
+        }
+    }
+
+    func testSoftButtonAndCountPillDangerToneClearsFourPointFiveToOne() {
+        for theme in AppTheme.all {
+            let ratio = Color.contrastRatio(theme.tokens.errorFg, theme.tokens.errorBg)
+            XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(theme.id): .danger (errorFg on errorBg) is \(ratio)")
+        }
+    }
+
+    func testCountPillWarningToneClearsFourPointFiveToOne() {
+        for theme in AppTheme.all {
+            let ratio = Color.contrastRatio(theme.tokens.warningFg, theme.tokens.warningBg)
+            XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(theme.id): CountPill .warning (warningFg on warningBg) is \(ratio)")
+        }
+    }
+
+    func testCountPillAccentToneClearsFourPointFiveToOneViaComputedReadableText() {
+        // `.accent`'s foreground is computed (`Color.readableText`), not a
+        // fixed token — so what this asserts is the *contract* that
+        // computation must uphold on every theme, not one hardcoded pairing.
+        for theme in AppTheme.all {
+            let primaryRatio = Color.contrastRatio(theme.tokens.textPrimary, theme.tokens.accentMuted)
+            let inverseRatio = Color.contrastRatio(theme.tokens.textInverse, theme.tokens.accentMuted)
+            let best = max(primaryRatio, inverseRatio)
+            XCTAssertGreaterThanOrEqual(best, 4.5, "\(theme.id): CountPill .accent (best of textPrimary/textInverse on accentMuted) is \(best)")
+        }
+    }
 }

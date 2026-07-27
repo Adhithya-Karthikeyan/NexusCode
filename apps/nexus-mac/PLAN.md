@@ -221,8 +221,8 @@ and `permissionMode`. Provider-neutral by construction.
    hop no matter how it is wired. The permission ceiling was proven separately —
    a `read-only` parent keeps a delegated `coordinator` child read-only even
    though that preset requests `workspace-write`.
-3. 🔄 **The app never passes `--role`** — and it is worse than that. Chasing this
-   turned up TWO defects in the same family as the provider-switch bug:
+3. ✅ **The app never passes `--role`** — fixed, along with TWO worse defects in
+   the same family as the provider-switch bug that chasing it turned up:
 
    a. **`plannedCommand` lies for every single-lane run.** It is documented as
       "the command a submit would run — surfaced so the user can always see
@@ -238,13 +238,38 @@ and `permissionMode`. Provider-neutral by construction.
       `submitToPersistentSession`, so they are byte-identical at runtime.
       Selecting "agent" changes nothing about what runs.
 
-   Structural constraint found while specifying the fix: `nexus agent` has NO
-   `--persistent` mode — it is one-shot per invocation. So a role run cannot use
-   the persistent-session path and must dispatch like compare/race. Worth
-   knowing before designing any "agent conversation" UI.
+   **How they were fixed:** the controller now computes the FULL argv, and
+   `PersistentSession` is HANDED it (`init` takes `arguments:`) instead of
+   assembling its own. One builder, `persistentSessionArguments()`, feeds both
+   the preview and the spawn — so they cannot drift again by anyone's
+   inattention. The guard test asserts structural equality between the two, not
+   two literals that happen to match. Two pre-existing tests had encoded the old
+   dishonest behaviour and were corrected; note the preview for a persistent run
+   no longer contains the prompt text, because the prompt goes over STDIN and
+   was never in argv.
 
-   Still open after that: `AgentRowBuilder` needs a third origin beside
-   `.lane`/`.omc`, and the badge at `AgentsView.swift:334` a `NEXUS` case.
+   `launchedWith` is now `(provider, model, role)`, and the relaunch check moved
+   up into `submit()` — a role change can cross the persistent/one-shot boundary
+   entirely, so role going nil→non-nil must STOP the stale role-less backend
+   rather than leave it running alongside.
+
+   ⚠️ **Real CLI limitation, recorded rather than papered over: a role run
+   cannot resume.** `runAgentOoda` calls `engine.openSession()` fresh on every
+   invocation and never reads the `resume` flag — `--resume` is dead on that
+   path. So the app deliberately omits it for role runs. This matters against
+   the project's own promise that switching providers must not lose context:
+   starting a role run mid-conversation currently starts a NEW session. Worth
+   fixing in the CLI (teach `runAgentOoda` to honour `--resume` like the chat
+   path does) — queued behind the in-flight `commands.ts` work.
+
+   Structural constraint worth remembering: `nexus agent` has NO `--persistent`
+   mode — one-shot per invocation — so a role run dispatches like compare/race
+   and can never use the persistent-session path.
+
+   Still open: `AgentRowBuilder` needs a third origin beside `.lane`/`.omc`, and
+   the origin badge in `AgentsView.swift` a matching case. IN FLIGHT — with the
+   hard requirement that the three-valued verdict plus "running" render as FOUR
+   visibly distinct states, since `AgentRow`'s two booleans cannot express them.
 4. ✅ **Role discovery is now a command.** Previously the ONLY enumeration was a
    stderr error string (`nexus agent --role nope` → `(roles: coordinator, …)`);
    hardcoding those nine in Swift would have recreated the stale-model-picker

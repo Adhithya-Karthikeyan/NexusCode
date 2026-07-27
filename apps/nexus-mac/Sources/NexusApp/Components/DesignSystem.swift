@@ -189,7 +189,16 @@ struct CountPill: View {
 
     private var colors: (bg: Color, fg: Color) {
         switch tone {
-        case .accent: return (theme.color(\.accentMuted), theme.color(\.accentFg))
+        case .accent:
+            // `accentFg` was designed for text on the full-strength
+            // `accentDefault` fill, not the muted one — pairing it with
+            // `accentMuted` (a tinted wash, not a text/background pair) is
+            // what measured at 1.5–3.7:1 across every theme, old and new.
+            // `accentMuted` itself is unchanged — other components still get
+            // exactly the wash they were designed against — only the label
+            // colour is now computed to actually read against it.
+            let fg = Color.readableText(on: theme.tokens.accentMuted, preferring: theme.tokens.textPrimary, otherwise: theme.tokens.textInverse)
+            return (theme.color(\.accentMuted), fg)
         case .neutral: return (theme.color(\.surfaceOverlay), theme.color(\.textSecondary))
         case .warning: return (theme.color(\.warningBg), theme.color(\.warningFg))
         case .danger: return (theme.color(\.errorBg), theme.color(\.errorFg))

@@ -519,6 +519,36 @@ function dimErr(s: string): string {
 }
 
 /**
+ * Format a per-run cost for a `[usage]`/`[lane]` trailer. `null`/`undefined`
+ * means genuinely UNKNOWN pricing (no `config.pricing`/`DEFAULT_PRICING` entry
+ * for the model) — rendering that as `$0.000000` would be indistinguishable
+ * from a real free run (`mock`, local providers) and silently misrepresent a
+ * paid call's cost as free. Never coerce with `?? 0` at a call site; go
+ * through this instead.
+ */
+function formatCostUsd(costUsd: number | null | undefined): string {
+  return costUsd == null ? "unpriced" : `$${costUsd.toFixed(6)}`;
+}
+
+/**
+ * True when a multi-lane outcome mixes priced and unpriced lanes — `Usage`'s
+ * `costUsd` (from `sumUsage`) is then a sum of only the KNOWN lanes, which
+ * would read as a confident total while silently omitting the unpriced ones.
+ * Mirrors this codebase's existing "unknown is not the same as zero/false"
+ * precedents (a timed-out approval is not a refusal; an `indeterminate` agent
+ * verdict is not a success) — an incomplete cost total must say so.
+ */
+function costIsIncomplete(runs: readonly RunResult[]): boolean {
+  const priced = runs.filter((r) => r.usage.costUsd != null || r.usage.reportedCostUsd != null).length;
+  return priced > 0 && priced < runs.length;
+}
+
+/** Trailing note appended to a multi-lane `[usage]` line when some lanes lack pricing. */
+function costIncompleteNote(runs: readonly RunResult[]): string {
+  return costIsIncomplete(runs) ? " (partial — pricing unknown for some lanes)" : "";
+}
+
+/**
  * A short, actionable hint for a provider/tool error code — a human sentence, not
  * a stack trace. Returns `undefined` for an unknown code (the raw message stands
  * on its own).
