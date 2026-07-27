@@ -15,7 +15,7 @@
 import { describe, it, expect } from "vitest";
 import { NexusConfig, type SecretStore } from "@nexuscode/config";
 import { buildRuntime } from "@nexuscode/runtime";
-import type { CallContext, ModelInfo, ProviderAdapter } from "@nexuscode/core";
+import type { CallContext, ModelInfo, ProviderAdapter, TransportKind } from "@nexuscode/core";
 import { listModelsForProvider } from "../src/runtime.js";
 import {
   DEFAULT_CONTEXT_WINDOW,

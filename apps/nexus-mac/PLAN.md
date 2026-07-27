@@ -123,6 +123,51 @@ a fixed-height header plus exactly one region that owns all remaining height;
 that region either scrolls or centres, and never top-aligns short content inside
 a tall scroll view.*
 
+### STATE AS OF 2026-07-28 (overnight run)
+
+**Green:** Swift **286/286** · TypeScript **2171/2171** (219 files, 36s) · both
+builds clean · 45/45 CLI commands healthy · `docs/CAPABILITIES.md` written
+(2908 lines) · `apps/nexus-mac/UI-INVENTORY.md` written (885 lines).
+
+**All six core promises verified BY EXECUTION**, not by reading:
+provider switch preserves context · preview == spawned argv (CLI side) ·
+unknown cost ≠ zero · all four approval causes distinguishable · ndjson contract
+holds · errors are never silent. One gap: the `t: "route"` UiEvent is declared
+in `projection.ts` but **never constructed anywhere** — dead type.
+
+**Bugs found and fixed that nobody asked for** (each real, each with evidence):
+- `nexus trace ""` dumped 11MB with exit 0 — `if (filter)` treats `""` as absent
+- `commit`/`review`/`explain`/`pr` **dumped raw JS stack traces to STDOUT** on an
+  unauthenticated provider. `nexus pr | gh pr create --body-file -` would have
+  injected a stack trace into a real PR body.
+- the TUI showed a live-looking `/effort` picker for DeepSeek that **silently did
+  nothing** — `reasoningSupportedFor()` only checked `capabilities().reasoning`
+- the response cache key omitted `reasoning`, so `--effort high` could replay an
+  answer cached at a different effort
+- three unbounded native calls, each in a different package: MCP connect,
+  `ContextEngine` source collection (an unbounded recursive walk), and a
+  **Keychain read that runs on EVERY command regardless of `-p mock`**
+
+**🔴 THE ACTUAL HANG — root-caused, fix still outstanding.** `readPrompt`
+(`commands.ts:218`) awaits `readStdin()` **unconditionally**, and `readStdin`
+only short-circuits on `isTTY`. Any caller with a non-TTY stdin that stays open
+blocks forever before producing a byte. Proof, same command and config, only
+stdin differing:
+
+```
+ask -p mock -m mock-fast "hi" </dev/null   → exit 0, 1s, 21 bytes
+ask -p mock -m mock-fast "hi"              → HANGS, 0 bytes both streams
+```
+
+`--help` promises "reads stdin when no prompt is given"; the code doesn't honour
+it. Sibling call sites (`:1804`, `:2402`, `:2985`) use `positional || readStdin()`
+correctly — `readPrompt` is the outlier.
+
+⚠️ **Why six of us missed it for hours: every watchdog harness we built spawned
+children with `stdio: ["ignore", …]`.** My own harness reported 641ms for the
+command that hung 22.8 minutes in a plain shell. **The measurement tool was
+hiding the bug.** Verify hangs with stdin actually inherited.
+
 ### Hard rules learned the hard way
 - **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An
   agent's coordinate click landed in the owner's real Notes document, typed into

@@ -436,6 +436,12 @@ struct ControlStrip: View {
     let isLoadingModels: Bool
     let onLoadModels: (String) -> Void
 
+    // Clearing destroys an on-screen conversation with no undo, same class of
+    // action as "Delete task" (`TasksView.swift`) and "Sign out" (`AuthView.
+    // swift`) — both gated behind a `confirmationDialog` rather than firing on
+    // tap, so this matches instead of being a fourth, ungated dialect.
+    @State private var confirmingClear = false
+
     var body: some View {
         ViewThatFits(in: .horizontal) {
             singleRow
@@ -508,13 +514,18 @@ struct ControlStrip: View {
             .help(showsReasoning ? "Hide reasoning traces" : "Show reasoning traces")
 
             Button {
-                controller.clear()
+                confirmingClear = true
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 11))
             }
             .buttonStyle(SoftButton(tone: .neutral, size: .compact))
             .help("Clear the transcript (the durable session is kept)")
+            .confirmationDialog("Clear the transcript?", isPresented: $confirmingClear) {
+                Button("Clear", role: .destructive) { controller.clear() }
+            } message: {
+                Text("Removes this conversation from view. The durable session on disk is kept.")
+            }
         }
     }
 
@@ -590,27 +601,41 @@ struct ControlStrip: View {
         }
     }
 
-    /// A manual-approval readout, not a toggle. The CLI approval gate behind it
-    /// isn't wired up yet, so this stays a static, dimmed display of the true
-    /// current behavior (every action runs unconfirmed) rather than a control
-    /// that would look interactive while silently doing nothing on tap.
+    /// A real toggle. `ConversationController.approvalsEnabled` already drives
+    /// `-t --ask` on the actual `chat --persistent` argv (see
+    /// `persistentSessionArguments()`, which both `commandPreview` and the
+    /// real spawn call through) — so this switches genuine behavior rather
+    /// than reading it back the way a disabled/dimmed readout would.
     private var approvalControl: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "hand.raised.fill")
-                .font(.system(size: 9))
-            Text("Ask first")
-                .font(Kind.monoSmall)
+        Button {
+            controller.approvalsEnabled.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: controller.approvalsEnabled ? "hand.raised.fill" : "hand.raised.slash")
+                    .font(.system(size: 9))
+                Text("Ask first")
+                    .font(Kind.monoSmall)
+            }
         }
-        .foregroundStyle(theme.color(\.textMuted))
-        .padding(.horizontal, Space.sm)
-        .padding(.vertical, 5)
-        .background(theme.color(\.surfaceInset).opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                .strokeBorder(theme.color(\.chromeBorderSubtle).opacity(0.6), lineWidth: 1)
-        }
-        .help("Approval gating isn't wired up yet — every action currently runs without confirmation")
+        .buttonStyle(SoftButton(tone: controller.approvalsEnabled ? .accent : .neutral, size: .compact))
+        .disabled(!approvalsApply)
+        .opacity(approvalsApply ? 1 : 0.5)
+        .help(
+            approvalsApply
+                ? (controller.approvalsEnabled
+                    ? "Write/exec/network tools require your approval before running"
+                    : "Tools run without confirmation — click to require approval")
+                : "No tool loop in this mode — approval gating doesn't apply"
+        )
+    }
+
+    /// Mirrors `ConversationController.usesPersistentSession` (private to that
+    /// type): approvals only gate the persistent `chat --persistent -t --ask`
+    /// path, so a Compare/Race run or a role-based Agent run — neither of
+    /// which ever opens that path (see `oneShotArguments`) — has no tool loop
+    /// for this switch to affect.
+    private var approvalsApply: Bool {
+        !controller.mode.isMultiLane && !(controller.mode == .agent && controller.role != nil)
     }
 }
 

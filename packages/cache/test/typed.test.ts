@@ -50,6 +50,25 @@ describe("ResponseCache", () => {
     expect(await cache.get(req("m", "a", 0.7))).toBeUndefined(); // temperature is part of the key
   });
 
+  it("keys on reasoning effort — an --effort run never replays a different level's answer", async () => {
+    const cache = new ResponseCache({ backend: new MemoryCache<CachedResponse>() });
+    const base = req("m", "explain this");
+    await cache.set(
+      { ...base, reasoning: { enabled: true, effort: "high", budgetTokens: 24000 } },
+      { text: "the high-effort answer", usage: { inputTokens: 1, outputTokens: 1 }, model: "m" },
+    );
+    // A plain request (no --effort, "off") must NOT see the high-effort entry.
+    expect(await cache.get(base)).toBeUndefined();
+    // Nor a request at a DIFFERENT effort level.
+    expect(
+      await cache.get({ ...base, reasoning: { enabled: true, effort: "low", budgetTokens: 4000 } }),
+    ).toBeUndefined();
+    // The identical effort level hits.
+    expect(
+      await cache.get({ ...base, reasoning: { enabled: true, effort: "high", budgetTokens: 24000 } }),
+    ).toEqual({ text: "the high-effort answer", usage: { inputTokens: 1, outputTokens: 1 }, model: "m" });
+  });
+
   it("is order-insensitive across equivalent signatures", async () => {
     const cache = new ResponseCache({ backend: new MemoryCache<CachedResponse>() });
     const sigA = signatureOf({ ...req("m", "x"), maxTokens: 100, temperature: 0 });

@@ -204,21 +204,102 @@ function parseOutput(args: ParsedArgs): OutputMode {
   return "text";
 }
 
+/**
+ * How long `readStdin` waits to hear a FIRST byte (or immediate EOF) from a
+ * non-TTY stdin before concluding nobody is actually piping anything in.
+ * `process.stdin.isTTY` already short-circuits the common interactive case,
+ * but a non-TTY stdin is not proof someone is piping — a process spawned by
+ * ANOTHER process (a wrapper script, an orchestrator, this very CLI's own
+ * subprocess-provider path) that does not explicitly redirect stdin inherits
+ * whatever open-but-silent descriptor its parent had, and `for await (const c
+ * of process.stdin)` waits for data-or-EOF that may never come. That is a real
+ * reported hang (`ask -p mock "hi"` — a prompt WAS given, so the eventual fix
+ * is "don't need stdin at all" for that path, but every OTHER caller here —
+ * `chat`'s batch-stdin read, `readPastedCode`, `pickProvider`'s piped-choice
+ * read — has no alternative input source to fall back to and must actually
+ * wait on stdin), so the guard belongs in the read itself, once, not
+ * per-call-site: bound only the "is anyone there" wait. Once ANY byte (or
+ * EOF) has actually arrived, the rest of the read proceeds with NO further
+ * time pressure — a slow-but-real producer (`slow-command | nexus ask`,
+ * `git diff | nexus explain`) is never cut off mid-stream, only a stdin that
+ * stays open, non-TTY, and produces nothing at all is.
+ */
+const STDIN_FIRST_BYTE_TIMEOUT_MS = 2_000;
+
+/**
+ * Read all of stdin, bounded (see `STDIN_FIRST_BYTE_TIMEOUT_MS`). `""` on a
+ * TTY (nothing to read), on a stream error, or when nothing arrives within
+ * the bound — the timeout case prints a stderr diagnostic first (never a
+ * silent stall) so a run that unexpectedly inherited an idle pipe explains
+ * itself instead of just quietly proceeding as if `</dev/null` had been
+ * passed.
+ */
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return "";
-  const chunks: Buffer[] = [];
-  try {
-    for await (const c of process.stdin) chunks.push(Buffer.from(c));
-  } catch {
-    return "";
-  }
-  return Buffer.concat(chunks).toString("utf8");
+  const stdin = process.stdin;
+  return new Promise<string>((resolve) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const finish = (value: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stdin.off("data", onData);
+      stdin.off("end", onEnd);
+      stdin.off("error", onError);
+      // Removing the listeners above is enough once stdin reached actual EOF
+      // or errored — the stream is already inert. It is NOT enough on the
+      // timeout path: we are walking away from a stream that is still open
+      // and (per Node's stdin lifecycle) still `ref`'d, which — unlike every
+      // OTHER caller of `readStdin`, which always waits for real EOF — would
+      // otherwise keep the event loop alive forever even though `readStdin`
+      // itself already resolved, so the CLI would print its answer and then
+      // just never exit. `pause()` reverts it out of flowing mode and
+      // `unref()` (present on the `net.Socket`/`tty.ReadStream` Node backs a
+      // real fd with; absent only for an already-inert stream, hence the
+      // guard) stops it from holding the process open on its own.
+      stdin.pause();
+      (stdin as unknown as { unref?: () => void }).unref?.();
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      process.stderr.write(
+        `nexus: stdin is open but produced no input within ${STDIN_FIRST_BYTE_TIMEOUT_MS}ms — ` +
+          `likely inherited from a parent process rather than an actual pipe; proceeding as if no ` +
+          `input were piped (redirect from /dev/null to avoid this check, or pipe real input)\n`,
+      );
+      finish("");
+    }, STDIN_FIRST_BYTE_TIMEOUT_MS);
+    const onData = (c: Buffer | string): void => {
+      clearTimeout(timer);
+      chunks.push(Buffer.from(c));
+    };
+    const onEnd = (): void => finish(Buffer.concat(chunks).toString("utf8"));
+    const onError = (): void => finish("");
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.on("error", onError);
+  });
 }
 
+/**
+ * Resolve the prompt: a positional argument, or (only absent one) piped
+ * stdin — "Reads stdin when no prompt is given" (`ask --help` / COMMANDS.md),
+ * the same `positional || stdin` contract every other prompt-taking command
+ * here already follows (`task add`, `memory add`, `route test`, `search`, …).
+ * Previously this read (and blocked on) stdin UNCONDITIONALLY, even with a
+ * prompt argument already in hand — the actual cause of a real hang: a
+ * prompt WAS given, but the process still waited on an inherited, open,
+ * silent stdin it was never going to use. `readStdin` is now bounded on its
+ * own (see `STDIN_FIRST_BYTE_TIMEOUT_MS`), which would have capped that same
+ * hang at 2s — but a prompt argument means there is nothing to gain from
+ * reading stdin AT ALL, so this skips the wait entirely rather than merely
+ * shortening it.
+ */
 async function readPrompt(args: ParsedArgs): Promise<string> {
   const promptArg = args.positionals.join(" ").trim();
-  const piped = (await readStdin()).trim();
-  return [promptArg, piped].filter((s) => s.length > 0).join("\n\n");
+  if (promptArg.length > 0) return promptArg;
+  return (await readStdin()).trim();
 }
 
 async function loadEffectiveConfig(): Promise<NexusConfig> {

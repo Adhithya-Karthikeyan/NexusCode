@@ -365,6 +365,13 @@ struct SoftButton: ButtonStyle {
     enum Size { case compact, regular }
 
     @State private var hovering = false
+    // Every `Button` is inherently focusable on macOS, so no explicit
+    // `.focusable()` is needed to make this read from the environment —
+    // reading it is what was missing. Without it, keyboard focus was
+    // invisible on every `SoftButton` outside the composer (which tracks its
+    // own focus via `@FocusState` instead, since a `TextField` isn't a
+    // `ButtonStyle`).
+    @Environment(\.isFocused) private var isFocused
 
     private var background: Color {
         switch tone {
@@ -395,8 +402,10 @@ struct SoftButton: ButtonStyle {
             .overlay {
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                     .strokeBorder(
-                        tone == .neutral ? theme.color(\.chromeBorderSubtle) : .clear,
-                        lineWidth: 1
+                        isFocused
+                            ? theme.color(\.chromeBorderFocus)
+                            : (tone == .neutral ? theme.color(\.chromeBorderSubtle) : .clear),
+                        lineWidth: isFocused ? 2 : 1
                     )
             }
             .scaleEffect(configuration.isPressed ? 0.97 : 1)

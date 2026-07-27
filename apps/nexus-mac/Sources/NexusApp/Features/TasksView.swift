@@ -234,7 +234,7 @@ private struct ErrorBanner: View {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")
