@@ -254,6 +254,67 @@ System Events fails to marshal. This produced one false accessibility finding
 (a claim that nav rows had no labels — they did) and one failed verification
 attempt. **Use a native `AXUIElementCopyAttributeValue` walk instead.**
 
+### 🔴 THE REAL ANSWER: tool calls are lost at EVERY turn boundary
+
+This is the deepest finding of the session and it reframes the project's second
+governing principle.
+
+`replyMessages()` (`packages/core/src/engine.ts:268-277`) is the ONLY thing that
+writes a turn's reply into `session.transcript` — which is the ONLY thing every
+next turn's `turn.input` is built from. It reads `result.text` and nothing else:
+
+```ts
+if (!result || result.status !== "ok" || result.text.length === 0) return [];
+return [{ role: "assistant", content: [{ type: "text", text: result.text }] }];
+```
+
+`RunResult` has a populated `toolCalls: ToolCall[]` field (`core/src/types.ts:71`)
+— structurally capable of round-tripping — and `replyMessages` never reads it.
+
+**Consequences, in order of importance:**
+1. This fires on **every turn boundary** — switch or not, resume or not. Every
+   multi-turn conversation loses its tool history.
+2. The familiar `text only; tool calls are not replayed` notice is therefore NOT
+   a resume limitation. It is a universal property of how turns are recorded,
+   surfacing in the one place someone happened to write it down.
+3. **The switching machinery cannot fix this.** `assessSwitchTarget` /
+   `adaptRequestForSwitch` operate on `session.transcript` as it already exists;
+   they cannot recover content that was never written to it. The loss happens
+   one layer BELOW switching.ts.
+4. So "switching must never lose context, meaning, or capability" is currently
+   **narrower than it reads** — and not because switching is broken.
+
+**Proven, not argued:** `packages/core/test/provider-switch.test.ts` runs a real
+tool-calling turn (`dispatchAgent`, `outcome.winner.toolCalls = ["echo"]`
+confirmed), switches provider, and asserts the second provider's received
+`messages` contain the final text and **zero** `tool_use`/`tool_result` blocks —
+`expect(new Set(blockTypes)).toEqual(new Set(["text"]))`.
+
+Also worth knowing: `assessSwitchTarget`'s blockers are all CAPABILITY checks
+against `registry.capabilitiesOf(target)`. **None inspect conversation history
+for prior tool USE** — they check what the target can handle next, not what the
+conversation already contains.
+
+### ✅ G5 — in-process provider switching now works
+
+A `{"type":"switch","provider":"…","model":"…"}` control line, symmetric with the
+approval control line, handled in both persistent reading loops. Runs the real
+preflight (`assessSwitchTarget` → blockers abort the switch), applies compaction
+to the LIVE session immediately via `session.setTranscript`, re-derives
+`reasoning` for the new target rather than carrying it over stale, and emits a
+`switch` UiEvent carrying the receipt.
+
+Verified live over FIFO stdin: a switch to `mock-slow` flipped the next turn's
+`session` event to that provider with the SAME session id; a switch to an
+unavailable `anthropic` returned `accepted:false` with the blocker named and left
+the conversation on the original provider — never a silent no-op.
+
+⚠️ The receipt's `preserved` list is a fixed 4-item list. Read it as "what a
+switch does not ADDITIONALLY lose", **not** as a completeness claim — see the
+tool-call finding above.
+⬜ Swift side: the `switch` UiEvent needs mirroring into `UiEvent.swift` and a
+receipt treatment in the UI.
+
 ### Hard rules learned the hard way
 - **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An
   agent's coordinate click landed in the owner's real Notes document, typed into

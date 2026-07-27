@@ -9,7 +9,21 @@
       "needsKey": true
     }
   ],
-  "circuits": [],
+  "circuits": [
+    {
+      "key": "p:mock",
+      "target": { "providerId": "mock" },
+      "state": "open",
+      "availability": "blocked",
+      "attempts": 3,
+      "openCount": 1,
+      "reason": "quota",
+      "blockedUntil": 1785186254326,
+      "retryAt": 1785186254326,
+      "openedAt": 1785182654286,
+      "lastFailureAt": 1785182654286
+    }
+  ],
   "circuitStore": "~/Library/Application Support/nexuscode/provider-circuits.json",
   "pricing": [
     {

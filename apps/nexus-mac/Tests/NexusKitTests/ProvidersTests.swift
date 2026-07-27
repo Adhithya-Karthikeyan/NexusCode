@@ -105,6 +105,106 @@ final class ProvidersTests: XCTestCase {
         XCTAssertTrue([JSONValue]().compactMap(NexusProvider.init(json:)).isEmpty)
     }
 
+    // MARK: - ProviderCircuit decode (G6 — provider health was computed and thrown away)
+    //
+    // Shapes below are NOT hand-guessed: captured live by running the REAL
+    // `providers status -o json` command against a synthetic (but real,
+    // store-format-correct) `provider-circuits.json` in an isolated
+    // `NEXUS_DATA_DIR` sandbox — i.e. round-tripped through the actual
+    // `ProviderCircuitBreaker.load()`/`statusOf()` code
+    // (`packages/core/src/provider-circuit.ts`), not typed from the
+    // TypeScript interface alone. `availability`/`retryAt` in particular are
+    // DERIVED by the CLI (not stored input), which this confirms.
+
+    private func circuitJSON(_ raw: String) throws -> JSONValue {
+        try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))
+    }
+
+    func testQuotaCircuitDecodesWithABlockedUntilDate() throws {
+        // Real bytes for a quota-exhausted, provider-wide (no account/model
+        // scope) circuit.
+        let raw = #"""
+        {
+          "key": "p:groq",
+          "target": { "providerId": "groq" },
+          "state": "open",
+          "availability": "blocked",
+          "attempts": 3,
+          "openCount": 1,
+          "reason": "quota",
+          "blockedUntil": 1785186254326,
+          "retryAt": 1785186254326,
+          "openedAt": 1785182654286,
+          "lastFailureAt": 1785182654286
+        }
+        """#
+        let circuit = try XCTUnwrap(ProviderCircuit(json: try circuitJSON(raw)))
+        XCTAssertEqual(circuit.providerId, "groq")
+        XCTAssertNil(circuit.accountId)
+        XCTAssertNil(circuit.modelId)
+        XCTAssertEqual(circuit.state, .open)
+        XCTAssertEqual(circuit.availability, .blocked)
+        XCTAssertEqual(circuit.reason, .quota)
+        XCTAssertTrue(circuit.isBlocking)
+        XCTAssertEqual(circuit.blockedUntil, Date(timeIntervalSince1970: 1785186254326 / 1000))
+    }
+
+    func testAuthCircuitDecodesWithNoBlockedUntilAtAll() throws {
+        // Real bytes for an account-scoped auth failure — the breaker never
+        // sets a cooldown for `auth`, verified live (see the section doc).
+        let raw = #"""
+        {
+          "key": "p:anthropic|a:acct1",
+          "target": { "providerId": "anthropic", "accountId": "acct1" },
+          "state": "open",
+          "availability": "blocked",
+          "attempts": 1,
+          "openCount": 1,
+          "reason": "auth",
+          "openedAt": 1785182654286,
+          "lastFailureAt": 1785182654286
+        }
+        """#
+        let circuit = try XCTUnwrap(ProviderCircuit(json: try circuitJSON(raw)))
+        XCTAssertEqual(circuit.providerId, "anthropic")
+        XCTAssertEqual(circuit.accountId, "acct1")
+        XCTAssertEqual(circuit.reason, .auth)
+        XCTAssertTrue(circuit.isBlocking)
+        XCTAssertNil(circuit.blockedUntil, "auth failures never get a cooldown — only fresh creds or a manual reset clear them")
+    }
+
+    func testClosedCircuitIsNotBlocking() throws {
+        // Real bytes for a healthy circuit — `providers status` includes
+        // closed entries too (`includeClosed: true`).
+        let raw = #"""
+        {
+          "key": "p:anthropic|a:d215cc5d02b78d10|m:claude-opus-5",
+          "target": { "providerId": "anthropic", "accountId": "d215cc5d02b78d10", "modelId": "claude-opus-5" },
+          "state": "closed",
+          "availability": "available",
+          "attempts": 0,
+          "openCount": 0,
+          "lastFailureAt": 1785131781285,
+          "lastSuccessAt": 1785174310279
+        }
+        """#
+        let circuit = try XCTUnwrap(ProviderCircuit(json: try circuitJSON(raw)))
+        XCTAssertEqual(circuit.modelId, "claude-opus-5")
+        XCTAssertEqual(circuit.state, .closed)
+        XCTAssertFalse(circuit.isBlocking)
+        XCTAssertNil(circuit.reason)
+    }
+
+    func testMalformedCircuitRowDegradesRatherThanCrashingTheWholeArray() {
+        // Missing `state` — must drop this row, not fail the whole `circuits` decode.
+        let malformed = JSONValue.object([
+            "target": .object(["providerId": .string("groq")]),
+            "availability": .string("blocked"),
+        ])
+        XCTAssertNil(ProviderCircuit(json: malformed))
+        XCTAssertTrue([malformed].compactMap(ProviderCircuit.init(json:)).isEmpty)
+    }
+
     // MARK: - SelectableProvider
 
     func testSelectableNeverHidesAnUnusableProviderButAttachesItsReason() throws {
@@ -119,6 +219,77 @@ final class ProvidersTests: XCTestCase {
         let selectable = SelectableProvider(provider: mock)
         XCTAssertTrue(selectable.isUsable)
         XCTAssertNil(selectable.reason)
+    }
+
+    // MARK: - SelectableProvider.circuitWarning (G6)
+    //
+    // The core decision this task made: a tripped circuit is surfaced, not
+    // hidden and not disabled — `isUsable` is UNTOUCHED by circuit state.
+    // These assert that decision directly, not just the string formatting.
+
+    func testATrippedCircuitNeverChangesUsabilityJustAddsAWarning() throws {
+        let mock = try XCTUnwrap(try decodedProviders().first { $0.id == "mock" })
+        let quotaCircuit = try XCTUnwrap(ProviderCircuit(json: try circuitJSON(#"""
+        {"key":"p:mock","target":{"providerId":"mock"},"state":"open","availability":"blocked",
+         "attempts":3,"openCount":1,"reason":"quota","blockedUntil":1785186254326}
+        """#)))
+        let selectable = SelectableProvider(provider: mock, circuit: quotaCircuit)
+
+        XCTAssertTrue(selectable.isUsable, "a tripped circuit must not make a usable provider unselectable")
+        XCTAssertNil(selectable.reason, "reason is about STRUCTURAL usability, not circuit state")
+        XCTAssertNotNil(selectable.circuitWarning, "but the trip must still be visible somewhere")
+        XCTAssertTrue(selectable.circuitWarning?.contains("quota") == true)
+    }
+
+    func testNoCircuitMeansNoWarning() throws {
+        let mock = try XCTUnwrap(try decodedProviders().first { $0.id == "mock" })
+        let selectable = SelectableProvider(provider: mock, circuit: nil)
+        XCTAssertNil(selectable.circuitWarning)
+    }
+
+    func testAClosedOrProbeAvailableCircuitProducesNoWarningEitherEvenIfPresent() throws {
+        // A circuit record can exist (e.g. recently recovered) without being
+        // BLOCKING — only a genuinely denying state should surface a caution.
+        let mock = try XCTUnwrap(try decodedProviders().first { $0.id == "mock" })
+        for availability in ["available", "probe_available"] {
+            let circuit = try XCTUnwrap(ProviderCircuit(json: try circuitJSON(#"""
+            {"target":{"providerId":"mock"},"state":"half-open","availability":"\#(availability)","attempts":1,"openCount":1}
+            """#)))
+            let selectable = SelectableProvider(provider: mock, circuit: circuit)
+            XCTAssertNil(selectable.circuitWarning, "\(availability) does not deny dispatch, so no warning")
+        }
+    }
+
+    func testCircuitWarningWordingForEveryReason() throws {
+        let mock = try XCTUnwrap(try decodedProviders().first { $0.id == "mock" })
+        let cases: [(String?, String)] = [
+            ("quota", "quota exhausted"),
+            ("auth", "sign-in needed"),
+            ("model_unavailable", "model unavailable"),
+            ("transient", "temporarily unavailable"),
+        ]
+        for (reason, expectedLabel) in cases {
+            let reasonField = reason.map { #","reason":"\($0)""# } ?? ""
+            let circuit = try XCTUnwrap(ProviderCircuit(json: try circuitJSON(#"""
+            {"target":{"providerId":"mock"},"state":"open","availability":"blocked","attempts":1,"openCount":1\#(reasonField)}
+            """#)))
+            let warning = try XCTUnwrap(SelectableProvider(provider: mock, circuit: circuit).circuitWarning)
+            XCTAssertTrue(warning.hasPrefix(expectedLabel), "reason \(String(describing: reason)) -> \(warning)")
+            // No `blockedUntil` in any of these fixtures — must fall back to
+            // the CLI's own wording rather than inventing a time.
+            XCTAssertTrue(warning.contains("credentials or status change"))
+        }
+    }
+
+    func testCircuitWarningShowsARetryTimeWhenTheCircuitHasOne() throws {
+        let mock = try XCTUnwrap(try decodedProviders().first { $0.id == "mock" })
+        let circuit = try XCTUnwrap(ProviderCircuit(json: try circuitJSON(#"""
+        {"target":{"providerId":"mock"},"state":"open","availability":"blocked","attempts":1,"openCount":1,
+         "reason":"transient","blockedUntil":1785186254326}
+        """#)))
+        let warning = try XCTUnwrap(SelectableProvider(provider: mock, circuit: circuit).circuitWarning)
+        XCTAssertTrue(warning.contains("retry after"))
+        XCTAssertFalse(warning.contains("credentials or status change"), "a real blockedUntil must win over the generic fallback")
     }
 
     // MARK: - NexusModel decode + contextWindow
@@ -274,5 +445,47 @@ final class ProvidersTests: XCTestCase {
 
         XCTAssertEqual(controller.selectable.count, controller.providers.count)
         XCTAssertEqual(controller.selectable.filter { !$0.isUsable }.map(\.id), ["groq"])
+    }
+
+    // MARK: - Circuits end to end (G6)
+    //
+    // `providers-status.json` now carries a real, quota-blocked circuit for
+    // "mock" — a provider that is otherwise FULLY usable (no key needed).
+    // This is the exact bug: before this task, `refresh()` read `providers`
+    // and `pricing` and silently dropped `circuits` on the floor
+    // (`Providers.swift:161-175` per the capability audit) — "mock" would
+    // have shown as plain "usable", no different from a healthy provider.
+
+    @MainActor
+    func testControllerRefreshDecodesCircuitsFromStatus() async throws {
+        let binary = try fakeNexusBinary(routing: ["providers status": try fixtureText("providers-status")])
+        let controller = ProvidersController(client: NexusClient(binary: binary))
+        await controller.refresh()
+
+        XCTAssertEqual(controller.circuits.count, 1)
+        let circuit = try XCTUnwrap(controller.circuits.first)
+        XCTAssertEqual(circuit.providerId, "mock")
+        XCTAssertEqual(circuit.reason, .quota)
+        XCTAssertTrue(circuit.isBlocking)
+    }
+
+    @MainActor
+    func testSelectableJoinsEachProviderToItsOwnBlockingCircuitByProviderId() async throws {
+        let binary = try fakeNexusBinary(routing: ["providers status": try fixtureText("providers-status")])
+        let controller = ProvidersController(client: NexusClient(binary: binary))
+        await controller.refresh()
+
+        let mock = try XCTUnwrap(controller.selectable.first { $0.id == "mock" })
+        // The bug, made concrete: "mock" stays usable (real information was
+        // ADDED, nothing was taken away) but is no longer indistinguishable
+        // from a genuinely healthy provider.
+        XCTAssertTrue(mock.isUsable)
+        XCTAssertNotNil(mock.circuitWarning)
+
+        // "groq" has no circuit in the fixture — its unavailability is
+        // entirely the pre-existing "needs key" reason, untouched by this task.
+        let groq = try XCTUnwrap(controller.selectable.first { $0.id == "groq" })
+        XCTAssertNil(groq.circuitWarning)
+        XCTAssertFalse(groq.isUsable)
     }
 }
