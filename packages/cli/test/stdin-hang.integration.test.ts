@@ -22,6 +22,14 @@
  * nothing to fall back to — so the bound is now a generous 30s by default
  * (`NEXUS_STDIN_TIMEOUT_MS` overrides it; the tests below use a small
  * override to stay fast rather than actually waiting 30s).
+ *
+ * Third-order lesson: an earlier version of this file paired that override
+ * with a bare hardcoded `8_000` watchdog literal at each call site. When the
+ * shipped default moved from 2s to 30s, the watchdog didn't move with it and
+ * started false-failing a test whose OWN override still correctly resolved
+ * in under a second — the two numbers had drifted apart. `spawnWithOpenStdin`
+ * now derives its watchdog from `opts.extraEnv.NEXUS_STDIN_TIMEOUT_MS`
+ * itself, so the two can't desync again.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -167,10 +175,13 @@ describe("stdin hang regression — a genuine stdin read (no positional alternat
   const FAST_BOUND_MS = 400;
 
   it("`chat` (batch mode, no --persistent) with an open, never-closing stdin gives up within the bound instead of hanging forever", async () => {
-    const r = await spawnWithOpenStdin(["chat", "-p", "mock", "-m", "mock-fast"], 8_000, {
+    const r = await spawnWithOpenStdin(["chat", "-p", "mock", "-m", "mock-fast"], {
       extraEnv: { NEXUS_STDIN_TIMEOUT_MS: String(FAST_BOUND_MS) },
     });
-    expect(r.signal).toBeNull(); // must resolve on its own well before the 8s hard cap
+    // The watchdog (FAST_BOUND_MS + 6s, computed inside spawnWithOpenStdin
+    // from this SAME extraEnv) moves with FAST_BOUND_MS automatically — this
+    // assertion can't drift out of sync with it the way a bare literal did.
+    expect(r.signal).toBeNull();
     // Nothing was ever piped, so readStdin gives up at the bound and `chat`
     // treats that exactly like `</dev/null`: no lines, exit 0.
     expect(r.code).toBe(0);
@@ -178,7 +189,7 @@ describe("stdin hang regression — a genuine stdin read (no positional alternat
     expect(r.elapsedMs).toBeLessThan(FAST_BOUND_MS + 4_000);
     // Never silent: the diagnostic explains WHY it waited and gave up.
     expect(r.stderr).toContain("stdin is open but produced no input");
-  }, 10_000);
+  }, 15_000);
 
   it("case C — a producer that is silent LONGER than a naive short bound, then emits, must still succeed (the regression this bound-raise fixes)", async () => {
     // Mirrors the exact real-world report: `{ sleep 4; echo "…"; } | nexus ask`
@@ -187,7 +198,7 @@ describe("stdin hang regression — a genuine stdin read (no positional alternat
     // AFTER the fast bound above would already have given up, but still well
     // within a generous one — proving a slow-but-real producer is not mistaken
     // for an inherited-idle pipe merely for not being instant.
-    const r = await spawnWithOpenStdin(["ask", "-p", "mock", "-m", "mock-fast"], 8_000, {
+    const r = await spawnWithOpenStdin(["ask", "-p", "mock", "-m", "mock-fast"], {
       extraEnv: { NEXUS_STDIN_TIMEOUT_MS: "2000" },
       delayed: { text: "delayed question", afterMs: 700 }, // > FAST_BOUND_MS, < the 2000ms bound here
     });
@@ -196,7 +207,7 @@ describe("stdin hang regression — a genuine stdin read (no positional alternat
     expect(r.stdout).toContain("delayed question");
     // Never diagnosed as a timeout — it wasn't one.
     expect(r.stderr).not.toContain("stdin is open but produced no input");
-  }, 10_000);
+  }, 15_000);
 });
 
 describe("stdin hang regression — the shipped default is genuinely generous, not just the test override", () => {
