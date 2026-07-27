@@ -323,6 +323,12 @@ export interface SecretChainOptions {
   disableKeychain?: boolean;
   /** Bound for a single native keychain call (default {@link DEFAULT_KEYCHAIN_TIMEOUT_MS}). */
   keychainTimeoutMs?: number;
+  /**
+   * Exported for tests only — injects `KeychainBackend`'s native-entry loader
+   * so a test can exercise the FULL `createSecretStore` chain against a fake
+   * (e.g. never-resolving) keychain without touching the real OS keychain.
+   */
+  keychainLoadCtor?: () => Promise<(new (service: string, username: string) => KeyringEntry) | null>;
 }
 
 function defaultEnvVarFor(ref: string): string {
@@ -378,7 +384,10 @@ export function createSecretStore(opts: SecretChainOptions = {}): SecretStore {
 
   const keychain = opts.disableKeychain
     ? null
-    : new KeychainBackend(service, { timeoutMs: opts.keychainTimeoutMs });
+    : new KeychainBackend(service, {
+        ...(opts.keychainTimeoutMs !== undefined ? { timeoutMs: opts.keychainTimeoutMs } : {}),
+        ...(opts.keychainLoadCtor ? { loadCtor: opts.keychainLoadCtor } : {}),
+      });
   return new ChainedSecretStore(
     new EnvBackend(env, envVarFor),
     keychain,

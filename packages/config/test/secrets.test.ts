@@ -79,6 +79,87 @@ describe("SecretStore — resolution chain", () => {
   });
 });
 
+describe("KeychainBackend — bounded native calls (regression: a real keychain-auth prompt must never hang the CLI)", () => {
+  // A fake `KeyringEntry` whose native call never resolves — stands in for the
+  // real failure mode: an EXISTING keychain item (see `resolveAuthSecrets`,
+  // called unconditionally by `buildAuthedRuntime` for every provider in the
+  // default catalog, regardless of `-p`) that requires a fresh authorization
+  // decision. Headless, nobody can click "Allow", so the native call just
+  // never settles — exactly what this fakes without touching the real OS
+  // keychain (which would be flaky/slow/environment-dependent in CI).
+  function neverResolvingCtor(): new (service: string, username: string) => {
+    getPassword(): Promise<string | undefined>;
+    setPassword(password: string): Promise<void>;
+    deletePassword(): Promise<boolean>;
+  } {
+    return class {
+      getPassword(): Promise<string | undefined> {
+        return new Promise(() => {});
+      }
+      setPassword(): Promise<void> {
+        return new Promise(() => {});
+      }
+      deletePassword(): Promise<boolean> {
+        return new Promise(() => {});
+      }
+    };
+  }
+
+  it("get() returns null instead of hanging when the native call never resolves", async () => {
+    const backend = new KeychainBackend("test-svc", {
+      timeoutMs: 30,
+      loadCtor: async () => neverResolvingCtor(),
+    });
+    const started = Date.now();
+    const result = await backend.get("anthropic");
+    expect(result).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("set() returns false instead of hanging, so the caller falls through to the file backend", async () => {
+    const backend = new KeychainBackend("test-svc", {
+      timeoutMs: 30,
+      loadCtor: async () => neverResolvingCtor(),
+    });
+    const started = Date.now();
+    const ok = await backend.set("anthropic", "sk-ant-whatever");
+    expect(ok).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("delete() returns false instead of hanging", async () => {
+    const backend = new KeychainBackend("test-svc", {
+      timeoutMs: 30,
+      loadCtor: async () => neverResolvingCtor(),
+    });
+    const started = Date.now();
+    const ok = await backend.delete("anthropic");
+    expect(ok).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("end-to-end: createSecretStore's chain falls through to the file backend when the keychain hangs", async () => {
+    // Exercises the REAL path `hasCredential()`/`resolveAuthSecrets()` drive —
+    // `ChainedSecretStore.get()` awaiting a stuck keychain — proving the whole
+    // chain degrades instead of propagating the hang to the caller. This is
+    // the regression for the actual reported hang: `buildAuthedRuntime` calls
+    // `hasCredential(..., "anthropic", secrets)` unconditionally on every run
+    // regardless of `-p`, which lands here.
+    const file = vaultPath();
+    const store = createSecretStore({
+      env: {},
+      filePath: file,
+      passphrase: "pw",
+      keychainTimeoutMs: 30,
+      keychainLoadCtor: async () => neverResolvingCtor(),
+    });
+    const started = Date.now();
+    const result = await store.get("anthropic");
+    expect(result).toBeNull(); // falls through the stuck keychain to the empty file vault
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
 describe("redaction", () => {
   it("masks a key to <prefix>…<last4>", () => {
     expect(redactSecret(SECRET)).toBe("sk-ant-…1234");
