@@ -706,7 +706,7 @@ both of which survive their CLI-side verifications.
   `--max-turns` (per OODA step, default 8, `commands.ts:1374-1375`), `--cwd`, permission flags,
   `--resume <id>` / `--continue`, `-p`, `-m`, `-o`.
 - **Outputs:**
-  - stderr: `[resume] <id> — restored N message(s) (text only; tool calls are not replayed)` or a
+  - stderr: `[resume] <id> — restored N message(s) (including any tool calls)` or a
     "no stored transcript" line; **always** `[session] <id>` (`commands.ts:1429-1441`); a readable
     per-phase step log, one line per OODA narration (`commands.ts:1479-1483`);
     `[agent] role=… steps=… stop=… progress=…% goalMet=…` and `[usage] …`
@@ -2639,12 +2639,13 @@ evidence and proposes a design.
   and correctly shows nothing in a fresh `jobs list` afterward. See §39 above and
   `packages/cli/test/jobs-background.integration.test.ts`.
 
-### G5. Mid-conversation provider switch degrades to a fresh process plus text-only resume
+### G5. Mid-conversation provider switch degrades to a fresh process, bypassing the switch machinery
 - **Evidence:** `AppState.swift:333-336` (`submit`) tears the live session down on any provider/model/role
   change; `submitToPersistentSession` then starts a new `chat --persistent --resume <id>`
-  (`AppState.swift:361-384`). Resume restores **text only** — tool calls are not replayed
-  (`packages/cli/src/commands.ts` → `cmdChat`'s `[resume]` notice). The switch machinery in `packages/core/src/switching.ts` (assessment,
-  blockers, warnings, receipts) is never consulted, and no receipt is displayed.
+  (`AppState.swift:361-384`). Resume now restores the full conversation, including any tool-call
+  exchange (`packages/cli/src/commands.ts` → `cmdChat`'s `[resume]` notice), but the switch machinery
+  in `packages/core/src/switching.ts` (assessment, blockers, warnings, receipts) is still never
+  consulted, and no receipt is displayed.
 - **Consequence:** the harness's second governing principle ("switching must never lose context,
   meaning, or capability") is enforced inside a single engine process, and the app's switch path
   leaves that process.

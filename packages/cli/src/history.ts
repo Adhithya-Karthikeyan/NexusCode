@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { dirname } from "node:path";
-import type { EventStore, RunResult, StreamChunk } from "@nexuscode/core";
+import { isAgentMetaRaw, type EventStore, type RunResult, type StreamChunk } from "@nexuscode/core";
 import { redactArgs } from "@nexuscode/tools";
 import type { ContentBlock, Message } from "@nexuscode/shared";
 import { migrateMindDb } from "@nexuscode/transfer";

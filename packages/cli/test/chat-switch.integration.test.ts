@@ -6,7 +6,7 @@
  * Before this feature, the only way to change provider mid-conversation left
  * the engine process entirely (the app tore the backend down and started a
  * fresh `chat --persistent --resume <id>`, whose own `[resume]` notice
- * already says "text only; tool calls are not replayed"). This control line
+ * already says "(including any tool calls)"). This control line
  * is symmetric with the approval control line `chat-approvals.integration
  * .test.ts` already proves: parsed out of the same stdin, handled inline in
  * the reading loop, never confused with an ordinary prompt.

@@ -1715,7 +1715,7 @@ async function runAgentOoda(
     io.err(
       restored > 0
         ? `[resume] ${session.id} — restored ${restored} message${restored === 1 ? "" : "s"} ` +
-            `(text only; tool calls are not replayed)\n`
+            `(including any tool calls)\n`
         : `nexus agent: no stored transcript to resume for session "${resumeId}" ` +
             `(nothing stored, or no completed exchange yet) — starting a fresh conversation\n`,
     );
@@ -3936,7 +3936,7 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
     io.err(
       restored > 0
         ? `[resume] ${session.id} — restored ${restored} message${restored === 1 ? "" : "s"} ` +
-            `(text only; tool calls are not replayed)\n`
+            `(including any tool calls)\n`
         : `nexus chat: no stored transcript to resume for session "${resumeId}" ` +
             `(nothing stored, or no completed exchange yet) — starting a fresh conversation\n`,
     );

@@ -198,7 +198,7 @@ function failoverTrailOf(raw: unknown): FailoverStep[] {
 
 /** Structural shape of the coordinator metadata `packages/agent/src/events.ts`'s
  * `agentMetaChunk()` stamps onto a reasoning-channel `text-delta`'s `raw`. */
-interface AgentMetaRaw {
+export interface AgentMetaRaw {
   agent: {
     phase: string;
     role: string;
@@ -213,8 +213,20 @@ interface AgentMetaRaw {
  * as `failoverTrailOf` above for `raw.failover`) — duplicated rather than
  * imported because `@nexuscode/core` must not depend on `@nexuscode/agent`
  * (the dependency arrow points the other way).
+ *
+ * Exported (not just used locally by `chunkToUiEvents` below) so a session
+ * writer — `@nexuscode/cli`'s `history.ts`, `@nexuscode/session`'s
+ * `SessionStore.append` — can recognize this ONE narrow, first-party shape
+ * before it strips a chunk's `raw` for storage. `raw` otherwise carries an
+ * untranslated, unbounded provider event and is rightly stripped before it
+ * ever lands in the audit log — but `raw.agent` is this package's OWN
+ * bounded coordinator payload and the only thing `chunkToUiEvents` reads off
+ * `raw` at all. Stripping it indiscriminately along with the rest of `raw`
+ * means a stored session can never replay its `agent` events (step-start /
+ * plan / reflect / progress / replan / retry / the final `stop` with its
+ * verdict) — they exist only while the run is live.
  */
-function isAgentMetaRaw(raw: unknown): raw is AgentMetaRaw {
+export function isAgentMetaRaw(raw: unknown): raw is AgentMetaRaw {
   if (typeof raw !== "object" || raw === null) return false;
   const a = (raw as { agent?: unknown }).agent;
   if (typeof a !== "object" || a === null) return false;
