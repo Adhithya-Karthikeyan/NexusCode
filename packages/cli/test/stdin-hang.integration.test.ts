@@ -58,9 +58,18 @@ afterEach(() => {
 
 /**
  * Spawn the built CLI with stdin an OPEN, non-TTY pipe. Resolves once the
- * process exits on its own, OR is killed after `hardCapMs` (a real bug
- * reproduction, not a false pass: if the fix regresses, this test fails with
- * a clear timeout instead of hanging the whole suite).
+ * process exits on its own, OR is killed after a hard cap DERIVED from
+ * `opts.extraEnv.NEXUS_STDIN_TIMEOUT_MS` (the bound this specific run is
+ * actually configured with) plus a large fixed safety margin — never a bare
+ * literal disconnected from that value. A hardcoded ceiling that has to be
+ * hand-edited every time someone tunes the bound is exactly how this test
+ * suite produced a false failure once already (raising the shipped default
+ * from 2s to 30s broke an earlier version of this file that still hard-capped
+ * at 8s): the watchdog and the thing it watches must move together, or not
+ * be compared at all. No override ⇒ this run isn't exercising the timeout
+ * path (e.g. a short-circuited read that never touches `readStdin`'s timer),
+ * so the cap only needs to be "clearly more than instant," not tied to any
+ * production constant.
  *
  * `delayed`, when given, writes `delayed.text` to stdin (then closes it)
  * after `delayed.afterMs` — simulating a real producer that is merely SLOW
@@ -72,9 +81,10 @@ afterEach(() => {
  */
 function spawnWithOpenStdin(
   args: string[],
-  hardCapMs: number,
   opts: { extraEnv?: Record<string, string>; delayed?: { text: string; afterMs: number } } = {},
 ): Promise<Result> {
+  const configuredBoundMs = Number(opts.extraEnv?.["NEXUS_STDIN_TIMEOUT_MS"] ?? 0);
+  const hardCapMs = configuredBoundMs + 6_000;
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const child = spawn(process.execPath, [BIN, ...args], {
@@ -117,23 +127,31 @@ function spawnWithOpenStdin(
 }
 
 describe("stdin hang regression — a prompt argument must never wait on stdin", () => {
-  it("`ask` with a prompt argument and an open, never-closing stdin completes promptly (not the 30s stdin bound, not a hang)", async () => {
-    const r = await spawnWithOpenStdin(["ask", "-p", "mock", "-m", "mock-fast", "hi there"], 8_000);
+  it("`ask` with a prompt argument and an open, never-closing stdin completes promptly (no override — must never even reach the bound)", async () => {
+    const r = await spawnWithOpenStdin(["ask", "-p", "mock", "-m", "mock-fast", "hi there"]);
     expect(r.signal).toBeNull(); // null signal ⇒ exited on its own, not SIGKILLed by our hard cap
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("hi there");
-    // Comfortably under STDIN_FIRST_BYTE_TIMEOUT_MS (30_000ms default) —
-    // readPrompt must skip the stdin wait entirely when a prompt argument is
-    // present, not merely have it bounded (an 8s hard cap on this test would
-    // be a strange way to prove "under 30s" otherwise).
+    // Comfortably under even the no-override hard cap (6s) — readPrompt must
+    // skip the stdin wait entirely when a prompt argument is present, not
+    // merely have it bounded (waiting anywhere near that cap would mean it
+    // fell through to `readStdin` after all, whatever bound is configured).
     expect(r.elapsedMs).toBeLessThan(1_500);
   }, 10_000);
 
   it("`agent --role` with a prompt argument and an open stdin also completes promptly (readPrompt is shared)", async () => {
-    const r = await spawnWithOpenStdin(
-      ["agent", "--role", "coder", "--max-steps", "1", "-p", "mock", "-m", "mock-tools", "add hello"],
-      8_000,
-    );
+    const r = await spawnWithOpenStdin([
+      "agent",
+      "--role",
+      "coder",
+      "--max-steps",
+      "1",
+      "-p",
+      "mock",
+      "-m",
+      "mock-tools",
+      "add hello",
+    ]);
     expect(r.signal).toBeNull();
     expect(r.code).toBe(0);
     expect(r.elapsedMs).toBeLessThan(1_500);
