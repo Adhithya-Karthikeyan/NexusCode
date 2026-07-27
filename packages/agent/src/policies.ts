@@ -25,6 +25,9 @@
  */
 
 import type {
+  AgentGoal,
+  DelegateDirective,
+  EvaluateFn,
   EvaluateInput,
   GoalAssessment,
   PlanDirective,
@@ -218,6 +221,115 @@ export function defaultEvaluate(input: EvaluateInput): Reflection {
     planEdits,
   };
 }
+
+// ── Delegation-aware Evaluate policy (opt-in) ──────────────────────────────────
+
+/**
+ * Matches the ONE error text the native tool loop produces when a role's
+ * filtered tool registry does not contain the tool the model tried to call
+ * (`packages/core/src/orchestrate/orchestrator.ts`'s
+ * `executeToolCall`: `errText(\`no such tool: ${call.name}\`)`). Because
+ * `runner.ts`'s `filterTools` builds that registry from the role's own
+ * `allowedTools`, this error can ONLY happen when the requested tool was never
+ * granted to the current role — it is not a transport or execution fault.
+ */
+const NO_SUCH_TOOL = /no such tool: (\S+)/;
+
+/**
+ * The role a capability-gap failure is escalated to. `coordinator` is the only
+ * shipped preset granted `allowedTools: ["*"]` (see `roles.ts`), so it is the
+ * one role guaranteed to have whatever tool the failing step needed, if the
+ * tool is registered at all.
+ */
+const ESCALATION_ROLE = "coordinator";
+
+/**
+ * A delegation-aware Evaluate/Reflect policy: {@link defaultEvaluate} plus one
+ * additional trigger. Opt in via `policies.evaluate` — it changes nothing for
+ * a run that does not select it.
+ *
+ * ## The trigger, and why
+ *
+ * `defaultEvaluate` treats every tool failure the same way: retry (up to the
+ * retry budget), then block. That is the right call for a TRANSIENT failure —
+ * a flaky write, a disk hiccup — because the same role calling the same tool
+ * again might succeed. It is the wrong call for a STRUCTURAL one: a
+ * `"no such tool: X"` error means X was never in this role's `allowedTools` in
+ * the first place (the role-filtered registry never advertised it to the
+ * model), so retrying the identical role cannot ever succeed — X is exactly as
+ * absent on attempt 2 as it was on attempt 1. That is a plan step whose
+ * declared work falls outside the current role's tool allowlist: an
+ * unretryable capability gap, not a one-off glitch. Spending the retry budget
+ * on it is dishonest busywork, so this policy instead hands the step to
+ * `coordinator` — the one role built to have the tool — via a
+ * {@link DelegateDirective}.
+ *
+ * Every other input (success, a transient failure, the no-criteria
+ * `"indeterminate"` continuation, cancellation) is returned byte-identical to
+ * {@link defaultEvaluate}; only the "no such tool" failure branch is
+ * intercepted.
+ *
+ * ## Bounded by construction, not by a counter
+ *
+ * This policy is selected per run, and the runner does NOT forward a run's
+ * `policies` to a delegated sub-agent — `runner.ts`'s delegate site calls
+ * `this.run(ctx, subDef, { goal, gate, input? })`, passing no `policies` key,
+ * so `options.policies?.evaluate ?? defaultEvaluate` resolves to
+ * {@link defaultEvaluate} for every delegated child, regardless of what
+ * delegated it. `defaultEvaluate` never delegates. So no matter how this
+ * policy is wired, a delegation chain it starts is at most ONE hop deep: it
+ * can hand a step to `coordinator`, but `coordinator`'s own run can only
+ * retry-then-block on a further capability gap, never delegate again. The
+ * `role === "coordinator"` guard below additionally short-circuits a
+ * self-delegation loop in the defensive case this policy is ever wired as
+ * `coordinator`'s own evaluator.
+ *
+ * ## Honesty preserved
+ *
+ * This never launders an `"indeterminate"` (or an `"unmet"`) into `"met"` — it
+ * only replaces the RECOVERY strategy (retry vs. delegate) for one specific,
+ * unretryable failure. The verdict stays `"unmet"`, `failure` stays `true`,
+ * and `goalMet` stays `false`.
+ */
+export const delegatingEvaluate: EvaluateFn = (input): Reflection => {
+  const base = defaultEvaluate(input);
+
+  // Cancellation, success, transient continuation, and the no-criteria
+  // "indeterminate" branch are all left untouched — only an actual FAILURE
+  // step is a candidate for delegation, and a cancelled run must stop, not
+  // delegate.
+  if (input.cancelled || input.role === ESCALATION_ROLE || !base.failure) return base;
+
+  const missingTool = input.toolResults
+    .filter((t) => t.isError)
+    .map((t) => NO_SUCH_TOOL.exec(t.text)?.[1])
+    .find((name): name is string => name !== undefined);
+  if (missingTool === undefined) return base;
+
+  const delegateGoal: AgentGoal = {
+    objective: `${input.goal.objective} (needs the "${missingTool}" tool, which is outside the "${input.role}" role's allowed tools)`,
+  };
+  if (input.goal.successCriteria !== undefined) {
+    delegateGoal.successCriteria = input.goal.successCriteria;
+  }
+  const delegate: DelegateDirective = { role: ESCALATION_ROLE, goal: delegateGoal };
+
+  return {
+    critique:
+      `Step ${input.step} needed the "${missingTool}" tool, which is outside the "${input.role}" ` +
+      `role's allowlist — a retry cannot grant it, so delegating to "${ESCALATION_ROLE}" instead.`,
+    progress: base.progress,
+    goalMet: false,
+    verdict: "unmet",
+    failure: true,
+    needsReplan: false,
+    retry: false,
+    planEdits: (base.planEdits ?? []).filter(
+      (d) => !(d.op === "add" && d.title.startsWith("Recover from failure")),
+    ),
+    delegate,
+  };
+};
 
 // ── Explicit (model-driven) Evaluate step ─────────────────────────────────────
 

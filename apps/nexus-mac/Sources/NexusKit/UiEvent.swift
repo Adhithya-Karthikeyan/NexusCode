@@ -24,6 +24,7 @@ public enum UiEvent: Sendable, Hashable {
     case toolResult(ToolResult)
     case diff(Diff)
     case approval(Approval)
+    case agent(Agent)
     case usage(Usage)
     case error(RunError)
     case done(Done)
@@ -136,6 +137,48 @@ public enum UiEvent: Sendable, Hashable {
         }
     }
 
+    /// One step of NexusCode's own OODA agent loop (`nexus agent --role …`).
+    ///
+    /// Emitted ALONGSIDE — never instead of — the `reasoning` event carrying the
+    /// same narration, so a plain chat renderer keeps showing the prose while a
+    /// richer view (the Agents tab) draws structure from these fields. Expect
+    /// the pair `[agent, reasoning]` back to back.
+    ///
+    /// This is the framework NexusCode owns, and it is provider-agnostic by
+    /// construction: no role preset pins a model or a provider, so the identical
+    /// loop runs on anthropic, codex, or any other registered adapter. That is
+    /// what makes an "agents" view meaningful for every provider rather than
+    /// just for Claude.
+    public struct Agent: Sendable, Hashable, Codable {
+        public let lane: String
+        /// `"plan"`, `"observe"`, `"reflect"`, `"replan"`, `"retry"`,
+        /// `"delegate"`, `"progress"`, `"goal"`, `"stop"`, `"step-start"`.
+        ///
+        /// Deliberately a `String` and not an enum: the phase vocabulary lives
+        /// in the agent package and grows there. A closed Swift enum would fail
+        /// to decode — and so blank the whole event — the first time the CLI
+        /// added a phase. A view switches on the values it knows and shows the
+        /// raw string otherwise.
+        public let phase: String
+        public let role: String
+        public let step: Int
+        /// The same human-readable narration the paired `reasoning` event
+        /// carries, duplicated here so one agent step is self-contained.
+        ///
+        /// Optional because the alternative — having the fold assume the NEXT
+        /// event is always this step's narration — would couple a pure
+        /// `(state, event) -> state` reducer to wire adjacency, and break the
+        /// moment a reasoning delta interleaved. An absent `text` costs
+        /// nothing: the prose is still accumulated on the turn either way.
+        public let text: String?
+        /// Phase-specific detail, keyed by `phase`:
+        /// `progress` → `{percent}`; `stop` → `{stopReason, verdict}`;
+        /// `goal` → `{verdict}`; `delegate` → `{role, goal}`;
+        /// `reflect` → `{reflection}`; `replan` → a task subtree.
+        /// Shape varies, so it stays untyped here.
+        public let data: JSONValue?
+    }
+
     public struct Usage: Sendable, Hashable, Codable {
         public let lane: String
         public let inputTokens: Int
@@ -172,6 +215,7 @@ public enum UiEvent: Sendable, Hashable {
         case .toolResult(let e): return e.lane
         case .diff(let e): return e.lane
         case .approval(let e): return e.lane
+        case .agent(let e): return e.lane
         case .usage(let e): return e.lane
         case .error(let e): return e.lane
         case .done(let e): return e.lane
@@ -192,6 +236,7 @@ public enum UiEvent: Sendable, Hashable {
         case .toolResult: return "tool_result"
         case .diff: return "diff"
         case .approval: return "approval"
+        case .agent: return "agent"
         case .usage: return "usage"
         case .error: return "error"
         case .done: return "done"
@@ -219,6 +264,7 @@ extension UiEvent: Decodable {
         case "reasoning": self = .reasoning(try single.decode(Delta.self))
         case "diff": self = .diff(try single.decode(Diff.self))
         case "approval": self = .approval(try single.decode(Approval.self))
+        case "agent": self = .agent(try single.decode(Agent.self))
         case "usage": self = .usage(try single.decode(Usage.self))
         case "error": self = .error(try single.decode(RunError.self))
         case "done": self = .done(try single.decode(Done.self))

@@ -39,8 +39,15 @@
 
 ## A0. ROUND 2 — issues found on first real use (2026-07-27)
 
-The app now runs (the earlier no-window symptom was environmental and cleared).
-Using it surfaced these:
+Using the app surfaced the issues below.
+
+⚠️ **The no-window symptom has RETURNED as of this session, and visual
+verification is blocked.** Re-confirmed environmental before blaming any code:
+the minimal 4-line SwiftUI app in the banner above reports zero windows too,
+signed or unsigned. So `swift build` + `swift test` are the only gates currently
+available, and the "screenshot at two window sizes" rule in §D cannot be
+satisfied — nothing UI-related below may be marked ✅ on test evidence alone.
+Fix by logging out / rebooting, or launch from Xcode.
 
 - ✅ **CRITICAL: switching provider did nothing.** Picked Codex, UI showed
   `codex`/`gpt-5-codex`, and the reply said "I'm Claude". Cause: `-p`/`-m` are
@@ -50,13 +57,30 @@ Using it surfaced these:
   `--resume`ing the same session so context survives. Guarded by
   `testSwitchingProviderRelaunchesTheBackend`. `activeBackendProvider` is now
   public so the UI can never again claim one provider while another answers.
-- 🔄 **Markdown is not rendered.** Assistant replies show literal `**bold**`,
-  `#` and `-`. Block parser going into NexusKit (testable), renderer into
-  NexusApp. Must be streaming-safe: an unterminated code fence is normal
-  mid-stream and must not swallow the rest of the message.
-- 🔄 **`anthropic` missing from the provider picker** despite being signed in
-  (oauth, ~432m left). Picker shows only claude-code/codex/gemini.
-- 🔄 **Model picker lists stale/wrong versions.**
+- ✅ **Markdown is not rendered.** FIXED: `MarkdownParser` (block parser —
+  headings, lists incl. nested, fenced code, blockquotes, rules) lives in
+  `NexusKit/MarkdownBlocks.swift`, UI-free and unit-tested (24 tests incl. the
+  exact user-reported fixture, an unterminated fence mid-stream, and a perf
+  regression guard for per-token reparsing). `NexusApp/Components/Markdown.swift`
+  renders it through the existing `Space`/`Kind`/theme-token scale (no invented
+  sizes — headings reuse `Kind.title`/`headline`/`bodyEmphasis`/`section`
+  exactly). `ConversationView`'s `TurnView` swapped in `MarkdownView` for
+  `turn.text` and also dropped the per-message avatar + card chrome for a
+  single quiet accent rule on assistant answers, widened inter-turn spacing,
+  and capped the transcript to a 660pt reading column.
+- ✅ **`anthropic` missing from the provider picker** despite being signed in.
+  Cause: `cmdProviders`/`cmdModels` called `buildRuntime` instead of
+  `buildAuthedRuntime`, so the OAuth-authenticated adapter was never registered
+  and the provider simply did not exist in the output the picker reads. Verified
+  fixed at the source: `providers status -o json` now returns
+  `{id: anthropic, available: true, needsKey: false}`, and Swift's
+  `isUsable = available && !needsKey` (`Providers.swift:54`) admits it.
+- ✅ **Model picker lists stale/wrong versions.** `models <p> -o json` now
+  returns the current generation — anthropic: `claude-opus-5`,
+  `claude-sonnet-5`, `claude-fable-5`, …; claude-code: the aliases plus
+  `claude-opus-5`/`claude-sonnet-5`/`claude-haiku-4-5-20251001`. The curated
+  arrays are OFFLINE FALLBACKS only (live `/v1/models` wins when reachable) and
+  carry no routing or pricing weight — pricing stays in `schema.ts` keyed by id.
 - 🔄 **Themes are terminal palettes, not app themes.** Root cause is
   architectural: they are GENERATED from `packages/theme`, an ANSI/terminal
   system — flat solid tokens with no material, elevation, gradient or state
@@ -64,9 +88,10 @@ Using it surfaced these:
   replaced with a hand-designed app theme model.
 - 🔄 **Layout/UX reads cheap and boring.** Research-first: a spec is being
   produced before any more building.
-- 🔄 **OMC for every provider, not just Claude.** Under investigation — the
-  honest answer may be that NexusCode's own role/OODA orchestration is already
-  provider-agnostic and simply is not exposed in the app.
+- ✅ **OMC for every provider, not just Claude.** ANSWERED, by execution — see
+  §A0c. NexusCode's own role/OODA orchestration is ALREADY provider-agnostic;
+  it is simply not reachable from the app. This is a UI + projection task, not
+  an architecture project.
 
 ## A0b. NEXT TASK — use the resolution cause in the UI
 
@@ -90,7 +115,125 @@ Wire this in `ApprovalSheet` / the sheet presentation in `ConversationView`,
 reading `ApprovalsController.lastResolution`. Small and self-contained — the hard
 part (getting the cause out of the CLI as data) is done.
 
-## A. Explicitly requested## A. Explicitly requested
+## A0c. "OMC for every provider" — the verified answer
+
+**The multi-provider agent framework already exists and it is ours, not OMC's.**
+Proven by running the same role loop against three different backends:
+
+| command | result |
+|---|---|
+| `agent --role coder --max-steps 1 -p mock -m mock-tools` | loop ran: plan → tool-call → reflect → replan → retry |
+| `agent --role reviewer --max-steps 1 -p anthropic` | `stop=indeterminate` (honest: no success criteria) |
+| `agent --role reviewer --max-steps 1 -p codex` | `stop=goal-met progress=100%` |
+
+That last row is the decisive one: **another vendor's CLI, over subprocess
+transport, driving NexusCode's OODA loop to a verified `goal-met`.**
+
+Why it works: `AgentDefinition` carries optional `model` + `adapterId`
+(`packages/agent/src/types.ts:33-50`); the runner resolves both through an
+override chain (`runner.ts:278-279`) into the dispatched `RunSpec`
+(`runner.ts:351-357`); and **none of the 9 role presets pin a model or provider**
+(`roles.ts:46-144`) — roles differ only by prompt, tool allowlist, `maxSteps`
+and `permissionMode`. Provider-neutral by construction.
+
+### Why OMC itself cannot be "pointed at" another provider
+- `dist/providers/` are GIT HOSTS (github, gitlab, …), not AI providers. OMC has
+  no AI-provider abstraction at all.
+- `omc ask` "supports" 6 vendors by `spawnSync`-ing their local binaries — one
+  shot, stdout captured, no streaming, no token accounting, no tool bus.
+- Its 19 agents are Claude Code `Task`-tool prompts; Claude Code makes the model
+  call, not OMC. **There is nothing to re-point.** Porting them would mean
+  reimplementing OMC's MCP server and maintaining someone else's prompt library.
+- The one real seam: `OMC_ASK_ADVISOR_SCRIPT` (`dist/cli/ask.js:145-156`) runs
+  ANY script you name — a fork-free override of OMC's whole outbound-model path.
+
+### The three gaps to close (ordered; each verified)
+1. 🔄 **Agent metadata is dropped before it can be rendered.** `agentMetaChunk`
+   encodes phase/role/step/plan onto `raw.agent` (`agent/src/events.ts:56-65`),
+   but `projection.ts:154-157` flattens the chunk to `{t:"reasoning",lane,delta}`
+   and discards `raw`. **Load-bearing — nothing else works until this lands.**
+   ✅ LANDED in `projection.ts` (+ the `tui` mirror + the Swift `UiEvent.Agent`
+   + the `ViewState` fold + 14 tests). `core` cannot import `isAgentMeta`
+   (`agent` depends on `core`, not the reverse), so the guard is duplicated
+   structurally, following the `failoverTrailOf` precedent in the same file.
+   The event carries `text` as well as `data` so one step is self-contained —
+   otherwise the fold would have to assume "the next event is my narration",
+   coupling a pure reducer to wire adjacency.
+
+   🔄 **BUT the wire is still empty — unit tests passing did NOT mean this
+   worked.** Running it end to end (`agent --role coder … -o ndjson`) produced
+   session/tool_call/text/usage/done and **zero `agent` events**. Cause:
+   `runAgentOoda` (`commands.ts:1411-1428`) intercepts agent-meta chunks and
+   prints them to stderr as prose, then `continue`s — so they never reach
+   `projectLabeled`. That interception is CORRECT for `-o text` (without it the
+   phases render as one unseparated blob) and wrong only for `-o ndjson`. Fix in
+   flight: gate the branch on `output !== "ndjson"`.
+   **Lesson worth keeping: three green unit-test suites and a clean build still
+   described a feature that did not work. Only running the binary found it.**
+2. 🔄 **Delegation is implemented but unreachable.** The runner fully supports
+   sub-agent spawning with a chained permission ceiling (`runner.ts:480-507`),
+   but `policies.ts` contains ZERO occurrences of `delegate` — `defaultEvaluate`
+   never emits a `DelegateDirective`. Today every role run is single-agent in
+   practice. IN FLIGHT as an opt-in `delegatingEvaluate`; `runner.ts` unchanged.
+3. 🔄 **The app never passes `--role`** — and it is worse than that. Chasing this
+   turned up TWO defects in the same family as the provider-switch bug:
+
+   a. **`plannedCommand` lies for every single-lane run.** It is documented as
+      "the command a submit would run — surfaced so the user can always see
+      exactly which `nexus` invocation the button maps to", and returns
+      `["ask"|"agent", prompt, …]`. But `submit()` routes single-lane runs to
+      `submitToPersistentSession`, and `PersistentSession` builds its OWN argv:
+      `["chat","--persistent","-o","ndjson"] + resume + extras`
+      (`PersistentSession.swift:53-56`). So the UI shows `nexus agent …` while
+      `nexus chat --persistent …` actually runs. Only compare/race were honest.
+      Being fixed with ONE argv builder feeding both the preview and the spawn,
+      so they cannot drift again — structural, not disciplinary.
+   b. **`.agent` mode is decorative.** `.ask` and `.agent` both funnel into
+      `submitToPersistentSession`, so they are byte-identical at runtime.
+      Selecting "agent" changes nothing about what runs.
+
+   Structural constraint found while specifying the fix: `nexus agent` has NO
+   `--persistent` mode — it is one-shot per invocation. So a role run cannot use
+   the persistent-session path and must dispatch like compare/race. Worth
+   knowing before designing any "agent conversation" UI.
+
+   Still open after that: `AgentRowBuilder` needs a third origin beside
+   `.lane`/`.omc`, and the badge at `AgentsView.swift:334` a `NEXUS` case.
+4. 🔄 **Role discovery must be a command, not a hardcoded Swift list.** There is
+   currently NO machine-readable way to enumerate roles — the only listing is a
+   stderr error string (`nexus agent --role nope` → `(roles: coordinator,
+   planner, coder, reviewer, tester, researcher, architect, doc-writer,
+   security-reviewer)`). Hardcoding those nine in the app would recreate the
+   stale-model-picker bug one layer up. A `roles … -o json` listing derived from
+   `AGENT_ROLES`/`ROLE_PRESETS` is in flight; the app takes `role` as a
+   pass-through `String?` and owns no copy of the list.
+5. ⬜ `nexus team --roles coder,reviewer,tester` — per the standing rule, the CLI
+   command must exist before the app can expose it.
+5. ⬜ Cheap win: ship a `nexus`-backed advisor script + document
+   `OMC_ASK_ADVISOR_SCRIPT`, so every `omc ask` inherits all 18 providers.
+
+### Two risks recorded before they bite
+- **The three-valued verdict must survive into the UI.** `indeterminate` is
+  first-class (`types.ts:75`, `runner.ts:306-307`) and a run without
+  `successCriteria` deliberately stops after ONE unverified step
+  (`runner.ts:524-527`) — the live `anthropic` run above hit exactly this.
+  Rendering that as a spinner or a green check silently breaks the design's core
+  honesty promise. Same class of mistake as showing a `.timeout` approval as a
+  refusal (§A0b).
+- **No `cli-subprocess` guard on the role path.** `cmdAgent` redirects
+  subprocess providers to `cmdCode` (`commands.ts:1019-1021`), but that check
+  sits AFTER the `--role` branch returns, so `runAgentOoda` only checks
+  `isProviderUsable`. The codex run above worked — but it was codex running its
+  OWN agentic loop inside a step of ours. Nested loops. Needs a deliberate
+  decision, not an accident.
+
+### Explicitly NOT doing
+Porting OMC's agents to other providers; forking/vendoring OMC (v4.15.6 and
+moving); a general "OMC delegates through nexus" bridge (no OMC-owned model
+calls exist to intercept outside `ask`); giving the app a write path into
+`.omc/` — `OMCWorkspace` is read-only by construction and should stay that way.
+
+## A. Explicitly requested
 
 ### A1. Harness fundamentals
 - ✅ **Persistent session** — one long-lived `nexus` process per conversation,
@@ -181,8 +324,14 @@ surface. `nexus auth status -o json` already returns all 15 providers with
 
 Nothing is marked ✅ without:
 1. `swift build` clean,
-2. `swift test` green (currently 110),
-3. for UI: a screenshot at two window sizes with every region confirmed present.
+2. `swift test` green (baseline 199),
+3. `npx vitest run` green (baseline ~2100),
+4. for UI: a screenshot at two window sizes with every region confirmed present.
+
+Rule 4 exists because it was violated: a `.frame(maxHeight:.infinity)` applied
+BEFORE padding demanded available+88pt and silently evicted its siblings, and
+screenshots were reported twice without noticing most of the UI wasn't drawing.
+Look at every region of the image, not the region you changed.
 
 The rule that governs everything: **any capability the app exposes must exist as
 a `nexus` command first.** The app composes commands and renders their events; it
@@ -205,6 +354,23 @@ never grows a private path to a provider.
   provider auto-selects the first usable one so the picker matches what the CLI
   would resolve anyway.
 - TypeScript 2089/2089. Swift 152/152 (was 110).
+
+### Verified — round 2 (2026-07-27 morning)
+- **Cross-provider resume preserves context.** A session opened under `mock`,
+  resumed under `mock-slow`, kept the SAME session id and restored its 2 prior
+  messages. This is what makes the provider-switch fix a real switch rather than
+  a reset. Caveat the CLI states itself: `text only; tool calls are not
+  replayed` — sensible, since those results came from another provider's run.
+- **Swift 250/250, build clean** (was 199 — themes, markdown and the agent-event
+  work all landed green).
+- **TypeScript 2121 tests, 2113 passing.** The 8 failures are the load flake, not
+  a regression: two consecutive runs of the same tree failed DIFFERENT tests
+  (run 1 `wave6 > review`; run 2 `doctor`, `mcp add`, `models -o json`, `ask
+  response cache`), and all 81 tests in those three files pass in isolation.
+  Being hardened — a gate that fails randomly teaches everyone to ignore it.
+- **`timeout` does not exist on this macOS box** (it is `gtimeout`). A command
+  wrapped in it silently does not run AT ALL and reports success — this produced
+  one wrong conclusion before it was caught. Do not use it in verification.
 
 ### Known flake
 `packages/cli/test/cli.integration.test.ts` — the `jobs` tests spawn real

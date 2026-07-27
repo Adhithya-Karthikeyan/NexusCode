@@ -151,6 +151,115 @@ final class ViewStateTests: XCTestCase {
         XCTAssertTrue(state.streaming, "one agent still working keeps the session live")
     }
 
+    // MARK: - Agent loop (`nexus agent --role …`)
+
+    private func agentStep(
+        _ phase: String, step: Int = 0, role: String = "coder", data: JSONValue? = nil
+    ) -> UiEvent {
+        .agent(.init(lane: "main", phase: phase, role: role, step: step, text: "narration", data: data))
+    }
+
+    func testAgentStepsAttachToTheLiveTurn() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "add a function")), ts: 0)
+        state.reduce(agentStep("step-start"), ts: 1)
+        state.reduce(agentStep("plan"), ts: 2)
+
+        let turn = state.lanes["main"]?.live
+        XCTAssertEqual(turn?.agentSteps.map(\.phase), ["step-start", "plan"])
+        XCTAssertEqual(turn?.agentRole, "coder")
+        XCTAssertTrue(turn?.isAgentRun == true)
+    }
+
+    func testAnOrdinaryChatTurnIsNotMistakenForAnAgentRun() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "hi")), ts: 0)
+        state.reduce(.text(.init(lane: "main", delta: "hello")), ts: 1)
+        // No agent events -> the Agents view must not invent a run.
+        XCTAssertFalse(state.lanes["main"]?.live?.isAgentRun == true)
+        XCTAssertNil(state.lanes["main"]?.live?.agentVerdict)
+    }
+
+    func testProgressReportsTheLatestPercentage() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "go")), ts: 0)
+        state.reduce(agentStep("progress", data: .object(["percent": .number(30)])), ts: 1)
+        state.reduce(agentStep("progress", step: 1, data: .object(["percent": .number(75)])), ts: 2)
+        XCTAssertEqual(state.lanes["main"]?.live?.agentProgress, 75)
+    }
+
+    func testVerdictIsNilWhileTheRunIsStillGoing() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "go")), ts: 0)
+        state.reduce(agentStep("plan"), ts: 1)
+        // Nothing has been decided yet — a view must show "working", not an outcome.
+        XCTAssertNil(state.lanes["main"]?.live?.agentVerdict)
+    }
+
+    func testVerdictSurvivesAsThreeValuedRatherThanCollapsingToABool() {
+        for (raw, expected) in [
+            ("met", AgentVerdict.met), ("unmet", .unmet), ("indeterminate", .indeterminate),
+        ] {
+            var state = ViewState()
+            state.reduce(.prompt(.init(lane: "main", id: "p0", text: "go")), ts: 0)
+            state.reduce(
+                agentStep("stop", data: .object(["stopReason": .string("x"), "verdict": .string(raw)])),
+                ts: 1
+            )
+            XCTAssertEqual(state.lanes["main"]?.live?.agentVerdict, expected, "verdict \(raw)")
+        }
+    }
+
+    func testAnUnreadableVerdictFallsBackToIndeterminateNeverToSuccess() {
+        // The single most important assertion here. A finished run whose verdict
+        // is missing or unrecognized is precisely the uncertainty this type
+        // exists to express — defaulting it to `.met` would render a green check
+        // over an outcome nothing verified.
+        for data in [JSONValue.object(["stopReason": .string("x")]), .object(["verdict": .string("👍")])] {
+            var state = ViewState()
+            state.reduce(.prompt(.init(lane: "main", id: "p0", text: "go")), ts: 0)
+            state.reduce(agentStep("stop", data: data), ts: 1)
+            XCTAssertEqual(state.lanes["main"]?.live?.agentVerdict, .indeterminate)
+        }
+    }
+
+    func testStopReasonAndDelegatedRolesAreExposed() {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "go")), ts: 0)
+        state.reduce(agentStep("delegate", data: .object(["role": .string("reviewer")])), ts: 1)
+        state.reduce(agentStep("delegate", step: 1, data: .object(["role": .string("tester")])), ts: 2)
+        state.reduce(
+            agentStep("stop", step: 2, data: .object(["stopReason": .string("goal-met"), "verdict": .string("met")])),
+            ts: 3
+        )
+
+        let turn = state.lanes["main"]?.live
+        XCTAssertEqual(turn?.delegatedRoles, ["reviewer", "tester"])
+        XCTAssertEqual(turn?.agentStopReason, "goal-met")
+        XCTAssertEqual(turn?.agentVerdict, .met)
+    }
+
+    func testAgentStepsSurviveTurnFinalizationAndReplay() throws {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "go")), ts: 0)
+        state.reduce(agentStep("plan"), ts: 1)
+        state.reduce(.done(.init(lane: "main", finishReason: "stop")), ts: 2)
+
+        let finalized = try XCTUnwrap(state.lanes["main"]?.finalized.first)
+        XCTAssertEqual(finalized.agentSteps.count, 1)
+
+        // Ids are derived from position in the log, so replaying is identical.
+        var replay = ViewState()
+        for (index, event) in [
+            UiEvent.prompt(.init(lane: "main", id: "p0", text: "go")),
+            agentStep("plan"),
+            .done(.init(lane: "main", finishReason: "stop")),
+        ].enumerated() {
+            replay.reduce(event, ts: Double(index))
+        }
+        XCTAssertEqual(state, replay)
+    }
+
     func testFailoverMarksTheDepartedProviderDegraded() {
         var state = ViewState()
         state.reduce(

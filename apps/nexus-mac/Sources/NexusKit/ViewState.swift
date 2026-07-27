@@ -31,6 +31,39 @@ public struct TurnDiff: Sendable, Hashable {
     public let patch: String
 }
 
+/// The outcome of an agent run — THREE-valued, deliberately not a `Bool`.
+///
+/// `indeterminate` is a first-class result in this design, not an error and not
+/// a soft failure: a run with no declared success criteria stops after one
+/// unverified step and says so. Collapsing that into "succeeded" (a green check)
+/// or "failed" (a red cross) would silently break the loop's core honesty
+/// guarantee — the same class of mistake as rendering a timed-out approval as a
+/// human refusal.
+public enum AgentVerdict: String, Sendable, Hashable {
+    case met, unmet, indeterminate
+}
+
+/// One step of NexusCode's OODA agent loop, recorded on the turn that produced
+/// it. Provider-agnostic: the identical loop runs on any registered adapter, so
+/// this renders the same whether the backend is anthropic, codex, or a mock.
+public struct AgentStep: Sendable, Hashable, Identifiable {
+    public let lane: String
+    /// Open vocabulary — see `UiEvent.Agent.phase` for why this is not an enum.
+    public let phase: String
+    public let role: String
+    public let step: Int
+    /// Human-readable narration. The paired `reasoning` event carries the same
+    /// text; it is copied here so an agent view is self-contained.
+    public let narration: String
+    public let data: JSONValue?
+    public let ts: Double
+
+    /// Derived from position in the log, never a fresh `UUID()` — a random id
+    /// would make two folds of the same log unequal and destroy replay
+    /// determinism. Same reasoning as `NotificationItem.id`.
+    public var id: String { "\(lane)-\(step)-\(phase)-\(ts)" }
+}
+
 public struct TurnError: Sendable, Hashable {
     public let code: String
     public let message: String
@@ -48,10 +81,48 @@ public struct Turn: Sendable, Hashable, Identifiable {
     public var reasoning: String = ""
     public var tools: [ToolActivity] = []
     public var diffs: [TurnDiff] = []
+    /// Empty for an ordinary chat turn; populated only when the backend was run
+    /// through the agent loop (`nexus agent --role …`).
+    public var agentSteps: [AgentStep] = []
     public var finished: Bool = false
     public var finishReason: String?
     public var error: TurnError?
     public let startedTs: Double
+
+    /// Whether this turn came from the agent loop at all.
+    public var isAgentRun: Bool { !agentSteps.isEmpty }
+
+    /// The role driving this turn (`coder`, `reviewer`, …).
+    public var agentRole: String? { agentSteps.last?.role }
+
+    /// Latest self-reported progress percentage, if the loop has reflected yet.
+    public var agentProgress: Int? {
+        agentSteps.last(where: { $0.phase == "progress" })?.data?["percent"]?.intValue
+    }
+
+    /// Why the loop stopped (`goal-met`, `indeterminate`, `max-steps`, …).
+    public var agentStopReason: String? {
+        agentSteps.last(where: { $0.phase == "stop" })?.data?["stopReason"]?.stringValue
+    }
+
+    /// The run's verdict, or `nil` while it is still running.
+    ///
+    /// A finished run whose verdict is missing or unrecognized resolves to
+    /// `.indeterminate` — NEVER to `.met`. An unreadable outcome is exactly the
+    /// case this three-valued type exists for, so defaulting optimistically
+    /// would defeat the point.
+    public var agentVerdict: AgentVerdict? {
+        guard let stop = agentSteps.last(where: { $0.phase == "stop" }) else { return nil }
+        guard let raw = stop.data?["verdict"]?.stringValue else { return .indeterminate }
+        return AgentVerdict(rawValue: raw) ?? .indeterminate
+    }
+
+    /// Roles this turn delegated subtasks to, in order.
+    public var delegatedRoles: [String] {
+        agentSteps
+            .filter { $0.phase == "delegate" }
+            .compactMap { $0.data?["role"]?.stringValue }
+    }
 }
 
 /// Per-lane conversation state: the live (streaming) turn + finalized history.
@@ -272,6 +343,27 @@ extension ViewState {
 
         case .diff(let e):
             withLiveTurn(e.lane, ts: ts) { $0.diffs.append(TurnDiff(path: e.path, patch: e.patch)) }
+            eventCount += 1
+
+        case .agent(let e):
+            // The CLI emits `agent` immediately before the `reasoning` event
+            // carrying the same narration, so the narration is not in hand yet.
+            // It arrives on the very next event and is folded into `reasoning`
+            // there; what this records is the STRUCTURE, which is the part a
+            // plan tree or progress bar cannot recover from prose.
+            withLiveTurn(e.lane, ts: ts) {
+                $0.agentSteps.append(
+                    AgentStep(
+                        lane: e.lane,
+                        phase: e.phase,
+                        role: e.role,
+                        step: e.step,
+                        narration: e.text ?? "",
+                        data: e.data,
+                        ts: ts
+                    )
+                )
+            }
             eventCount += 1
 
         case .approval(let e):

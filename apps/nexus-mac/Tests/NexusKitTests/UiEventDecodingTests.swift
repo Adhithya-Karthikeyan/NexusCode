@@ -20,11 +20,11 @@ final class UiEventDecodingTests: XCTestCase {
 
     func testDecodesEveryEventVariant() throws {
         let events = UiEventDecoder.decodeStream(try fixture("events"))
-        XCTAssertEqual(events.count, 18, "every fixture line must decode to an event")
+        XCTAssertEqual(events.count, 19, "every fixture line must decode to an event")
 
         let types = Set(events.map(\.wireType))
         for expected in [
-            "session", "route", "prompt", "reasoning", "text", "tool_call",
+            "session", "route", "prompt", "agent", "reasoning", "text", "tool_call",
             "tool_result", "diff", "approval", "usage", "failover", "done", "error",
         ] {
             XCTAssertTrue(types.contains(expected), "no \(expected) event decoded")
@@ -39,6 +39,44 @@ final class UiEventDecodingTests: XCTestCase {
         XCTAssertEqual(session.provider, "mock")
         XCTAssertEqual(session.model, "mock-fast")
         XCTAssertEqual(session.id, "run_a7bc6786-7086-4d7b-b3ef-ffa2560ed343")
+    }
+
+    func testAgentEventCarriesTheOodaStepStructure() throws {
+        let events = UiEventDecoder.decodeStream(try fixture("events"))
+        let agent = events.compactMap { event -> UiEvent.Agent? in
+            if case .agent(let value) = event { return value }
+            return nil
+        }.first
+        let unwrapped = try XCTUnwrap(agent)
+        XCTAssertEqual(unwrapped.phase, "plan")
+        XCTAssertEqual(unwrapped.role, "coder")
+        XCTAssertEqual(unwrapped.step, 0)
+        // Phase detail keeps its structure so a view can draw a plan tree rather
+        // than re-parsing narration prose.
+        XCTAssertEqual(unwrapped.data?["steps"]?.arrayValue?.count, 2)
+    }
+
+    func testAgentEventAccompaniesRatherThanReplacesItsNarration() throws {
+        let events = UiEventDecoder.decodeStream(try fixture("events"))
+        // The CLI emits the pair back to back: the structured event is a HEADER
+        // for the reasoning text, not a substitute for it. A plain chat renderer
+        // that ignores `agent` must still show the prose.
+        let index = try XCTUnwrap(events.firstIndex { $0.wireType == "agent" })
+        XCTAssertEqual(events[index + 1].wireType, "reasoning")
+    }
+
+    func testAgentEventToleratesAPhaseThisBuildDoesNotKnow() {
+        // `phase` is a String, not an enum, precisely so a phase added later in
+        // the agent package degrades to "shown verbatim" instead of failing to
+        // decode and blanking the event.
+        let event = UiEventDecoder.decodeLine(
+            #"{"t":"agent","lane":"main","phase":"time-travel","role":"coder","step":4}"#
+        )
+        guard case .agent(let agent)? = event else {
+            return XCTFail("an unknown phase must still decode as an agent event")
+        }
+        XCTAssertEqual(agent.phase, "time-travel")
+        XCTAssertNil(agent.data, "absent phase detail is normal, not an error")
     }
 
     func testToolCallPreservesStructuredArguments() throws {

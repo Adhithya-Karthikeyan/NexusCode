@@ -60,3 +60,101 @@ describe("chunkToUiEvents — session event's sessionId (bug fix)", () => {
     expect(session).toMatchObject({ id: "run_abc", sessionId: "s_xyz" });
   });
 });
+
+describe("chunkToUiEvents — agent-loop metadata (coordinator progress chunks)", () => {
+  // Hand-built to mirror `agentMetaChunk()`'s shape (`packages/agent/src/events.ts`)
+  // without importing from `@nexuscode/agent` — `@nexuscode/core` must not
+  // depend on it.
+  it("projects [agent, reasoning] in order, with phase/role/step/data intact, for an agentMetaChunk-shaped text-delta", () => {
+    const chunk = {
+      type: "text-delta",
+      runId: "run_1",
+      channel: "reasoning",
+      text: "Drafting a plan…",
+      raw: { agent: { phase: "plan", role: "coordinator", step: 2, data: { steps: ["a", "b"] } } },
+    } as StreamChunk;
+
+    const events = chunkToUiEvents(chunk, "main");
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toEqual({
+      t: "agent",
+      lane: "main",
+      phase: "plan",
+      role: "coordinator",
+      step: 2,
+      text: "Drafting a plan…",
+      data: { steps: ["a", "b"] },
+    });
+    expect(events[1]).toEqual({ t: "reasoning", lane: "main", delta: "Drafting a plan…" });
+  });
+
+  it("carries the same narration on the agent event's `text` as the paired reasoning event's `delta`", () => {
+    const chunk = {
+      type: "text-delta",
+      runId: "run_1",
+      channel: "reasoning",
+      text: "Reflecting on step 2…",
+      raw: { agent: { phase: "reflect", role: "coordinator", step: 2 } },
+    } as StreamChunk;
+
+    const events = chunkToUiEvents(chunk, "main");
+
+    const agentEvent = events.find((e) => e.t === "agent");
+    const reasoningEvent = events.find((e) => e.t === "reasoning");
+    expect(agentEvent).toMatchObject({ text: "Reflecting on step 2…" });
+    expect(reasoningEvent).toMatchObject({ delta: "Reflecting on step 2…" });
+    expect((agentEvent as { text: string }).text).toBe((reasoningEvent as { delta: string }).delta);
+  });
+
+  it("still projects exactly one reasoning event for a plain reasoning text-delta with no raw (no regression)", () => {
+    const chunk = { type: "text-delta", runId: "run_1", channel: "reasoning", text: "thinking…" } as StreamChunk;
+
+    const events = chunkToUiEvents(chunk, "main");
+
+    expect(events).toEqual([{ t: "reasoning", lane: "main", delta: "thinking…" }]);
+  });
+
+  it("does not half-match a wrong-shaped raw — non-string phase produces only the reasoning event", () => {
+    const chunk = {
+      type: "text-delta",
+      runId: "run_1",
+      channel: "reasoning",
+      text: "thinking…",
+      raw: { agent: { phase: 123, role: "coordinator", step: 1 } },
+    } as unknown as StreamChunk;
+
+    const events = chunkToUiEvents(chunk, "main");
+
+    expect(events).toEqual([{ t: "reasoning", lane: "main", delta: "thinking…" }]);
+  });
+
+  it("does not half-match a wrong-shaped raw — an unrelated raw.failover payload produces only the reasoning event", () => {
+    const chunk = {
+      type: "text-delta",
+      runId: "run_1",
+      channel: "reasoning",
+      text: "thinking…",
+      raw: { failover: [{ from: "a", to: "b", code: "x", message: "m" }] },
+    } as StreamChunk;
+
+    const events = chunkToUiEvents(chunk, "main");
+
+    expect(events).toEqual([{ t: "reasoning", lane: "main", delta: "thinking…" }]);
+  });
+
+  it("omits data from the agent event when the source meta has no data", () => {
+    const chunk = {
+      type: "text-delta",
+      runId: "run_1",
+      channel: "reasoning",
+      text: "stepping…",
+      raw: { agent: { phase: "step-start", role: "worker", step: 0 } },
+    } as StreamChunk;
+
+    const events = chunkToUiEvents(chunk, "main");
+
+    expect(events[0]).toEqual({ t: "agent", lane: "main", phase: "step-start", role: "worker", step: 0, text: "stepping…" });
+    expect(events[0]).not.toHaveProperty("data");
+  });
+});

@@ -272,16 +272,23 @@ describe("#8 every dispatch path routes a subprocess provider through resolveRun
   // The fake claude fixture simulates the real vendor CLI's 404 whenever it is
   // handed `--model claude-code` — the exact bug where a resolver falls back
   // to `explicit ?? config.defaultModel ?? providerId`, inventing a bogus
-  // model id equal to the provider's own name. These call sites (agent --role,
-  // compare, race/consensus/chain's shared backendRuns) were missed when `ask`
-  // and `code` were first fixed to use resolveRunModel.
-  it("`agent --role coder -p claude-code` with no -m never sends the vendor CLI its own provider id as --model", async () => {
-    const r = await runCli(
-      ["agent", "--role", "coder", "-p", "claude-code", "--max-steps", "1", "reply pong"],
-      "",
-      { NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE },
-    );
+  // model id equal to the provider's own name. These call sites (agent's
+  // subprocess redirect, compare, race/consensus/chain's shared backendRuns)
+  // were missed when `ask` and `code` were first fixed to use resolveRunModel.
+  //
+  // This used to be driven through `agent --role coder -p claude-code`. That
+  // combination is now refused up front (a subprocess CLI cannot honor a role's
+  // tools/sandbox/cwd — see the guard in runAgentOoda), so it would have passed
+  // this assertion vacuously, by never reaching resolveRunModel at all. It is
+  // driven through the ROLE-LESS `agent` path instead, which still redirects to
+  // `cmdCode` and still resolves the model the same way.
+  it("`agent -p claude-code` with no -m never sends the vendor CLI its own provider id as --model", async () => {
+    const r = await runCli(["agent", "-p", "claude-code", "reply pong"], "", {
+      NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE,
+    });
     expect(r.stdout + r.stderr).not.toMatch(/model not found: claude-code/);
+    // Not vacuous: the vendor CLI really ran and streamed its text back.
+    expect(r.stdout + r.stderr).toContain("Editing app.ts.");
   }, 20_000);
 
   it("`compare` with a claude-code lane and no explicit model never sends --model claude-code", async () => {
@@ -303,6 +310,69 @@ describe("#8 every dispatch path routes a subprocess provider through resolveRun
       { NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE },
     );
     expect(r.stdout + r.stderr).not.toMatch(/model not found: claude-code/);
+  }, 20_000);
+});
+
+describe("#8b `--role` refuses a cli-subprocess provider (it cannot honor the role)", () => {
+  // A subprocess coding CLI runs its own agent loop and reports tool calls it has
+  // ALREADY executed, so the OODA loop can neither resolve those calls (the names
+  // never match our registry), enforce the role's sandbox (the CLI already ran
+  // under its own), nor apply `--cwd` (the CLI uses the process cwd). The role
+  // path is refused rather than silently degraded — see runAgentOoda's guard.
+  it("`agent --role reviewer -p claude-code` exits 2 and names both working routes", async () => {
+    const r = await runCli(
+      ["agent", "--role", "reviewer", "-p", "claude-code", "--max-steps", "1", "reply pong"],
+      "",
+      { NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE },
+    );
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--role is not supported with "claude-code"/);
+    // The error is actionable: it points at `nexus code` AND at the role-with-an-
+    // API-provider route, so neither capability looks like it simply vanished.
+    expect(r.stderr).toMatch(/nexus code -a claude-code/);
+    expect(r.stderr).toMatch(/nexus agent --role reviewer -p <api-provider>/);
+    // Refused UP FRONT: the vendor CLI is never spawned.
+    expect(r.stdout + r.stderr).not.toContain("Editing app.ts.");
+  }, 20_000);
+
+  it("`plan -p claude-code` is refused too (it is the planner role under the hood)", async () => {
+    const r = await runCli(["plan", "-p", "claude-code", "build a login page"], "", {
+      NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE,
+    });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--role is not supported with "claude-code"/);
+  }, 20_000);
+
+  // The REGRESSION guard for the change above: refusing the role path must not
+  // disturb the role-less path, which still redirects a subprocess provider to
+  // `cmdCode` and drives the vendor CLI exactly as before.
+  it("the role-LESS `agent -p claude-code` still redirects to cmdCode and drives the CLI", async () => {
+    const r = await runCli(["agent", "-p", "claude-code", "reply pong"], "", {
+      NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE,
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout + r.stderr).toContain("Editing app.ts.");
+    expect(r.stderr).not.toMatch(/--role is not supported/);
+  }, 20_000);
+
+  // The guard is keyed on TRANSPORT, not on a provider-name denylist: an API
+  // provider keeps working with the very same role.
+  it("an API-transport provider is unaffected — `agent --role reviewer -p mock` still runs", async () => {
+    const r = await runCli([
+      "agent",
+      "reply pong",
+      "-p",
+      "mock",
+      "-m",
+      "mock-tools",
+      "--role",
+      "reviewer",
+      "--max-steps",
+      "1",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("[agent] role=reviewer");
+    expect(r.stderr).not.toMatch(/--role is not supported/);
   }, 20_000);
 });
 

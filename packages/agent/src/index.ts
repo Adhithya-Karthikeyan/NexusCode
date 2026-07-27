@@ -29,6 +29,7 @@ export type { AgentRegistry } from "./roles.js";
 export {
   defaultPlan,
   defaultEvaluate,
+  delegatingEvaluate,
   defaultVerify,
   parseVerdict,
   VERDICT_TOKEN,

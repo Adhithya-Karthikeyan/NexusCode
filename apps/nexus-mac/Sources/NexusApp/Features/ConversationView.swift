@@ -107,7 +107,11 @@ struct ConversationView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: Space.lg) {
+                    // 24pt between turns, not `Space.lg` (12pt) — that scale is
+                    // HIG's WITHIN-a-control-group spacing; reusing it between
+                    // whole turns is what made the transcript read as a solid
+                    // wall of text rather than a sequence of distinct answers.
+                    LazyVStack(alignment: .leading, spacing: 24) {
                         ForEach(laneOrder) { lane in
                             ForEach(lane.finalized) { turn in
                                 TurnView(turn: turn, showsReasoning: showsReasoning)
@@ -120,7 +124,13 @@ struct ConversationView: View {
                         }
                     }
                     .padding(Space.xl)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Capped and centered instead of stretched edge-to-edge —
+                    // past roughly 70 characters a line gets hard to track
+                    // back to its own start on a wide window, the "comfortable
+                    // measure" every typographic source agrees on regardless
+                    // of house style.
+                    .frame(maxWidth: 660, alignment: .leading)
+                    .frame(maxWidth: .infinity)
                 }
                 .onChange(of: controller.view.eventCount) {
                     // Anchor on the turn's own (deterministic) id rather than a
@@ -935,9 +945,14 @@ struct LaneColumn: View {
 
 /// One assistant turn: prompt, reasoning, answer, tools, diffs, error.
 ///
-/// The prompt and the answer are deliberately NOT the same shape: a small
-/// role avatar plus flat surface for the user, versus an elevated card for the
-/// assistant — so which is which is legible at a glance, not just by position.
+/// Prompt and answer share the SAME plain-text treatment — no per-message
+/// avatar, no elevated card. Claude.ai renders both on the page background
+/// with neither; the only differentiator here is a 2pt accent rule at low
+/// opacity on the assistant's answer. A round avatar bubble next to every
+/// single message is a consumer-chat-app tell (and, past the first turn,
+/// carries no information position doesn't already give); a bordered card
+/// around every answer is the reason this used to read as a stack of
+/// distinct little boxes instead of one continuous conversation.
 struct TurnView: View {
     @Environment(\.nexusTheme) private var theme
     let turn: Turn
@@ -969,39 +984,36 @@ struct TurnView: View {
 
     @ViewBuilder
     private func promptBlock(_ prompt: String) -> some View {
-        HStack(alignment: .top, spacing: Space.sm) {
-            RoleAvatar(systemImage: "person.fill")
-            Text(prompt)
-                .font(Kind.bodyEmphasis)
-                .foregroundStyle(theme.color(\.textPrimary))
-                .textSelection(.enabled)
-                .padding(.top, 3)
-            Spacer(minLength: 0)
-        }
+        Text(prompt)
+            .font(Kind.bodyEmphasis)
+            .foregroundStyle(theme.color(\.textPrimary))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var answerBlock: some View {
-        HStack(alignment: .top, spacing: Space.sm) {
-            RoleAvatar(systemImage: "sparkles", tone: .accent)
-            innerContent
-                .padding(Space.md)
-                .background(theme.color(\.surfaceRaised))
-                .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                        .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+        innerContent
+            .padding(.leading, Space.md)
+            // The one differentiator: a quiet accent rule in the left
+            // gutter, present only on the assistant's answer — never a card,
+            // never an avatar.
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(theme.color(\.accentDefault).opacity(0.35))
+                    .frame(width: 2)
+            }
+            .overlay(alignment: .topTrailing) {
+                if hoveringAnswer && !turn.text.isEmpty {
+                    copyButton
                 }
-                .overlay(alignment: .topTrailing) {
-                    if hoveringAnswer && !turn.text.isEmpty {
-                        copyButton
-                    }
-                }
-                .onHover { hovering in
-                    hoveringAnswer = hovering
-                    if !hovering { copied = false }
-                }
-        }
+            }
+            .onHover { hovering in
+                hoveringAnswer = hovering
+                if !hovering { copied = false }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var copyButton: some View {
@@ -1029,19 +1041,12 @@ struct TurnView: View {
             }
 
             if !turn.text.isEmpty {
-                // The caret rides the last baseline of the answer rather than
-                // being folded into the `Text` itself, so its blink can animate
-                // independently of the (unanimated) answer text.
-                HStack(alignment: .lastTextBaseline, spacing: 3) {
-                    Text(turn.text)
-                        .font(Kind.body)
-                        .foregroundStyle(theme.color(\.textSecondary))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if isStreaming {
-                        StreamingCaret()
-                    }
-                }
+                // Markdown, not literal text: the raw `**bold**`/`# heading`/
+                // `- bullet` the user was staring at is exactly the bug this
+                // renders. `MarkdownView` owns its own trailing caret (see
+                // its doc comment) since a multi-block answer has no single
+                // baseline to hang a plain `HStack` caret off of anymore.
+                MarkdownView(text: turn.text, isStreaming: isStreaming)
             } else if isStreaming && turn.tools.isEmpty {
                 ThinkingIndicator()
             }
@@ -1090,28 +1095,11 @@ struct TurnView: View {
     }
 }
 
-/// The small role indicator on a turn — a person for the prompt, a spark for
-/// the answer. Deliberately tiny: it identifies, it doesn't compete with the
-/// content next to it.
-private struct RoleAvatar: View {
-    @Environment(\.nexusTheme) private var theme
-    let systemImage: String
-    var tone: Tone = .neutral
-
-    enum Tone { case neutral, accent }
-
-    var body: some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(tone == .accent ? theme.color(\.accentFg) : theme.color(\.textSecondary))
-            .frame(width: 22, height: 22)
-            .background(tone == .accent ? theme.color(\.accentMuted) : theme.color(\.surfaceOverlay), in: Circle())
-    }
-}
-
 /// A blinking caret — motion that means exactly one thing: this turn is still
-/// producing text right now.
-private struct StreamingCaret: View {
+/// producing text right now. Not `private`: `Markdown.swift` reuses it to cap
+/// off a streaming markdown answer, wherever in the block structure that
+/// answer currently ends.
+struct StreamingCaret: View {
     @Environment(\.nexusTheme) private var theme
     @State private var dim = false
 

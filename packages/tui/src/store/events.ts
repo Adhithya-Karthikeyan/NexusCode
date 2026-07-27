@@ -22,6 +22,7 @@ export type UiEvent =
   | { t: "failover"; lane: string; from: string; to: string; code: string; message: string }
   | { t: "text"; lane: string; delta: string }
   | { t: "reasoning"; lane: string; delta: string }
+  | { t: "agent"; lane: string; phase: string; role: string; step: number; text: string; data?: unknown }
   | { t: "tool_call"; lane: string; id: string; name: string; args: unknown }
   | { t: "tool_result"; lane: string; id: string; ok: boolean; result: unknown }
   | { t: "diff"; lane: string; path: string; patch: string }

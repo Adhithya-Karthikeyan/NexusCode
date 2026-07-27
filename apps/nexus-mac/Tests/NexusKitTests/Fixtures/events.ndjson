@@ -1,6 +1,7 @@
 {"t":"session","id":"run_a7bc6786-7086-4d7b-b3ef-ffa2560ed343","provider":"mock","model":"mock-fast","ts":1785088736427}
 {"t":"route","chosen":"anthropic","reason":"capability","candidates":["anthropic","openai"]}
 {"t":"prompt","lane":"main","id":"p0","text":"hello world"}
+{"t":"agent","lane":"main","phase":"plan","role":"coder","step":0,"data":{"steps":["read config.json","bump the version"]}}
 {"t":"reasoning","lane":"main","delta":"thinking about it"}
 {"t":"text","lane":"main","delta":"[mock-fast] "}
 {"t":"text","lane":"main","delta":"Echo: "}

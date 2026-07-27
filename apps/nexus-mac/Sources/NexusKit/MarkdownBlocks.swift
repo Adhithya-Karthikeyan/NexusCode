@@ -408,7 +408,12 @@ public enum MarkdownParser {
                     i + 1
                 )
             }
-            codeLines.append(String(lines[i].content))
+            // `line.content` has already had its leading spaces stripped
+            // into `line.indent` — necessary for block-structure comparisons
+            // elsewhere, but wrong here: a code line's own indentation
+            // (`    return 1`) is significant content, not structure, and
+            // must survive verbatim.
+            codeLines.append(String(repeating: " ", count: lines[i].indent) + lines[i].content)
             i += 1
         }
         return (

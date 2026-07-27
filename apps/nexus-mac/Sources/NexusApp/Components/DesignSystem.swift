@@ -85,14 +85,26 @@ extension NexusTheme {
 
 /// A raised card. The single elevation primitive — views should not roll their
 /// own background+border+shadow combinations.
+///
+/// Backed by `AppTheme.elevation` rather than picking a surface token by
+/// hand: `elevated` selects level 2 (an overlay-like surface — a card that
+/// must float above an already-raised one, such as a popover's content) over
+/// level 1 (a card resting directly on the base surface). Level 2 also picks
+/// up that theme's `materials.overlay` treatment and its per-level shadow, so
+/// a theme like Basalt or Vantage that rejects shadows in favour of the
+/// colour ladder alone renders one, and a theme like Nightfall that wants
+/// real glass on its overlays renders that instead — neither is special-cased
+/// here.
 struct Card<Content: View>: View {
     @Environment(\.nexusTheme) private var theme
     var padding: CGFloat = Space.lg
     var radius: CGFloat = Radius.card
-    /// One step further up the surface ladder, for a card that must read as
-    /// floating above an already-raised surface.
     var elevated = false
     @ViewBuilder var content: Content
+
+    private var app: AppTheme { theme.appTheme }
+    private var step: ElevationStep { app.elevation.step(elevated ? 2 : 1) }
+    private var treatment: SurfaceTreatment { elevated ? app.materials.overlay : .solid }
 
     var body: some View {
         content
@@ -102,12 +114,18 @@ struct Card<Content: View>: View {
                 // uses. A plain `cornerRadius` reads subtly wrong beside system
                 // chrome.
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(theme.color(elevated ? \.surfaceOverlay : \.surfaceRaised))
+                    .fill(step.surfaceColor)
+                    .overlay {
+                        if let material = treatment.material {
+                            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(material)
+                        }
+                    }
             }
             .overlay {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(theme.hairline, lineWidth: 1)
+                    .strokeBorder(step.borderColor, lineWidth: 1)
             }
+            .shadow(color: .black.opacity(step.shadowOpacity), radius: step.shadowRadius, y: step.shadowRadius * 0.3)
     }
 }
 
@@ -124,12 +142,30 @@ struct SectionHeader: View {
         self.accessory = accessory
     }
 
+    /// Typography intent is the one theme dimension that isn't a colour:
+    /// a tool-forged theme (Basalt, Vantage) reads tighter and leans
+    /// monospaced for scanability; an editorial theme (Daylight, Nightfall)
+    /// opens up a little. Neutral keeps the number this file always used.
+    private var font: Font {
+        theme.appTheme.typography == .toolForged
+            ? .system(size: 11, weight: .semibold, design: .monospaced)
+            : Kind.section
+    }
+
+    private var tracking: Double {
+        switch theme.appTheme.typography {
+        case .toolForged: return 0.4
+        case .neutral: return 0.7
+        case .editorial: return 1.0
+        }
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title.uppercased())
-                    .font(Kind.section)
-                    .tracking(0.7)
+                    .font(font)
+                    .tracking(tracking)
                     .foregroundStyle(theme.color(\.textMuted))
                 if let subtitle {
                     Text(subtitle)
@@ -215,6 +251,16 @@ struct Metric: View {
     let label: String
     let value: String
     var emphasis = false
+    /// Uses the theme's second accent (`AccentSystem.secondary`) instead of
+    /// its primary one — for a readout that must stand out from an
+    /// `emphasis: true` metric already on screen (e.g. a live counter next to
+    /// a cost total) without the two competing for the same colour.
+    var secondary = false
+
+    private var valueColor: Color {
+        if secondary { return theme.appTheme.accentSecondary }
+        return emphasis ? theme.color(\.accentDefault) : theme.color(\.textSecondary)
+    }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -224,7 +270,7 @@ struct Metric: View {
                 .foregroundStyle(theme.color(\.textMuted).opacity(0.8))
             Text(value)
                 .font(Kind.monoSmall)
-                .foregroundStyle(emphasis ? theme.color(\.accentDefault) : theme.color(\.textSecondary))
+                .foregroundStyle(valueColor)
                 .monospacedDigit()
         }
         .fixedSize()
@@ -234,6 +280,12 @@ struct Metric: View {
 /// A button that reads as a real control: hover feedback, pressed state, and a
 /// focus-visible border. The first pass used `.buttonStyle(.plain)` everywhere,
 /// which is why nothing felt clickable.
+///
+/// The hover/pressed opacities used to be two numbers picked by eye (`0.82`,
+/// `0.85`) with nothing behind them. They now come from `AppTheme.stateLayers`
+/// — a light theme wants a much lighter overlay than a near-black one, or a
+/// hover state turns the surface muddy, and that tuning lives with the theme
+/// instead of guessed here.
 struct SoftButton: ButtonStyle {
     @Environment(\.nexusTheme) private var theme
     var tone: Tone = .neutral
@@ -243,6 +295,8 @@ struct SoftButton: ButtonStyle {
     enum Size { case compact, regular }
 
     @State private var hovering = false
+
+    private var app: AppTheme { theme.appTheme }
 
     private var background: Color {
         switch tone {
@@ -265,7 +319,10 @@ struct SoftButton: ButtonStyle {
             .font(size == .compact ? Kind.caption : Kind.bodyEmphasis)
             .padding(.horizontal, size == .compact ? Space.sm : Space.md)
             .padding(.vertical, size == .compact ? 5 : 7)
-            .background(background.opacity(hovering ? 1 : 0.82), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+            .background(
+                background.opacity(hovering ? 1 : 1 - app.stateLayers.hover),
+                in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+            )
             .foregroundStyle(foreground)
             .overlay {
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
@@ -275,7 +332,7 @@ struct SoftButton: ButtonStyle {
                     )
             }
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            .opacity(configuration.isPressed ? 1 - app.stateLayers.pressed : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             .animation(.easeOut(duration: 0.12), value: hovering)
             .onHover { hovering = $0 }
@@ -338,9 +395,13 @@ struct HeroEmptyState<Actions: View>: View {
                 Circle()
                     .fill(theme.accentGlow)
                     .frame(width: 190, height: 190)
+                // The one moment per screen that earns the theme's brand
+                // gradient rather than its flat accent colour — a hero glyph
+                // is exactly the "primary CTA / hero glow" case
+                // `GradientSet.accentGradient` exists for.
                 Image(systemName: icon)
                     .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(theme.color(\.accentDefault))
+                    .foregroundStyle(theme.appTheme.accentGradient)
             }
             .frame(height: 150)
 

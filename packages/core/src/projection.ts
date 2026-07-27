@@ -41,6 +41,30 @@ export type UiEvent =
   | { t: "failover"; lane: string; from: string; to: string; code: string; message: string }
   | { t: "text"; lane: string; delta: string }
   | { t: "reasoning"; lane: string; delta: string }
+  | {
+      t: "agent";
+      lane: string;
+      /**
+       * The OODA-loop phase (`packages/agent/src/events.ts`'s `AgentPhase`).
+       * Typed as `string`, not the closed `AgentPhase` union — this package
+       * cannot import that type (`@nexuscode/agent` depends on
+       * `@nexuscode/core`, not the reverse), and a hand-copied closed union
+       * here would silently drop a phase a newer agent package adds.
+       */
+      phase: string;
+      role: string;
+      step: number;
+      /**
+       * The same human-readable narration the paired `reasoning` event
+       * carries (`chunk.text`), duplicated here rather than left implicit so
+       * a consumer reading per-step narration doesn't have to assume "the
+       * next event after an `agent` event is its narration" — that couples a
+       * pure `(state, event) -> state` reducer to wire adjacency, which
+       * breaks the first time a reasoning delta interleaves.
+       */
+      text: string;
+      data?: unknown;
+    }
   | { t: "tool_call"; lane: string; id: string; name: string; args: unknown }
   | { t: "tool_result"; lane: string; id: string; ok: boolean; result: unknown }
   | { t: "diff"; lane: string; path: string; patch: string }
@@ -109,6 +133,32 @@ function failoverTrailOf(raw: unknown): FailoverStep[] {
   return out;
 }
 
+/** Structural shape of the coordinator metadata `packages/agent/src/events.ts`'s
+ * `agentMetaChunk()` stamps onto a reasoning-channel `text-delta`'s `raw`. */
+interface AgentMetaRaw {
+  agent: {
+    phase: string;
+    role: string;
+    step: number;
+    data?: unknown;
+  };
+}
+
+/**
+ * Narrow an unknown `raw` payload to {@link AgentMetaRaw}. Mirrors
+ * `isAgentMeta` in `packages/agent/src/events.ts` structurally (same pattern
+ * as `failoverTrailOf` above for `raw.failover`) — duplicated rather than
+ * imported because `@nexuscode/core` must not depend on `@nexuscode/agent`
+ * (the dependency arrow points the other way).
+ */
+function isAgentMetaRaw(raw: unknown): raw is AgentMetaRaw {
+  if (typeof raw !== "object" || raw === null) return false;
+  const a = (raw as { agent?: unknown }).agent;
+  if (typeof a !== "object" || a === null) return false;
+  const rec = a as Record<string, unknown>;
+  return typeof rec.phase === "string" && typeof rec.role === "string" && typeof rec.step === "number";
+}
+
 /**
  * Project one `StreamChunk` into zero or more `UiEvent`s. `lane` is the
  * per-provider pane key (`"main"` for single runs, else the adapter id).
@@ -151,10 +201,23 @@ export function chunkToUiEvents(chunk: StreamChunk, lane: string, sessionId?: st
         code: step.code,
         message: step.message,
       }));
-    case "text-delta":
-      return chunk.channel === "reasoning"
-        ? [{ t: "reasoning", lane, delta: chunk.text }]
-        : [{ t: "text", lane, delta: chunk.text }];
+    case "text-delta": {
+      if (chunk.channel !== "reasoning") return [{ t: "text", lane, delta: chunk.text }];
+      // A coordinator progress chunk (see `packages/agent/src/events.ts`'s
+      // `agentMetaChunk()`) stamps `raw` with phase/role/step metadata. Surface
+      // it as a leading `agent` event — the header for the narration that
+      // follows — while leaving the plain `reasoning` event unchanged so every
+      // existing text-only consumer keeps working byte-identically.
+      const out: UiEvent[] = [];
+      if (isAgentMetaRaw(chunk.raw)) {
+        const { phase, role, step, data } = chunk.raw.agent;
+        const agentEvent: UiEvent = { t: "agent", lane, phase, role, step, text: chunk.text };
+        if (data !== undefined) agentEvent.data = data;
+        out.push(agentEvent);
+      }
+      out.push({ t: "reasoning", lane, delta: chunk.text });
+      return out;
+    }
     case "reasoning-delta":
       return [{ t: "reasoning", lane, delta: chunk.text }];
     case "tool-call-start":

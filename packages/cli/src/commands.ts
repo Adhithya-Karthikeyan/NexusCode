@@ -1277,6 +1277,41 @@ async function runAgentOoda(
   }
   const def = registry.get(role);
 
+  // A subprocess coding CLI (claude-code / codex) is incompatible with the OODA
+  // framework, and the rest of the codebase already says so: both the non-role
+  // `agent` path (above) and the TUI dispatcher keep a subprocess provider OUT of
+  // `dispatchAgent`, because it runs its OWN agentic loop and streams back tool
+  // calls it has ALREADY executed. The role path is the one place that missed the
+  // rule. Routing a role through it is broken three ways, each verified by running
+  // `agent --role researcher -p codex`:
+  //
+  //   1. The tool loop cannot resolve those calls. The CLI's tool names ("shell",
+  //      "server:tool", "Bash"/"Edit") match nothing in our registry (fs_read,
+  //      fs_write, fs_search, fs_patch, shell_exec, server__tool), so every call
+  //      the CLI already made returns an unknown-tool error that we feed back and
+  //      re-spawn on — one step of a trivial read burned ~400k input tokens.
+  //   2. The role's sandbox is unenforceable. A reviewer/researcher derives a
+  //      read-only gate, but the CLI already ran its shells inside its own sandbox
+  //      (governed by `providers.<id>.sandbox` config, not our gate), so the role's
+  //      "never write, patch, or execute" contract is silently false.
+  //   3. `--cwd` does not reach it: the CLI runs in the process cwd, so the run
+  //      reads a different tree than the one the plan and context were built for.
+  //
+  // So this is refused rather than warned about: a warning cannot make (2) true,
+  // and there is no opt-in worth offering for a path that cannot honor the role it
+  // is being asked to play. It is NOT silently redirected to `cmdCode` either —
+  // that would drop the role the caller explicitly asked for. Both working routes
+  // are named instead.
+  if (runtime.registry.get(providerId).transport === "cli-subprocess") {
+    io.err(
+      `nexus agent: --role is not supported with "${providerId}" (it runs its own agent loop, ` +
+        `so the ${role} role's tools, sandbox, and cwd would not apply)\n` +
+        `  to run ${providerId} agentically:  nexus code -a ${providerId} '<prompt>'\n` +
+        `  to run the ${role} role:  nexus agent --role ${role} -p <api-provider>\n`,
+    );
+    return { code: 2, result: null };
+  }
+
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
 
   // Role-filtered tool set: the built-in suite plus the background-job control
