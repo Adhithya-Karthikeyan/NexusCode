@@ -58,6 +58,25 @@ export type UiEvent =
    * See `@nexuscode/core`'s `projection.ts` for the full contract this mirrors.
    */
   | { t: "cache"; lane: string; hit: boolean }
+  /**
+   * An explicit in-process provider/model switch (`nexus chat --persistent`'s
+   * `{"type":"switch",…}` control line) — accepted (with a receipt) or
+   * refused (with `blockers`), never a silent no-op. See `@nexuscode/core`'s
+   * `projection.ts` for the full contract this mirrors, including why
+   * `preserved` is NOT a tool-call-survives-the-switch guarantee.
+   */
+  | {
+      t: "switch";
+      lane: string;
+      from: { providerId: string; modelId: string };
+      to: { providerId: string; modelId: string };
+      accepted: boolean;
+      blockers: string[];
+      warnings: string[];
+      preserved: string[];
+      adaptations: string[];
+      reason: string;
+    }
   // The single CLIENT-originated marker (the engine NEVER emits this). The TUI
   // injects it into the same append-only log at submit time so the user prompt
   // interleaves with the assistant stream and `reduceEvent` owns the prompt↔turn

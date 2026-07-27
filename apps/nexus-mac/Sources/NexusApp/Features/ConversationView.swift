@@ -81,7 +81,8 @@ struct ConversationView: View {
                         providers: providers,
                         models: models,
                         isLoadingModels: isLoadingModels,
-                        onLoadModels: onLoadModels
+                        onLoadModels: onLoadModels,
+                        rolesController: rolesController
                     )
                     Divider().overlay(theme.color(\.chromeDivider))
                 }
@@ -103,6 +104,20 @@ struct ConversationView: View {
                     onDeny: { controller.respondToApproval(allow: false) }
                 )
             }
+            // Mirrors `ChatTab`'s own `.task(id: workspace.projectDirectory)`
+            // for `ProvidersController` — reload whenever the project (and so
+            // the resolved `nexus` binary) changes.
+            .task(id: workspace.projectDirectory) { await loadRoles() }
+    }
+
+    private func loadRoles() async {
+        guard let binary = workspace.binary else {
+            rolesController = nil
+            return
+        }
+        let loaded = RolesController(client: NexusClient(binary: binary), workingDirectory: workspace.projectDirectory)
+        rolesController = loaded
+        await loaded.refresh()
     }
 
     private var laneOrder: [LaneState] { controller.view.orderedLanes }
@@ -443,6 +458,7 @@ struct ControlStrip: View {
     let models: [PickerOption]
     let isLoadingModels: Bool
     let onLoadModels: (String) -> Void
+    let rolesController: RolesController?
 
     // Clearing destroys an on-screen conversation with no undo, same class of
     // action as "Delete task" (`TasksView.swift`) and "Sign out" (`AuthView.
@@ -499,7 +515,63 @@ struct ControlStrip: View {
             } else {
                 singleLaneControls
             }
+
+            // Role only means anything in `.agent` mode — everywhere else
+            // `ConversationController.role` is simply never read (see
+            // `usesPersistentSession`/`oneShotArguments`), so showing the
+            // picker outside `.agent` would offer a control with no effect,
+            // exactly the kind of "looks interactive, does nothing" control
+            // the approvals toggle was fixed to stop being.
+            if controller.mode == .agent {
+                GroupDivider()
+                rolePicker
+            }
         }
+    }
+
+    /// The OODA role picker — `nexus agent --role <id>`'s only UI entry
+    /// point today. Backed by `RolesController` (`nexus roles`), never a
+    /// hardcoded Swift list (see `NexusRole`'s doc for why). A role whose
+    /// `permissionMode` is anything but `"read-only"` gets a visible warning
+    /// on both the closed picker and its row in the popover — see
+    /// `PickerOption.warning` — per the house rule that a client warns
+    /// BEFORE running something that can write: four of the nine shipped
+    /// roles (coordinator, coder, tester, doc-writer) are `workspace-write`.
+    private var rolePicker: some View {
+        DropdownPicker(
+            placeholder: "role",
+            options: roleOptions,
+            selection: controller.role ?? Self.nativeToolLoopId,
+            isLoading: rolesController?.isLoading ?? false,
+            width: 148,
+            emptyHint: rolesController?.error ?? "No roles found"
+        ) { id in
+            controller.role = id == Self.nativeToolLoopId ? nil : id
+        }
+        .help("OODA role for the tool loop — the fast native loop runs when none is picked")
+    }
+
+    /// A sentinel id, not a real role: no shipped role preset is this short,
+    /// plain a word (they're all multi-syllable descriptive names — coder,
+    /// reviewer, tester, …), so this can't collide with anything `nexus
+    /// roles` ever returns. Maps back to `role == nil` in `rolePicker`'s
+    /// `onSelect` — the native tool loop is a first-class, default CHOICE
+    /// here, not merely "nothing picked yet".
+    private static let nativeToolLoopId = "native"
+
+    private var roleOptions: [PickerOption] {
+        let native = PickerOption(
+            id: Self.nativeToolLoopId,
+            detail: "Fast native tool loop — no plan/reflect/replan"
+        )
+        let roles = (rolesController?.roles ?? []).map { role in
+            PickerOption(
+                id: role.id,
+                detail: role.description,
+                warning: role.canWrite ? "Can write files and run shell commands" : nil
+            )
+        }
+        return [native] + roles
     }
 
     /// Conversation-wide utility actions — not part of configuring the next
