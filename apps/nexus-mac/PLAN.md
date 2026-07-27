@@ -125,9 +125,14 @@ a tall scroll view.*
 
 ### STATE AS OF 2026-07-28 (overnight run)
 
-**Green:** Swift **286/286** · TypeScript **2171/2171** (219 files, 36s) · both
-builds clean · 45/45 CLI commands healthy · `docs/CAPABILITIES.md` written
-(2908 lines) · `apps/nexus-mac/UI-INVENTORY.md` written (885 lines).
+**Green:** Swift **286/286** (7.3s) · TypeScript **2208/2208** (222 files, 35s,
+exit 0) · both builds clean · 45/45 CLI commands healthy · zero hangs ·
+`docs/CAPABILITIES.md` written (2908 lines) ·
+`apps/nexus-mac/UI-INVENTORY.md` written (885 lines, ~102 controls).
+
+For scale: that same TypeScript suite ran **2757 seconds with 15 failures**
+earlier in this session. The stdin/context/MCP/keychain bounds plus the
+`tsup`-race fix are what turned it back into a usable gate.
 
 **All six core promises verified BY EXECUTION**, not by reading:
 provider switch preserves context · preview == spawned argv (CLI side) ·
@@ -148,20 +153,40 @@ in `projection.ts` but **never constructed anywhere** — dead type.
   `ContextEngine` source collection (an unbounded recursive walk), and a
   **Keychain read that runs on EVERY command regardless of `-p mock`**
 
-**🔴 THE ACTUAL HANG — root-caused, fix still outstanding.** `readPrompt`
-(`commands.ts:218`) awaits `readStdin()` **unconditionally**, and `readStdin`
-only short-circuits on `isTTY`. Any caller with a non-TTY stdin that stays open
-blocks forever before producing a byte. Proof, same command and config, only
-stdin differing:
+**✅ THE HANG — root-caused and FIXED.** `readPrompt` (`commands.ts:218`) awaited
+`readStdin()` **unconditionally**, and `readStdin` only short-circuited on
+`isTTY`. Any caller with a non-TTY stdin that stayed open blocked forever before
+producing a byte — which is every programmatic caller. `--help` promised "reads
+stdin when no prompt is given"; the code didn't honour it. Sibling call sites
+(`:1804`, `:2402`, `:2985`) were already correct — `readPrompt` was the outlier.
 
-```
-ask -p mock -m mock-fast "hi" </dev/null   → exit 0, 1s, 21 bytes
-ask -p mock -m mock-fast "hi"              → HANGS, 0 bytes both streams
-```
+Fixed in two parts, and verified with stdin ACTUALLY inherited:
 
-`--help` promises "reads stdin when no prompt is given"; the code doesn't honour
-it. Sibling call sites (`:1804`, `:2402`, `:2985`) use `positional || readStdin()`
-correctly — `readPrompt` is the outlier.
+| case | before | after |
+|---|---|---|
+| prompt arg + inherited stdin | **hang forever, 0 bytes** | exit 0, 1s |
+| piped input, no arg | worked | works |
+| 1.4M-token `git diff` piped | worked | works, 2s |
+| producer silent 4s, then emits | — | exit 0, 5s |
+
+1. `readPrompt` short-circuits on a present positional — a prompt argument means
+   stdin is never touched. (Note: concatenating an argument WITH piped stdin was
+   never a documented feature; it was a side effect of this very bug. The
+   documented contract won, and a test now pins that choice.)
+2. `readStdin` bounds only the **first byte-or-EOF** wait
+   (`STDIN_FIRST_BYTE_TIMEOUT_MS`, 30s, overridable via `NEXUS_STDIN_TIMEOUT_MS`).
+   Once anything real arrives the rest streams with no time pressure, so a slow
+   producer is never cut off mid-stream. 30s because, once the short-circuit
+   removed the common case, EVERY remaining caller has stdin as its ONLY input
+   source — reaching that read means a real pipe or a genuine mistake, so erring
+   generous costs nothing and cutting short silently discards real input.
+
+⚠️ **A second bug this surfaced, worth remembering on its own:** bounding the
+read wasn't enough — `chat` printed its output and then still refused to exit,
+because walking away from an open, `ref`'d stdin keeps Node's event loop alive.
+Needed `stdin.pause()` + `stdin.unref()` in the same cleanup path.
+**Bounding a wait is only half the job; you must also release what you were
+waiting on.**
 
 ⚠️ **Why six of us missed it for hours: every watchdog harness we built spawned
 children with `stdio: ["ignore", …]`.** My own harness reported 641ms for the
