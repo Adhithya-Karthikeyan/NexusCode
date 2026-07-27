@@ -61,10 +61,14 @@ struct RootView: View {
             if let conversation = workspace.conversation {
                 ChatTab(controller: conversation)
             } else {
+                // `workspace.conversation == nil` and `workspace.setupProblem
+                // != nil` are set together in `WorkspaceModel.attach()` — the
+                // fallback text below only fires if that invariant is ever
+                // violated, never the expected path.
                 HeroEmptyState(
                     icon: "terminal",
                     title: "No nexus executable",
-                    message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                    message: workspace.setupProblem ?? "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
                 )
             }
         case .agents:

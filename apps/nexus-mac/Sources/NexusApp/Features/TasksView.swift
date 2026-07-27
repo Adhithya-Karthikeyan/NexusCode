@@ -4,8 +4,10 @@ import NexusKit
 /// The durable task queue — backed by `nexus task …`.
 ///
 /// Like `SessionsView`, `WorkspaceModel` holds no `TasksController` of its
-/// own, so this view builds one from `NexusBinary.discover` + `NexusClient`
-/// and rebuilds it whenever the project directory changes.
+/// own, so this view builds one from `workspace.binary` + `NexusClient` —
+/// the ONE binary `WorkspaceModel.attach()` already resolved, not a fresh
+/// `NexusBinary.discover` — and rebuilds it whenever the project directory
+/// changes.
 struct TasksView: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
@@ -97,7 +99,7 @@ struct TasksView: View {
                 HeroEmptyState(
                     icon: "terminal",
                     title: "No nexus executable",
-                    message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                    message: workspace.setupProblem ?? "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
                 )
             }
         }

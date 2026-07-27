@@ -155,7 +155,11 @@ final class WorkspaceModel {
 
     private func attach() {
         guard let binary = NexusBinary.discover(repoRoot: projectDirectory) else {
-            setupProblem = Self.setupProblemMessage()
+            // The one place `NexusBinary.explainMissing` needs calling for
+            // THIS window's own conversation/OMC wiring — every view-level
+            // fallback below reads `setupProblem` back out rather than
+            // calling it again, so this is the only call site.
+            setupProblem = NexusBinary.explainMissing()
             conversation = nil
             omc = nil
             self.binary = nil
@@ -172,26 +176,5 @@ final class WorkspaceModel {
         let controller = OMCController(discoveringFrom: projectDirectory)
         controller.start()
         omc = controller
-    }
-
-    /// `NexusBinary.discover` returning `nil` has exactly two distinct
-    /// causes, and its own contract makes them unambiguous to tell apart
-    /// here: `NEXUS_BIN` set but not resolving fails the WHOLE lookup
-    /// outright rather than falling through to a repo build or an install
-    /// location (see that function's doc) — so if it's set at all, that is
-    /// always the reason, never a coincidence alongside some other gap. A
-    /// user who already pointed `NEXUS_BIN` somewhere deserves to be told
-    /// what's wrong with THAT specific value, not sent back to "set
-    /// NEXUS_BIN" as if they hadn't — the same unhelpful-error shape this
-    /// app spent tonight removing everywhere else, just self-inflicted here.
-    private static func setupProblemMessage(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
-        if let override = environment["NEXUS_BIN"]?.trimmingCharacters(in: .whitespacesAndNewlines), !override.isEmpty {
-            return "NEXUS_BIN is set to \"\(override)\", but nothing executable exists there."
-        }
-        return """
-            Could not find the `nexus` executable. Install it, or set NEXUS_BIN \
-            to its path, or point this window at a NexusCode checkout that has \
-            been built.
-            """
     }
 }

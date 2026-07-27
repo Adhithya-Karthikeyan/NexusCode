@@ -4,10 +4,10 @@ import NexusKit
 /// Past conversations — a master/detail browser over `nexus session …`.
 ///
 /// `WorkspaceModel` does not hold a `SessionsController` (it is scoped to the
-/// chat tab only), so this view builds its own from `NexusBinary.discover` +
-/// `NexusClient`, exactly the way `WorkspaceModel.attach()` builds
-/// `ConversationController` — and rebuilds it whenever the project directory
-/// changes, via `.task(id:)`.
+/// chat tab only), so this view builds its own from `workspace.binary` +
+/// `NexusClient` — reading the ONE binary `WorkspaceModel.attach()` already
+/// resolved, not re-running `NexusBinary.discover` itself — and rebuilds it
+/// whenever the project directory changes, via `.task(id:)`.
 struct SessionsView: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
@@ -37,7 +37,7 @@ struct SessionsView: View {
                     HeroEmptyState(
                         icon: "terminal",
                         title: "No nexus executable",
-                        message: "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
+                        message: workspace.setupProblem ?? "The app drives the `nexus` CLI. Point it at a checkout, or set NEXUS_BIN."
                     )
                 }
             }
@@ -203,7 +203,7 @@ struct SessionsView: View {
     // MARK: - Attach
 
     private func attach() async {
-        guard let binary = NexusBinary.discover(repoRoot: workspace.projectDirectory) else {
+        guard let binary = workspace.binary else {
             controller = nil
             return
         }
