@@ -207,12 +207,14 @@ final class AppStateTests: XCTestCase {
 
                                     if mode == .agent, let role {
                                         XCTAssertTrue(preview.contains("--role") && preview.contains(role), context)
-                                        // The OODA framework opens a fresh engine session on every
-                                        // invocation and never reads `--resume`.
-                                        XCTAssertFalse(preview.contains("--resume"), "agent --role has no --resume, \(context)")
-                                    } else {
-                                        XCTAssertEqual(preview.contains("--resume"), sessionId != nil, context)
                                     }
+                                    // `agent --role` DOES honor `--resume` (threaded through the same
+                                    // `resolveResumeTarget` resolver `chat --persistent` uses — see
+                                    // `oneShotArguments`'s doc) — so every mode, role or not, carries
+                                    // `--resume` exactly when `sessionId` is set. What resumes is the
+                                    // CONVERSATION only; plan/task state always starts fresh, but that's
+                                    // a runtime behavior, not a reason to withhold the flag from argv.
+                                    XCTAssertEqual(preview.contains("--resume"), sessionId != nil, context)
                                 }
                             }
                         }
@@ -270,17 +272,22 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(c.activeBackendProvider)
     }
 
-    func testRoleRunsDoNotClaimResumeSupportTheCliDoesNotHave() {
+    /// Was `testRoleRunsDoNotClaimResumeSupportTheCliDoesNotHave`, asserting
+    /// the opposite of this. That was true when written; `runAgentOoda` now
+    /// threads `--resume` through the same `resolveResumeTarget` resolver
+    /// `chat --persistent` uses (`packages/cli/src/commands.ts`), with the
+    /// worked example `nexus agent --role researcher --resume s_1234 …`
+    /// documented at `packages/cli/src/index.ts`. Withholding the flag here
+    /// meant every role run silently started from nothing.
+    func testRoleRunsDoResumeTheConversationEvenThoughPlanStateAlwaysStartsFresh() {
         let c = controller()
         c.mode = .agent
         c.role = "reviewer"
         c.sessionId = "s_999"
 
-        // The OODA framework opens a fresh engine session on every invocation
-        // and never reads `--resume` — attaching the flag would claim a
-        // continuity the CLI does not provide.
         let args = c.plannedCommand(for: "review this").arguments
-        XCTAssertFalse(args.contains("--resume"))
+        XCTAssertTrue(args.contains("--resume") && args.contains("s_999"))
+        XCTAssertTrue(args.contains("--role") && args.contains("reviewer"))
     }
 
     func testUnknownRoleStringIsPassedThroughUnmodified() {

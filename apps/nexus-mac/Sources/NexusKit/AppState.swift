@@ -334,13 +334,18 @@ public final class ConversationController {
         // and it must land before the role early-return below since a role
         // run needs it too.
         if effort != .off { args += ["--effort", effort.rawValue] }
-        // `nexus agent --role` has no `--resume`: the OODA framework
-        // (`runAgentOoda` in packages/cli/src/commands.ts) opens a fresh engine
-        // session on every invocation and never reads a `--resume` flag, so a
-        // role run cannot build on a prior turn's context the way `.ask` can.
-        // That is a real limitation of the CLI today, not something to paper
-        // over here by attaching a flag that would silently do nothing.
-        if mode == .agent && role != nil { return args }
+        // `nexus agent --role` DOES honor `--resume` — `runAgentOoda` threads
+        // it through the same `resolveResumeTarget` resolver `chat
+        // --persistent` uses (see `packages/cli/src/commands.ts`, and the
+        // worked example at `packages/cli/src/index.ts`: `nexus agent --role
+        // researcher --resume s_1234 …`). What resumes is the CONVERSATION
+        // (text only — tool calls are not replayed, exactly like every other
+        // resume path). What deliberately does NOT resume is plan/task state:
+        // `runAgentOoda` opens a fresh `:memory:` TaskStore on every
+        // invocation, never keyed by session id, so a resumed role run reasons
+        // over the restored conversation but always plans afresh against THIS
+        // invocation's own prompt. That's a real CLI behavior to know about,
+        // not a reason to withhold the flag the way this used to.
         if let sessionId { args += ["--resume", sessionId] }
         return args
     }
