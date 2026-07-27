@@ -373,13 +373,21 @@ export async function openHistory(opts: {
         // A prompt can contain a pasted key. Same redaction pass tool results
         // get — nothing secret-shaped is written in the clear.
         const content = redactArgs(message.content) as ContentBlock[];
+        // Persist `toolCallId`/`name` alongside `content`, not just the bare
+        // content blocks — a "tool" role message's `toolCallId` is what pairs
+        // it back to its originating tool call. Without it a resumed session
+        // can't rebuild that pairing and every adapter's `mapMessages()` sees
+        // an empty toolCallId, breaking tool-result attribution post-resume.
+        const persisted: { content: ContentBlock[]; toolCallId?: string; name?: string } = { content };
+        if (message.toolCallId !== undefined) persisted.toolCallId = message.toolCallId;
+        if (message.name !== undefined) persisted.name = message.name;
         insertTranscript.run(
           entry.sessionId,
           entry.turnId,
           entry.seq,
           idx,
           message.role,
-          encodeTranscript(JSON.stringify(content)),
+          encodeTranscript(JSON.stringify(persisted)),
           now,
         );
       }
@@ -393,10 +401,19 @@ export async function openHistory(opts: {
           try {
             const decoded = decodeTranscript(row.content);
             if (!decoded) continue;
-            out.push({
-              role: row.role as Message["role"],
-              content: JSON.parse(decoded) as ContentBlock[],
-            });
+            const parsed = JSON.parse(decoded) as unknown;
+            // Back-compat: rows written before toolCallId/name were persisted
+            // are a bare `ContentBlock[]` array; newer rows are `{content,
+            // toolCallId?, name?}`.
+            if (Array.isArray(parsed)) {
+              out.push({ role: row.role as Message["role"], content: parsed as ContentBlock[] });
+            } else if (parsed && typeof parsed === "object") {
+              const obj = parsed as { content: ContentBlock[]; toolCallId?: string; name?: string };
+              const message: Message = { role: row.role as Message["role"], content: obj.content };
+              if (obj.toolCallId !== undefined) message.toolCallId = obj.toolCallId;
+              if (obj.name !== undefined) message.name = obj.name;
+              out.push(message);
+            }
           } catch {
             /* skip an unparseable row rather than fail the whole resume */
           }
