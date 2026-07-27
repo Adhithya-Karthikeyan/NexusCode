@@ -34,6 +34,7 @@ import {
   cmdMemory,
   cmdModels,
   cmdPlan,
+  cmdRoles,
   cmdPlugin,
   cmdProviders,
   cmdRace,
@@ -178,6 +179,7 @@ Commands:
   ask <prompt>          one-shot completion (aliases: run, q); reads stdin if piped
   agent <prompt>        agentic run: native tool loop, or OODA framework with --role
   plan <objective>      turn an objective into a task plan (planner role)
+  roles                 list the agent roles --role accepts (-o json for clients)
   task list|add|done|…  manage the durable task plan
   jobs list|run|history background jobs, command history, PTY seam
   tools list|run         list/run the tool framework's tools (web/db/cloud/… groups)
@@ -317,6 +319,22 @@ class PlanCommand extends HandlerCommand {
   });
   protected handler(): Handler {
     return cmdPlan;
+  }
+}
+
+class RolesCommand extends HandlerCommand {
+  static override paths = [["roles"]];
+  static override usage = Command.Usage({
+    description: "List the OODA agent roles `agent --role` / `plan --role` accept.",
+    details:
+      "Prints each role with the sandbox class it runs under, its OODA step budget, and its tool allowlist — enough for a client to pick a role and warn before running one that can write files. `-o json` emits `{\"roles\":[{id,tools,maxSteps,permissionMode}]}`, derived from the same registry `--role` resolves against (so it can never list a role that is not runnable). The role's system prompt is intentionally not included.",
+    examples: [
+      ["List the roles", "nexus roles"],
+      ["Machine-readable catalog", "nexus roles -o json"],
+    ],
+  });
+  protected handler(): Handler {
+    return cmdRoles;
   }
 }
 
@@ -985,6 +1003,7 @@ cli.register(TuiCommand);
 cli.register(AskCommand);
 cli.register(AgentCommand);
 cli.register(PlanCommand);
+cli.register(RolesCommand);
 cli.register(TaskCommand);
 cli.register(JobsCommand);
 cli.register(ToolsCommand);

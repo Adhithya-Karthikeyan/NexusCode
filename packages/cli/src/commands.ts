@@ -1537,6 +1537,76 @@ export async function cmdPlan(args: ParsedArgs, io: Io = defaultIo): Promise<num
   return res.code;
 }
 
+// ── roles (the OODA role catalog: §5) ─────────────────────────────────────────
+
+/** One role as reported by `nexus roles` (see {@link cmdRoles}). */
+interface RoleListing {
+  id: string;
+  /** Tool-name allowlist; `["*"]` means every registered tool. */
+  tools: string[];
+  /** Hard cap on OODA iterations for this role. */
+  maxSteps: number;
+  /** Sandbox class the run gets — a client warns on anything but `read-only`. */
+  permissionMode: PermissionMode;
+  /** Only present if the preset pins one (none currently do — roles are provider-neutral). */
+  model?: string;
+  adapterId?: string;
+}
+
+/**
+ * `nexus roles` — the machine-readable role catalog.
+ *
+ * A client (the app's role picker, a script) has to know which roles exist
+ * BEFORE it can run one, and the only enumeration that previously existed was
+ * the prose in `agent`'s unknown-role error — not a contract worth scraping.
+ * This is a TOP-LEVEL listing command for the same reason `providers` and
+ * `models` are: discovery should not require the command that consumes the thing
+ * being discovered (`agent` demands a prompt, so a `--list-roles` flag there
+ * would have to special-case its way past that). The payload follows the same
+ * envelope as those two — `{"<plural>": [ { id, … } ]}`, `id` first, optional
+ * fields omitted rather than nulled.
+ *
+ * Every field is read from the SAME {@link createAgentRegistry} that `--role`
+ * resolves against, so the catalog cannot drift from what is actually runnable.
+ *
+ * The assembled system prompt is deliberately NOT emitted: it is long, a picker
+ * has no use for it, and it would dominate any log this output lands in. The
+ * per-role prose `description` is not emitted either — not by choice, but
+ * because it is baked into the prompt and never surfaced on `AgentDefinition`;
+ * exposing it would mean changing `@nexuscode/agent`.
+ */
+export async function cmdRoles(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
+  const output = parseOutput(args);
+  const registry = createAgentRegistry();
+  // Derived from AGENT_ROLES + the registry — never a second hand-kept list.
+  const roles: RoleListing[] = registry.roles().map((id) => {
+    const def = registry.get(id);
+    const listing: RoleListing = {
+      id,
+      tools: [...def.allowedTools],
+      maxSteps: def.maxSteps,
+      // Mirrors runAgentOoda's own fallback, so what is listed is what is applied.
+      permissionMode: def.permissionMode ?? "read-only",
+    };
+    if (def.model !== undefined) listing.model = def.model;
+    if (def.adapterId !== undefined) listing.adapterId = def.adapterId;
+    return listing;
+  });
+
+  if (output === "json" || output === "ndjson") {
+    io.out(`${JSON.stringify({ roles })}\n`);
+    return 0;
+  }
+  const width = roles.reduce((w, r) => Math.max(w, r.id.length), 0);
+  for (const r of roles) {
+    const tools = r.tools.includes("*") ? "all tools" : r.tools.join(", ");
+    io.out(
+      `${r.id.padEnd(width)}  ${r.permissionMode.padEnd(15)} ${String(r.maxSteps).padStart(2)} steps  ${tools}\n`,
+    );
+  }
+  return 0;
+}
+
 // ── task (task management for plans: §15) ──────────────────────────────────────
 
 /** Open the durable task store the CLI persists plans/todos to. */

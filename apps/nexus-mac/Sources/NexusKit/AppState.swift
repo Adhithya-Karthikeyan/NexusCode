@@ -237,7 +237,11 @@ public final class ConversationController {
     /// preview and `submitToPersistentSession`'s actual spawn, so they cannot
     /// drift apart. The prompt itself is never part of this argv: it is
     /// written to the process's stdin turn by turn (see `PersistentSession`).
-    private func persistentSessionArguments() -> [String] {
+    ///
+    /// Not `private`: `@testable import` needs to reach it directly, to assert
+    /// the preview and the actual spawn are the identical array rather than
+    /// two literals that merely happen to match (the Bug 1 regression guard).
+    func persistentSessionArguments() -> [String] {
         var args = ["chat", "--persistent", "-o", "ndjson"]
         if let sessionId { args += ["--resume", sessionId] }
         if let provider { args += ["-p", provider] }

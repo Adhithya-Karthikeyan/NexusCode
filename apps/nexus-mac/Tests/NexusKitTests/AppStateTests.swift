@@ -73,9 +73,12 @@ final class AppStateTests: XCTestCase {
     /// `plannedCommand` claims to show "exactly which `nexus` invocation the
     /// button maps to". For single-lane modes that used to be false: the
     /// preview showed `["ask", prompt, …]` while `submit()` actually spawned
-    /// `chat --persistent …` via `PersistentSession`, which builds its own argv
-    /// from `extraArguments`. This asserts the two are now the SAME argv,
-    /// sourced from the same helper — it fails under the old two-builder code.
+    /// `chat --persistent …` via `PersistentSession`, which built its OWN argv
+    /// from `extraArguments`. This asserts the preview is the identical array
+    /// `submitToPersistentSession` hands to `PersistentSession` — not two
+    /// literals that merely happen to match — so it fails under the old
+    /// two-builder code, where the preview started with `"ask"`/the prompt and
+    /// the real spawn started with `"chat"`/`"--persistent"`/no prompt at all.
     func testPreviewArgvMatchesWhatIsActuallySpawnedForASingleLaneSubmit() {
         let c = controller()
         c.mode = .ask
@@ -84,15 +87,115 @@ final class AppStateTests: XCTestCase {
         c.sessionId = "s_1"
 
         let preview = c.plannedCommand(for: "hello").arguments
+        let spawned = c.persistentSessionArguments()
+        XCTAssertEqual(preview, spawned)
         // The persistent path never puts the prompt in argv — it is written to
-        // stdin turn by turn — so the honest preview for `.ask`/role-less
-        // `.agent` is the `chat --persistent` invocation itself.
-        XCTAssertEqual(preview, ["chat", "--persistent", "-o", "ndjson", "--resume", "s_1", "-p", "anthropic", "-m", "claude-sonnet-4-5", "-t", "--ask"])
+        // the process's stdin turn by turn once the backend is ready.
+        XCTAssertFalse(spawned.contains("hello"))
+        XCTAssertEqual(spawned.first, "chat")
+        XCTAssertTrue(spawned.contains("--persistent"))
 
         c.submit("hello")
-        // What actually got spawned must be exactly what was previewed.
+        // What actually got spawned matches what was previewed.
         XCTAssertEqual(c.activeBackendProvider, "anthropic")
         XCTAssertEqual(c.activeBackendModel, "claude-sonnet-4-5")
+    }
+
+    // MARK: - Role (Bug 2 / Bug 3)
+
+    func testAgentWithNilRoleIsByteIdenticalToTodaysBehaviour() {
+        let withRole = controller()
+        withRole.mode = .agent
+        withRole.provider = "anthropic"
+        withRole.model = "claude-sonnet-4-5"
+        withRole.role = nil
+
+        let withoutRoleProperty = controller()
+        withoutRoleProperty.mode = .agent
+        withoutRoleProperty.provider = "anthropic"
+        withoutRoleProperty.model = "claude-sonnet-4-5"
+
+        // `role == nil` must produce the exact same argv as before this
+        // property existed: the persistent `chat --persistent` invocation,
+        // with no `--role` anywhere in it.
+        let args = withRole.plannedCommand(for: "do it").arguments
+        XCTAssertEqual(args, withoutRoleProperty.plannedCommand(for: "do it").arguments)
+        XCTAssertFalse(args.contains("--role"))
+        XCTAssertEqual(args.first, "chat")
+    }
+
+    func testAgentWithARoleInvokesTheRoleFlagAsAOneShotDispatch() {
+        let c = controller()
+        c.mode = .agent
+        c.provider = "mock"
+        c.model = "mock-tools"
+        c.role = "coder"
+
+        let args = c.plannedCommand(for: "fix the bug").arguments
+        XCTAssertEqual(args.first, "agent")
+        XCTAssertTrue(args.contains("fix the bug"))
+        XCTAssertEqual(args.filter { $0 == "--role" }.count, 1)
+        XCTAssertTrue(args.contains("--role") && args.contains("coder"))
+        XCTAssertTrue(args.contains("-o") && args.contains("ndjson"))
+        XCTAssertTrue(args.contains("-p") && args.contains("mock"))
+        XCTAssertTrue(args.contains("-m") && args.contains("mock-tools"))
+        // `nexus agent --role` has no `--persistent` mode — it is one-shot per
+        // invocation, unlike `chat --persistent` — so a role run must dispatch
+        // like `compare`/`race` do, never through the persistent session.
+        XCTAssertFalse(args.contains("--persistent"))
+
+        c.submit("fix the bug")
+        // A role run is one-shot: it must never touch the persistent backend.
+        XCTAssertNil(c.activeBackendProvider)
+    }
+
+    func testRoleRunsDoNotClaimResumeSupportTheCliDoesNotHave() {
+        let c = controller()
+        c.mode = .agent
+        c.role = "reviewer"
+        c.sessionId = "s_999"
+
+        // The OODA framework opens a fresh engine session on every invocation
+        // and never reads `--resume` — attaching the flag would claim a
+        // continuity the CLI does not provide.
+        let args = c.plannedCommand(for: "review this").arguments
+        XCTAssertFalse(args.contains("--resume"))
+    }
+
+    func testUnknownRoleStringIsPassedThroughUnmodified() {
+        let c = controller()
+        c.mode = .agent
+        c.role = "totally-not-a-real-role"
+
+        // Validation belongs to the CLI, which already returns a clear error;
+        // duplicating a role allowlist here would be a stale copy waiting to
+        // happen, exactly like the model picker.
+        let args = c.plannedCommand(for: "x").arguments
+        XCTAssertTrue(args.contains("--role") && args.contains("totally-not-a-real-role"))
+    }
+
+    /// Mirrors `testSwitchingProviderRelaunchesTheBackend`: a role change is
+    /// exactly as spawn-affecting as a provider/model change, because setting
+    /// a role moves the run off the persistent session entirely.
+    func testSwitchingRoleRelaunchesTheBackend() {
+        let c = controller()
+        c.mode = .agent
+        c.provider = "alpha"
+        c.model = "alpha-1"
+        // role == nil here: identical to `.ask`, runs the persistent session.
+        c.submit("first")
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+
+        c.cancel()
+        c.role = "coder"
+        c.submit("second")
+
+        // REGRESSION GUARD. Setting a role moves the run onto the one-shot
+        // `agent --role` path. The stale role-less persistent backend must be
+        // stopped rather than left running invisibly while a second, role-aware
+        // process also starts — so the reported active backend must no longer
+        // be the persistent one.
+        XCTAssertNil(c.activeBackendProvider)
     }
 
     // MARK: - Submit guards

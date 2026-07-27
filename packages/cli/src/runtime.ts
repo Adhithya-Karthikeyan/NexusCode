@@ -8,15 +8,43 @@
  */
 
 import type { CallContext } from "@nexuscode/core";
-import type { Runtime } from "@nexuscode/runtime";
+import type { NexusConfig } from "@nexuscode/config";
+import { buildRuntime, type Runtime } from "@nexuscode/runtime";
+import { buildAuthRegistry, resolveAuthSecrets } from "./auth.js";
 
-export {
-  buildRuntime,
-  routerMetadataFrom,
-  binaryOnPath,
-  type Runtime,
-  type ProviderStatus,
-} from "@nexuscode/runtime";
+export { routerMetadataFrom, binaryOnPath, type ProviderStatus } from "@nexuscode/runtime";
+export { buildRuntime, type Runtime };
+
+/**
+ * Build the runtime with the per-provider {@link ProviderAuthRegistry} wired
+ * (Wave 13): credential resolution for a provider that has been logged in goes
+ * through its auth strategy — an auto-refreshed OAuth Bearer (Anthropic "login
+ * like Claude Code"), an API key, a wrapped-CLI session, or the cloud credential
+ * chain — instead of the legacy env/api-key-only path. Fully additive: a
+ * provider with no strategy (e.g. `mock`) resolves exactly as before, and the
+ * env-var + `keys set` paths keep working (the api-key strategy reads the same
+ * env var / SecretStore ref). Shares ONE SecretStore between the auth registry
+ * and the runtime so a token stored at login is resolvable here.
+ *
+ * This is the DEFAULT runtime builder for any command that resolves,
+ * validates, lists, or reports on providers by id — `buildRuntime` alone
+ * cannot see a provider the user is only logged into via OAuth (no static
+ * `providers[]` config entry), which is what let `anthropic` silently vanish
+ * from `nexus providers`/`models`/`doctor`/`route`/etc despite a valid `nexus
+ * login anthropic` session. Reach for the plain (unauthed) `buildRuntime`
+ * export only when a command must describe the static config rather than the
+ * live signed-in session (see `nexus mcp`'s use in `packages/cli/src/commands.ts`,
+ * which only needs a SecretStore for MCP server secret refs and never resolves
+ * a provider id).
+ */
+export async function buildAuthedRuntime(
+  config: NexusConfig,
+  opts: Parameters<typeof buildRuntime>[1] = {},
+): Promise<Runtime> {
+  const secrets = opts.secrets ?? resolveAuthSecrets(config);
+  const authRegistry = buildAuthRegistry(config, secrets);
+  return buildRuntime(config, { ...opts, secrets, authRegistry });
+}
 
 /** One provider→model row for the TUI `/model` picker (a single provider's list). */
 export interface ProviderModelChoice {
