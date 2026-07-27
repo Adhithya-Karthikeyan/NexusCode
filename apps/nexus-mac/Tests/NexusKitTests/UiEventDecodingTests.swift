@@ -20,12 +20,12 @@ final class UiEventDecodingTests: XCTestCase {
 
     func testDecodesEveryEventVariant() throws {
         let events = UiEventDecoder.decodeStream(try fixture("events"))
-        XCTAssertEqual(events.count, 19, "every fixture line must decode to an event")
+        XCTAssertEqual(events.count, 20, "every fixture line must decode to an event")
 
         let types = Set(events.map(\.wireType))
         for expected in [
             "session", "route", "prompt", "agent", "reasoning", "text", "tool_call",
-            "tool_result", "diff", "approval", "usage", "failover", "done", "error",
+            "tool_result", "diff", "approval", "usage", "failover", "cache", "done", "error",
         ] {
             XCTAssertTrue(types.contains(expected), "no \(expected) event decoded")
         }
@@ -159,6 +159,59 @@ final class UiEventDecodingTests: XCTestCase {
         // end, not just at the type level.
         XCTAssertEqual(usage.costUsd, 0)
         XCTAssertNotNil(usage.costUsd)
+    }
+
+    // MARK: - Cache hit (`t: "cache"`)
+    //
+    // Bytes captured live from an isolated `NEXUS_CONFIG_DIR`/`NEXUS_DATA_DIR`/
+    // `NEXUS_CACHE_DIR` sandbox: `nexus config set cache.enabled true`, then
+    // the SAME `ask -p mock -m mock-fast <prompt> -o ndjson` run twice. The
+    // second run — a genuine cache hit — printed exactly:
+    //   {"t":"text","lane":"main","delta":"[mock-fast] Echo: cache verify prompt"}
+    //   {"t":"cache","lane":"main","hit":true}
+    //   {"t":"done","lane":"main","finishReason":"stop"}
+    // No `session`, no `usage` — a cache hit bypasses the engine entirely, so
+    // there's nothing to project for either. `lane` being present on `text`
+    // and `done` here is itself a real fix: `renderCachedResponse` used to
+    // emit untyped literals missing `lane` on those two.
+
+    func testCacheEventDecodesWithItsLaneAndHit() throws {
+        let line = #"{"t":"cache","lane":"main","hit":true}"#
+        guard case .cache(let cache)? = UiEventDecoder.decodeLine(line) else {
+            return XCTFail("expected a cache event")
+        }
+        XCTAssertEqual(cache.lane, "main")
+        XCTAssertTrue(cache.hit)
+        XCTAssertEqual(UiEvent.cache(cache).lane, "main", "cache must be lane-scoped like every other run event")
+        XCTAssertEqual(UiEvent.cache(cache).wireType, "cache")
+    }
+
+    func testCacheEventHitIsARealBooleanNotAHardcodedTrue() throws {
+        // `hit` is typed `Bool` on the wire specifically so a future "checked
+        // and missed" `false` is a value change, not a union change — decode
+        // must actually carry the value through, not assume every `cache`
+        // event means a hit.
+        let line = #"{"t":"cache","lane":"main","hit":false}"#
+        guard case .cache(let cache)? = UiEventDecoder.decodeLine(line) else {
+            return XCTFail("expected a cache event")
+        }
+        XCTAssertFalse(cache.hit)
+    }
+
+    func testCachedRunProducesTextCacheDoneWithNoSessionOrUsage() {
+        // Reproduces the exact real cache-hit stream byte-for-byte (see the
+        // section doc above) to guard the whole shape, not just `t: "cache"`
+        // in isolation — this is the run that would have looked broken had
+        // `lane` still been missing on `text`/`done`.
+        let stream = """
+        {"t":"text","lane":"main","delta":"[mock-fast] Echo: cache verify prompt"}
+        {"t":"cache","lane":"main","hit":true}
+        {"t":"done","lane":"main","finishReason":"stop"}
+        """
+        let events = UiEventDecoder.decodeStream(stream)
+        XCTAssertEqual(events.map(\.wireType), ["text", "cache", "done"])
+        XCTAssertEqual(events.map(\.lane), ["main", "main", "main"], "lane must survive on every event, not just cache")
+        XCTAssertTrue(events.allSatisfy { if case .unknown = $0 { return false }; return true })
     }
 
     func testUnknownEventTypeSurvivesAsUnknown() throws {

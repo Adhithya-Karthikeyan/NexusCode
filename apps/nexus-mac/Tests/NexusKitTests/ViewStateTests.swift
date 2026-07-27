@@ -167,6 +167,50 @@ final class ViewStateTests: XCTestCase {
         XCTAssertNil(state.runUsd, "the LATEST run is the unpriced one, even though an earlier run was priced")
     }
 
+    // MARK: - Cache hit (`t: "cache"`)
+    //
+    // A cache hit bypasses the engine entirely — a real cache-hit run prints
+    // exactly `text`, `cache`, `done`, with NO `session` and NO `usage` event
+    // (verified live; see `UiEventDecodingTests`). `totals`/`runUsd` must stay
+    // exactly as they were before the `cache` event: there is nothing to sum
+    // because nothing was billed, not a zero to record.
+
+    func testCacheHitMarksTheLiveTurnWithoutTouchingCostTotals() throws {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "hi")), ts: 0)
+        state.reduce(.text(.init(lane: "main", delta: "cached answer")), ts: 1)
+        state.reduce(.cache(.init(lane: "main", hit: true)), ts: 2)
+        state.reduce(.done(.init(lane: "main", finishReason: "stop")), ts: 3)
+
+        let turn = try XCTUnwrap(state.lanes["main"]?.finalized.first)
+        XCTAssertEqual(turn.cacheHit, true)
+        XCTAssertEqual(turn.text, "cached answer")
+        // No usage event ever arrived — the totals must read exactly as their
+        // initial state, not as a recorded zero.
+        XCTAssertEqual(state.totals.costUsd, 0)
+        XCTAssertFalse(state.totals.costIncomplete)
+        XCTAssertNil(state.runUsd, "never set — not the same as a confirmed-zero run cost")
+    }
+
+    func testOrdinaryTurnsHaveNoCacheHitSignalAtAll() {
+        // The common (non-cached) path must not silently start reading as
+        // "checked and missed" — absence of the event means `nil`, never `false`.
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "hi")), ts: 0)
+        state.reduce(.text(.init(lane: "main", delta: "a live answer")), ts: 1)
+        XCTAssertNil(state.lanes["main"]?.live?.cacheHit)
+    }
+
+    func testCacheMissSignalIsPreservedAsFalseNotCollapsedToHit() {
+        // `hit` is a real boolean, future-proofed for a "checked and missed"
+        // signal — the fold must carry that value through, not assume every
+        // `cache` event is a hit.
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "hi")), ts: 0)
+        state.reduce(.cache(.init(lane: "main", hit: false)), ts: 1)
+        XCTAssertEqual(state.lanes["main"]?.live?.cacheHit, false)
+    }
+
     // MARK: - Multi-agent lanes
 
     func testConcurrentLanesStayIndependent() throws {

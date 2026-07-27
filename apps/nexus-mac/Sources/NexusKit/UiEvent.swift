@@ -28,6 +28,7 @@ public enum UiEvent: Sendable, Hashable {
     case usage(Usage)
     case error(RunError)
     case done(Done)
+    case cache(Cache)
 
     /// An event whose `t` this build does not know. Never dropped: an unknown
     /// event still reaches the UI so a newer CLI degrades to "something
@@ -207,6 +208,22 @@ public enum UiEvent: Sendable, Hashable {
         public let finishReason: String
     }
 
+    public struct Cache: Sendable, Hashable, Codable {
+        public let lane: String
+        /// `true` on every `cache` event today — the CAG response cache
+        /// (`nexus ask`) only emits this on a HIT, short-circuiting the whole
+        /// provider dispatch: a miss falls through to a normal
+        /// `text`/…/`done` stream with no `cache` event at all, and (for
+        /// `ask`) with no `session`/`usage` events either, since a cache hit
+        /// bypasses the engine entirely — verified live: a real cache-hit run
+        /// prints exactly `text`, `cache`, `done`, nothing else. Typed as
+        /// `Bool`, not a literal `true`, so a future "checked and missed"
+        /// signal is a value change here, not a union change at every call
+        /// site. Mirrors `hit: boolean` on the TypeScript `cache` event
+        /// (`packages/core/src/projection.ts`).
+        public let hit: Bool
+    }
+
     /// The lane this event belongs to, when it has one.
     ///
     /// Lanes are how a multi-provider run keeps concurrent agents apart: a
@@ -226,6 +243,7 @@ public enum UiEvent: Sendable, Hashable {
         case .usage(let e): return e.lane
         case .error(let e): return e.lane
         case .done(let e): return e.lane
+        case .cache(let e): return e.lane
         case .unknown: return nil
         }
     }
@@ -247,6 +265,7 @@ public enum UiEvent: Sendable, Hashable {
         case .usage: return "usage"
         case .error: return "error"
         case .done: return "done"
+        case .cache: return "cache"
         case .unknown(let type, _): return type
         }
     }
@@ -275,6 +294,7 @@ extension UiEvent: Decodable {
         case "usage": self = .usage(try single.decode(Usage.self))
         case "error": self = .error(try single.decode(RunError.self))
         case "done": self = .done(try single.decode(Done.self))
+        case "cache": self = .cache(try single.decode(Cache.self))
 
         // `args` / `result` are `unknown` on the wire, so these two decode
         // through JSONValue rather than a generated struct.

@@ -20,10 +20,25 @@ private let readingColumnWidth: CGFloat = 660
 /// dump of the event stream it renders.
 struct ConversationView: View {
     @Environment(\.nexusTheme) private var theme
+    @Environment(WorkspaceModel.self) private var workspace
     @Bindable var controller: ConversationController
     @State private var draft = ""
     @State private var showsReasoning = false
     @FocusState private var composerFocused: Bool
+
+    // MARK: - Role picker
+    //
+    // Unlike providers/models (which stay plain data fed in from `ChatTab` in
+    // `RootView.swift`, so this view stays renderable with no process behind
+    // it), the role picker owns its `RolesController` directly: a role
+    // listing is a single self-contained call with no per-provider chaining
+    // to coordinate, and `WorkspaceModel` is already available via the
+    // environment at this point in the tree (`ChatTab` reads the same
+    // environment object one level up) — reaching for it here needed no
+    // change to `RootView.swift`/`NexusApp.swift` at all. `nexus roles` is
+    // never hardcoded (see `NexusRole`'s doc): a stale Swift copy of the role
+    // list is exactly the mistake this avoids.
+    @State private var rolesController: RolesController?
 
     // MARK: - Provider/model picker seam
     //
@@ -689,34 +704,42 @@ private struct GroupDivider: View {
     }
 }
 
-/// One row in a `DropdownPicker` — a provider, a model, or (for the compare/
-/// race "add backend" control) a provider offered as a backend.
+/// One row in a `DropdownPicker` — a provider, a model, a role (for the
+/// `.agent` role picker), or (for the compare/race "add backend" control) a
+/// provider offered as a backend.
 ///
-/// This is the seam described on `ConversationView`: `ProvidersController` in
-/// NexusKit is being built concurrently and may supply these from real
-/// provider/model data once it lands. Until then callers default to `[]` and
-/// the pickers render their empty state.
+/// Callers that have nothing loaded yet default to `[]` and the pickers
+/// render their empty state — `ChatTab` (`RootView.swift`) is what actually
+/// binds live `ProvidersController`/`RolesController` data into these.
 struct PickerOption: Identifiable, Equatable {
     let id: String
     var detail: String?
     var available: Bool
     var disabledReason: String?
     /// Provider kind (`"anthropic"`, `"openai"`, …) — colors the status dot
-    /// only. `nil` for options that don't need one (models, effort).
+    /// only. `nil` for options that don't need one (models, effort, roles).
     var kind: String?
+    /// A caution to surface for this option, shown on BOTH the popover row
+    /// and the closed picker button once selected — never buried behind a
+    /// click. `nil` for every provider/model/backend option today; only a
+    /// `.agent` role whose `permissionMode` isn't `"read-only"` sets this
+    /// (see `NexusRole.canWrite` and `ControlStrip.rolePicker`).
+    var warning: String?
 
     init(
         id: String,
         detail: String? = nil,
         available: Bool = true,
         disabledReason: String? = nil,
-        kind: String? = nil
+        kind: String? = nil,
+        warning: String? = nil
     ) {
         self.id = id
         self.detail = detail
         self.available = available
         self.disabledReason = disabledReason
         self.kind = kind
+        self.warning = warning
     }
 
     fileprivate func dotColor(theme: AppTheme) -> Color? {
@@ -797,6 +820,13 @@ private struct DropdownPicker: View {
 
     private var displayText: String { selection ?? placeholder }
 
+    /// The current selection's caution, if it has one — surfaced on the
+    /// CLOSED button too (not just inside the popover), so picking a
+    /// role that can write is never one click away from being invisible.
+    private var selectedWarning: String? {
+        options.first(where: { $0.id == selection })?.warning
+    }
+
     var body: some View {
         Button {
             isOpen = true
@@ -808,6 +838,12 @@ private struct DropdownPicker: View {
                 Text(displayText)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if let selectedWarning {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(theme.color(\.warningFg))
+                        .help(selectedWarning)
+                }
                 if isLoading {
                     ProgressView()
                         .controlSize(.mini)
@@ -827,7 +863,10 @@ private struct DropdownPicker: View {
             .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                    .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+                    .strokeBorder(
+                        selectedWarning != nil ? theme.color(\.warningFg).opacity(0.6) : theme.color(\.chromeBorderSubtle),
+                        lineWidth: 1
+                    )
             }
         }
         .buttonStyle(.plain)
@@ -879,12 +918,24 @@ private struct DropdownList: View {
                     Circle().fill(dot).frame(width: 6, height: 6)
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(option.id)
-                        .font(Kind.monoSmall)
+                    HStack(spacing: 4) {
+                        Text(option.id)
+                            .font(Kind.monoSmall)
+                        if option.warning != nil {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(theme.color(\.warningFg))
+                        }
+                    }
                     if let detail = option.detail {
                         Text(detail)
                             .font(Kind.micro)
                             .foregroundStyle(theme.color(\.textMuted))
+                    }
+                    if let warning = option.warning {
+                        Text(warning)
+                            .font(Kind.micro)
+                            .foregroundStyle(theme.color(\.warningFg))
                     }
                 }
                 Spacer(minLength: 0)

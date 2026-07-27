@@ -125,7 +125,7 @@ a tall scroll view.*
 
 ### STATE AS OF 2026-07-28 (overnight run)
 
-**Green:** Swift **295/295** (7.6s) · TypeScript **2213/2213** (222 files, exit 0)
+**Green:** Swift **314/314** (7.6s) · TypeScript **2215/2215** (222 files, exit 0)
 · both builds clean · 45/45 CLI commands healthy · zero hangs ·
 `docs/CAPABILITIES.md` (2908 lines) · `apps/nexus-mac/UI-INVENTORY.md`
 (885 lines, ~102 controls).
@@ -200,6 +200,26 @@ waiting on.**
 children with `stdio: ["ignore", …]`.** My own harness reported 641ms for the
 command that hung 22.8 minutes in a plain shell. **The measurement tool was
 hiding the bug.** Verify hangs with stdin actually inherited.
+
+### Cost honesty now has THREE states, not two
+
+The unpriced-cost work established `unknown ≠ zero`. Wiring the new `cache`
+UiEvent surfaced a third, verified against real bytes: **a cache-hit `ask` emits
+NO `usage` event at all** — no `session`, no `usage`, just:
+
+```
+{"t":"text","lane":"main","delta":"[mock-fast] Echo: …"}
+{"t":"cache","lane":"main","hit":true}
+{"t":"done","lane":"main","finishReason":"stop"}
+```
+
+So a cached turn's cost is a **confirmed** $0.00 (no model call happened), which
+is different again from "unknown" and from "a priced run that came to zero".
+`Turn.cacheHit` is `Bool?` on purpose: `nil` means never checked, `false` means
+checked-and-missed — `hit` is a real boolean, not a literal `true`.
+
+⬜ Open: the visible treatment. Proposal on the table is a quiet "cached" label
+where that turn's cost figure would otherwise render. Nobody has built it.
 
 ### Hard rules learned the hard way
 - **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An

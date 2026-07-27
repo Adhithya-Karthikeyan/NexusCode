@@ -87,6 +87,21 @@ public struct Turn: Sendable, Hashable, Identifiable {
     public var finished: Bool = false
     public var finishReason: String?
     public var error: TurnError?
+    /// `nil` until a `cache` event arrives for this turn (the ordinary,
+    /// live-provider-call path — no `usage` event is missing or unknown,
+    /// there's simply nothing cache-related to report). Once set, it carries
+    /// the event's `hit` verbatim — `true` today always (a miss never emits
+    /// this event; see `UiEvent.Cache`), kept as `Bool?` rather than
+    /// collapsing to a plain `Bool` so a future "checked and missed" `false`
+    /// is still distinguishable from "never checked" `nil`.
+    ///
+    /// This is genuinely useful, not just structural bookkeeping: a cache hit
+    /// never produces a `usage` event at all (short-circuits before the
+    /// engine, so there's no cost to report), which would otherwise leave a
+    /// turn indistinguishable from one where cost tracking simply failed.
+    /// Knowing `cacheHit == true` is what lets a view confidently say "$0.00,
+    /// confirmed — this answer came from cache" rather than "cost unknown".
+    public var cacheHit: Bool?
     public let startedTs: Double
 
     /// Whether this turn came from the agent loop at all.
@@ -395,6 +410,13 @@ extension ViewState {
             runUsd = e.costUsd
             lastUsage = (e.inputTokens, e.outputTokens)
             setHealth(providerFor(e.lane), .ok, "ok", ts)
+            eventCount += 1
+
+        case .cache(let e):
+            // A cache hit never comes with a `usage` event (see `Cache`'s
+            // doc) — `totals`/`runUsd` are deliberately untouched here, not
+            // zeroed. The turn itself is the only thing that changes.
+            withLiveTurn(e.lane, ts: ts) { $0.cacheHit = e.hit }
             eventCount += 1
 
         case .failover(let e):

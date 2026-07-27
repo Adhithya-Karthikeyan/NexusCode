@@ -119,6 +119,47 @@ export type UiEvent =
        * call site.
        */
       hit: boolean;
+    }
+  | {
+      t: "switch";
+      lane: string;
+      from: { providerId: string; modelId: string };
+      to: { providerId: string; modelId: string };
+      /**
+       * `false` means the switch was REFUSED — `to` never took effect, the
+       * session stayed on `from`, and `blockers` says exactly why (never a
+       * silent no-op). Mirrors `ProviderSwitchAssessment.compatible` from
+       * `./switching.js`, which is what actually decides this: an explicit
+       * switch that would silently lose a capability the conversation is
+       * using (tools, a modality, reasoning, …) is rejected outright rather
+       * than degraded.
+       */
+      accepted: boolean;
+      /** Every reason the switch was refused. Empty when `accepted`. */
+      blockers: string[];
+      /** Non-fatal caveats either way — e.g. "requires compaction for an N-token window". */
+      warnings: string[];
+      /**
+       * What the switch machinery claims survived — see
+       * `ProviderSwitchReceipt.preserved` in `./switching.js` for the exact
+       * list. Empty when not `accepted`.
+       *
+       * Read literally, not as a blanket guarantee: this names what the
+       * TRANSCRIPT AS IT EXISTS carries forward (text, assembled project
+       * context, provider-neutral transfer state), not everything the
+       * conversation ever contained. `replyMessages` in `./engine.js` already
+       * collapses every turn's reply to its final TEXT before it ever enters
+       * that transcript — a run's `toolCalls`/tool-result content never
+       * reaches it, switch or no switch, resume or not. So "preserved"
+       * accurately describes what a switch does NOT additionally lose, not
+       * that tool-call history round-trips a switch — it never did, and this
+       * event does not claim otherwise.
+       */
+      preserved: string[];
+      /** e.g. "compacted N older message(s) for target context". Empty when not `accepted`. */
+      adaptations: string[];
+      /** Free-text cause — a client-supplied reason, or why an automatic switch fired. */
+      reason: string;
     };
 
 /** Discriminant tag of a `UiEvent`. */
