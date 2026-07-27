@@ -3581,6 +3581,40 @@ function parseApprovalDecision(line: string): { id: string; decision: "allow" | 
 }
 
 /**
+ * Parse a `--persistent` control line requesting an in-process provider/model
+ * switch: `{"type":"switch","provider":"…","model":"…"}` — `model` is
+ * optional (falls back to `resolveSwitchModel`'s pick for the target
+ * provider, same as the TUI's `/provider` command). Symmetric with
+ * `parseApprovalDecision` above: `undefined` means "not a control line," so
+ * the reading loop falls through and treats it as an ordinary prompt.
+ */
+function parseSwitchDecision(line: string): { provider: string; model?: string } | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const o = parsed as Record<string, unknown>;
+  if (o["type"] !== "switch") return undefined;
+  const provider = o["provider"];
+  if (typeof provider !== "string" || provider.length === 0) return undefined;
+  const model = o["model"];
+  if (model !== undefined && (typeof model !== "string" || model.length === 0)) return undefined;
+  return typeof model === "string" ? { provider, model } : { provider };
+}
+
+/** `ToolRegistry` → `ChatRequest.tools`, mirroring `toolDefsFrom` in `@nexuscode/core`'s orchestrator (not exported from there). */
+function toolDefsFrom(registry: ToolRegistry): ToolDef[] {
+  return registry.list().map((t) => {
+    const def: ToolDef = { name: t.name, parameters: t.parameters };
+    if (t.description) def.description = t.description;
+    return def;
+  });
+}
+
+/**
  * Resolve `chat -t`'s permission mode from its flags — independent of
  * `resolvePermissionMode`/`buildToolGate` above (which stay untouched: `agent`/
  * `tools run` must keep their exact existing auto-approve behavior). `--yolo`
@@ -3618,11 +3652,16 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
     if (!resolved) return 1;
     providerId = resolved;
   }
-  const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
-  // Resolved once for the whole session, like `provider`/`model` — every line
-  // shares the effort a persistent process was started with, not a per-line
-  // re-evaluation of a flag that cannot change mid-session anyway.
-  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "chat", io);
+  // `provider`/`model`/`reasoning` are `let`, not `const`: a `--persistent`
+  // `{"type":"switch",…}` control line (see `performSwitch` below) reassigns
+  // all three in place after an accepted switch, so the very next `runTurn`
+  // (reading the same closure variables fresh) dispatches to the new target
+  // with no other state to thread through.
+  let model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
+  // Re-derived on every switch too (see `performSwitch`) — a provider that
+  // does not honor reasoning effort must not silently keep stale params from
+  // whatever provider WAS active when `--effort` was first applied.
+  let reasoning = applyEffort(effortResult.effort, providerId, runtime, "chat", io);
   const output = parseOutput(args);
   // `--persistent`: hold the process open and read stdin INCREMENTALLY — one
   // line dispatched as a turn as soon as it arrives — instead of the default
