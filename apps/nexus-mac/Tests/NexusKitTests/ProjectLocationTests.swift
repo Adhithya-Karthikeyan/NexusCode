@@ -69,6 +69,30 @@ final class ProjectLocationTests: XCTestCase {
         )
     }
 
+    func testRejectsARememberedHomeDirectoryFallingBackToTheWorkingDirectory() {
+        // The actual reported bug: an install that hit it before this fix
+        // already has home persisted as `remembered` in UserDefaults — that
+        // value was never a deliberate choice (nothing in the UI lets you pick
+        // your whole home folder as a project), it's just this bug's past
+        // output. So it gets the same rejection as a working directory equal
+        // to home, and resolution falls through to the next candidate exactly
+        // like any other invalid `remembered` value does.
+        XCTAssertEqual(
+            resolve(remembered: "/Users/x", cwd: "/Users/x/project", home: "/Users/x"),
+            "/Users/x/project"
+        )
+    }
+
+    func testRejectsARememberedHomeDirectoryFallingAllTheWayToTheDedicatedWorkspace() {
+        // Same as above, but launched with no usable working directory either
+        // (e.g. a Finder relaunch reporting "/") — must land on the dedicated
+        // workspace, never silently re-accept the remembered home.
+        XCTAssertEqual(
+            resolve(remembered: "/Users/x", cwd: "/", home: "/Users/x"),
+            "/Users/x/Library/Application Support/NexusCode/Workspace"
+        )
+    }
+
     func testPlausibilityRule() {
         XCTAssertFalse(ProjectLocation.isPlausibleProject("/"))
         XCTAssertFalse(ProjectLocation.isPlausibleProject(""))

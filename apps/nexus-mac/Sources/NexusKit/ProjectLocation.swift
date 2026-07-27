@@ -10,9 +10,10 @@ import Foundation
 public enum ProjectLocation {
     /// Resolve the directory to open.
     ///
-    /// Order: the directory the user last chose (if it still exists), then the
-    /// process working directory when it looks like a real project, then a
-    /// dedicated, empty workspace folder — NEVER the home directory itself.
+    /// Order: the directory the user last chose (if it still exists AND isn't
+    /// home), then the process working directory when it looks like a real
+    /// project (and also isn't home), then a dedicated, empty workspace folder
+    /// — NEVER the home directory itself.
     ///
     /// A launch from Finder reports `/` as the working directory, which is never
     /// a project, so it is explicitly rejected rather than accepted as a default.
@@ -25,13 +26,26 @@ public enum ProjectLocation {
     /// permission prompt on first launch, and turns a should-be-instant window
     /// open into a multi-second index of someone's entire life. So it is
     /// rejected here the same way `/` is.
+    ///
+    /// `remembered` gets the identical rejection, not just `workingDirectory`:
+    /// the ONLY way home could ever have been persisted as `remembered` is this
+    /// same bug having already picked it as a past default (nothing before this
+    /// fix let a user deliberately pick their whole home folder as a project
+    /// directory via `chooseProjectDirectory` and have that be sensible — the
+    /// UI has no such flow). So a remembered value equal to `home` is not a
+    /// real preference to preserve; it is exactly the state this fix exists to
+    /// migrate away from, and re-resolves the same as if nothing were
+    /// remembered at all. Silent migration, not a prompt: it costs the user
+    /// nothing they actually chose, and it's what makes this fix apply
+    /// retroactively to an install that already hit the bug, not just to a
+    /// fresh one.
     public static func resolve(
         remembered: String?,
         workingDirectory: String,
         home: String,
         directoryExists: (String) -> Bool
     ) -> URL {
-        if let remembered, !remembered.isEmpty, directoryExists(remembered) {
+        if let remembered, !remembered.isEmpty, remembered != home, directoryExists(remembered) {
             return URL(fileURLWithPath: remembered)
         }
         if isPlausibleProject(workingDirectory), workingDirectory != home, directoryExists(workingDirectory) {
