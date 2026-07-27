@@ -221,6 +221,39 @@ checked-and-missed — `hit` is a real boolean, not a literal `true`.
 ⬜ Open: the visible treatment. Proposal on the table is a quiet "cached" label
 where that turn's cost figure would otherwise render. Nobody has built it.
 
+### The OODA framework is reachable from the app (G1 + G2)
+
+`nexus roles` was written FOR the app's picker and nothing consumed it; nothing
+ever set `ConversationController.role`. Now: `Roles.swift` + `RolesController`
+mirror the `Providers` pattern, and the picker appears in the ControlStrip in
+`.agent` mode with a `"native"` sentinel for "no role" as a first-class choice.
+
+Two judgement calls worth keeping:
+- **`canWrite` treats a MISSING `permissionMode` as "warn".** The CLI's own
+  fallback for absent is `read-only`, but a client cannot distinguish "the CLI
+  applied its safe default" from "the field is missing entirely", so it errs
+  toward the visible warning rather than silently trusting an unreadable field.
+- The warning renders on **both** the popover row and the closed button, so a
+  write-capable role's warning is never one click away from invisible.
+
+Also fixed: role runs now get `--resume`. The app had refused, on a comment that
+was true when written and false by the time it was read.
+
+**Verified:** the real CLI emits exactly what the picker expects — 9 roles, all
+with descriptions, and precisely 4 write-capable (`coordinator`, `coder`,
+`tester`, `doc-writer`). 13 `RolesTests` lock that 4/5 split against the real
+presets in `packages/agent/src/roles.ts`.
+⬜ Not yet seen: the picker populated by the REAL binary. It was verified with a
+fake `nexus` returning the same shapes, and the shapes are confirmed identical,
+so the residual risk is low — but nobody has watched it happen.
+
+⚠️ **AppleScript/System Events CANNOT drive this UI.** It reports every SwiftUI
+button's description as the literal string `"button"`, because SwiftUI exposes
+labels via `kAXDescriptionAttribute` backed by `NSAttributedString`, which
+System Events fails to marshal. This produced one false accessibility finding
+(a claim that nav rows had no labels — they did) and one failed verification
+attempt. **Use a native `AXUIElementCopyAttributeValue` walk instead.**
+
 ### Hard rules learned the hard way
 - **NEVER drive the GUI with synthetic keystrokes or coordinate clicks.** An
   agent's coordinate click landed in the owner's real Notes document, typed into

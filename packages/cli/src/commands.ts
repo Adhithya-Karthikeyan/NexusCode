@@ -153,6 +153,7 @@ import {
   preflightModelSwitch,
   preflightProviderSwitch,
   reasoningSupportedFor,
+  resolveSwitchModel,
   type SwitchContext,
   type SwitchResult,
 } from "./model-switch.js";
@@ -593,6 +594,16 @@ function renderStreaming(ev: UiEvent, output: OutputMode, io: Io): void {
     case "failover":
       io.err(`\n[failover] ${ev.from} → ${ev.to} (${ev.code})\n`);
       break;
+    case "switch": {
+      const from = `${ev.from.providerId}/${ev.from.modelId}`;
+      const to = `${ev.to.providerId}/${ev.to.modelId}`;
+      if (!ev.accepted) {
+        io.err(`\n[switch] ${from} → ${to} BLOCKED: ${ev.blockers.join("; ")}\n`);
+        break;
+      }
+      io.err(`\n[switch] ${from} → ${to}${ev.adaptations.length > 0 ? ` (${ev.adaptations.join("; ")})` : ""}\n`);
+      break;
+    }
     case "error":
       io.err(`\n${humanErrorLine(ev.code, ev.message)}\n`);
       break;
@@ -3780,6 +3791,158 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   }
 
   /**
+   * Handle a `--persistent` `{"type":"switch",…}` control line: a REAL
+   * in-process provider/model switch (§ CAPABILITIES.md G5), not the
+   * app's previous tear-down-and-`--resume` — the same live `session`
+   * (same id, same engine) just starts dispatching its NEXT turn to a
+   * different adapter. Symmetric with `ApprovalBroker`: never throws, always
+   * emits exactly one `switch` UiEvent reporting what happened, and a
+   * REFUSED switch changes nothing (`providerId`/`model`/`reasoning` stay
+   * exactly as they were — the current turn, and every one after it until a
+   * switch is accepted, keeps going to the CURRENT target).
+   *
+   * What this does NOT do, despite the receipt's `preserved` list: recover
+   * tool-call history. `replyMessages` (`@nexuscode/core`'s `engine.ts`)
+   * already collapses every turn's reply to its final text before it ever
+   * reaches `session.transcript` — true for EVERY turn boundary, switch or
+   * not, resume or not (`RunResult.toolCalls` exists and is simply never
+   * read there). `assessSwitchTarget`/`adaptRequestForSwitch` operate on
+   * `session.transcript` as it already is; they cannot restore content that
+   * was never written to it. So a switch carries forward exactly as much
+   * tool-call context as staying on the same provider would have — none —
+   * and the `switch` event's `preserved` field must be read as "not
+   * ADDITIONALLY lost by switching," never as "tool calls survive this."
+   */
+  async function performSwitch(targetProvider: string, targetModel: string | undefined): Promise<void> {
+    const emit = (ev: UiEvent): void => renderStreaming(ev, output === "ndjson" ? "ndjson" : "text", io);
+    const from = { providerId, modelId: model };
+
+    if (!isProviderUsable(runtime, targetProvider)) {
+      emit({
+        t: "switch",
+        lane: "main",
+        from,
+        to: { providerId: targetProvider, modelId: targetModel ?? "" },
+        accepted: false,
+        blockers: [`"${targetProvider}" is not available (no usable credential)`],
+        warnings: [],
+        preserved: [],
+        adaptations: [],
+        reason: "explicit switch requested by client",
+      });
+      return;
+    }
+    const resolvedModel =
+      targetModel ?? resolveSwitchModel(runtime, targetProvider, config);
+    const to = { providerId: targetProvider, modelId: resolvedModel };
+
+    let caps: Capabilities;
+    try {
+      caps = runtime.registry.capabilitiesOf(targetProvider);
+    } catch (e) {
+      emit({
+        t: "switch",
+        lane: "main",
+        from,
+        to,
+        accepted: false,
+        blockers: [`could not read "${targetProvider}"'s capabilities: ${(e as Error).message}`],
+        warnings: [],
+        preserved: [],
+        adaptations: [],
+        reason: "explicit switch requested by client",
+      });
+      return;
+    }
+
+    // What THIS conversation, as it stands, actually needs — not a request
+    // for a specific new turn (there isn't one; a switch is its own control
+    // line, not a prompt), so `messages` is the transcript so far and there
+    // is no new user turn to append.
+    const probeRequest: ChatRequest = {
+      model: resolvedModel,
+      messages: [...session.transcript],
+      ...(system !== undefined ? { system } : {}),
+      ...(toolRegistry ? { tools: toolDefsFrom(toolRegistry) } : {}),
+      ...(reasoning ? { reasoning } : {}),
+    };
+    const sourcePricing = runtime.pricing[model] ?? runtime.pricing[`${providerId}/${model}`];
+    const assessment: ProviderSwitchAssessment = assessSwitchTarget(
+      targetProvider,
+      resolvedModel,
+      caps,
+      inferSwitchRequirements(probeRequest),
+      {
+        pricing: runtime.pricing,
+        ...(sourcePricing ? { sourcePrice: sourcePricing } : {}),
+        ...(config.switching.maxCostMultiplier !== undefined
+          ? { maxCostMultiplier: config.switching.maxCostMultiplier }
+          : {}),
+        ...(config.switching.contextSafetyMarginTokens !== undefined
+          ? { contextSafetyMarginTokens: config.switching.contextSafetyMarginTokens }
+          : {}),
+      },
+    );
+    if (!assessment.compatible) {
+      emit({
+        t: "switch",
+        lane: "main",
+        from,
+        to,
+        accepted: false,
+        blockers: assessment.blockers,
+        warnings: assessment.warnings,
+        preserved: [],
+        adaptations: [],
+        reason: "explicit switch requested by client",
+      });
+      return;
+    }
+
+    const adapted = adaptRequestForSwitch(
+      probeRequest,
+      assessment,
+      config.switching.contextSafetyMarginTokens,
+    );
+    // Apply any compaction to the LIVE session now, not lazily on the next
+    // turn — so a client asking "what does the transcript look like" between
+    // the switch and the next prompt sees the truth, and the next `runTurn`
+    // does not have to know a switch just happened.
+    if (adapted.droppedMessages > 0) session.setTranscript(adapted.request.messages);
+
+    const receipt = makeSwitchReceipt({
+      sessionId: session.id,
+      turnId: `t_${randomUUID()}`,
+      from: { providerId: from.providerId, modelId: from.modelId, reason: "explicit" },
+      to: { providerId: to.providerId, modelId: to.modelId, reason: "explicit" },
+      reason: "explicit switch requested by client",
+      automatic: false,
+      adaptations: adapted.adaptations,
+      warnings: assessment.warnings,
+    });
+
+    providerId = targetProvider;
+    model = resolvedModel;
+    // Re-applied for the NEW target — `applyEffort` already warns (and drops
+    // the param rather than sending it) when the target does not honor
+    // reasoning effort, exactly as it does on a fresh `chat` startup.
+    reasoning = applyEffort(effortResult.effort, providerId, runtime, "chat", io);
+
+    emit({
+      t: "switch",
+      lane: "main",
+      from,
+      to,
+      accepted: true,
+      blockers: [],
+      warnings: receipt.warnings,
+      preserved: receipt.preserved,
+      adaptations: receipt.adaptations,
+      reason: receipt.reason,
+    });
+  }
+
+  /**
    * Dispatch one line as a turn on the shared session and project its events
    * to `io`. Returns `true` when the turn did NOT end in a successful reply,
    * so both stdin modes below can compute the same process exit code.
@@ -3876,6 +4039,11 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
         for await (const raw of rl) {
           const line = raw.trim();
           if (line.length === 0) continue;
+          const decision = parseSwitchDecision(line);
+          if (decision) {
+            await performSwitch(decision.provider, decision.model);
+            continue;
+          }
           if (await runTurn(line)) failed = true;
         }
       } finally {
@@ -3913,6 +4081,16 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
           const decision = parseApprovalDecision(line);
           if (decision) {
             approvalBroker.decide(decision.id, decision.decision);
+            continue;
+          }
+          // Same "out of band" treatment as an approval decision, and for the
+          // same reason: it only ever affects the NEXT turn (`runTurn` reads
+          // `providerId`/`model` fresh), so there is nothing to gain by
+          // waiting for `promptQueue` to drain, and a switch requested WHILE
+          // a turn is mid-tool-call-approval should not have to wait behind it.
+          const sw = parseSwitchDecision(line);
+          if (sw) {
+            await performSwitch(sw.provider, sw.model);
             continue;
           }
           promptQueue.push(line);
