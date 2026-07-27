@@ -29,6 +29,7 @@ public enum UiEvent: Sendable, Hashable {
     case error(RunError)
     case done(Done)
     case cache(Cache)
+    case `switch`(Switch)
 
     /// An event whose `t` this build does not know. Never dropped: an unknown
     /// event still reaches the UI so a newer CLI degrades to "something

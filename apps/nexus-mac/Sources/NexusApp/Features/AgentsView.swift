@@ -70,7 +70,7 @@ struct AgentsView: View {
         // context above it.
         PageScaffold {
             if hasReadout {
-                HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud)
+                HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud, conversation: workspace.conversation)
                     .padding(.horizontal, Space.xl)
                     .padding(.top, Space.xl)
                     .padding(.bottom, Space.lg)
@@ -155,6 +155,20 @@ private struct HeaderStrip: View {
     let roleRuns: [AgentRow]
     let omcAgents: [AgentRow]
     let hud: OMCSessionHUD?
+    /// Real CLI backing for "stop": `ConversationController.cancel()`
+    /// terminates the live `nexus` process (see `NexusClient.stream`'s
+    /// cancellation handler). `nil` only when there is no conversation to
+    /// drive one at all (no `nexus` binary resolved for this project).
+    ///
+    /// Scoped to the WHOLE active run, not one card: lanes and role runs
+    /// both ride the SAME single process (`ConversationController.task`) —
+    /// compare/race is one `nexus compare` invocation multiplexing several
+    /// lanes over one stream, not N independently-cancelable processes — so
+    /// a per-card Stop button would either lie (implying it stops only that
+    /// card) or duplicate this exact action N times. OMC subagents are a
+    /// separate system this app only reads from; there is no `nexus`
+    /// command to cancel one, so they get no Stop control at all.
+    let conversation: ConversationController?
 
     private var laneRunning: Int { lanes.filter(\.isRunning).count }
     private var roleRunRunning: Int { roleRuns.filter(\.isRunning).count }
@@ -195,6 +209,17 @@ private struct HeaderStrip: View {
                         text: "\(omcRunning) omc",
                         tone: omcRunning > 0 ? .accent : .neutral
                     )
+
+                    if conversation?.isRunning == true {
+                        Button {
+                            conversation?.cancel()
+                        } label: {
+                            Label("Stop", systemImage: "stop.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .buttonStyle(SoftButton(tone: .danger, size: .compact))
+                        .help("Cancels the active nexus run (lanes and role runs share one process — this stops all of them)")
+                    }
                 }
 
                 if let hud {
