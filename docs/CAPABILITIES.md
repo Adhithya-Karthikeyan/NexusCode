@@ -582,4 +582,350 @@ Line numbers are from the working tree at the time of writing.
   **GAPS G5**.
 - **Status:** `UNVERIFIED`
 
+---
+
+# Part III — Run commands
+
+## 20. `nexus ask` (aliases `run`, `q`)
+
+- **What:** One-shot completion.
+- **Surface:** `cmdAsk` `packages/cli/src/commands.ts:682-781`.
+- **Inputs:** positional prompt and/or piped stdin (joined with `\n\n`, `commands.ts:218-222`);
+  `-p`, `-m`, `-s/--system`, `-o`, `-t/--tools`.
+- **Outputs:** stdout = answer text (streamed in `text` mode); stderr =
+  `[usage] <p>:<m> in=N out=N cost=$… finish=…` (`commands.ts:500-504`) and, when observability is
+  on, `[trace] ttft=…ms latency=…ms spans=N` (`commands.ts:439-452`).
+  `UiEvent`s: `session`, `text`, `usage`, `done`, plus `error`/`failover` as they occur.
+  Exit `0` iff the winner settled `ok`.
+- **Expected behaviour:**
+  - **`-t`/`--tools` re-routes the whole command to `cmdAgent`** (`commands.ts:684`) — `ask --tools`
+    and `agent` are the same code path.
+  - Empty prompt (no arg, nothing piped) ⇒ `nexus ask: no prompt …`, exit `2`.
+  - The default system prompt is injected when `-s` is absent: environment framing with cwd, OS and
+    date, plus a statement of available tools/MCP (`defaultSystemPrompt`, `commands.ts:865-873`).
+  - Project context is assembled **before** the response-cache lookup, so the cache signature covers
+    the exact context sent (`commands.ts:717-736`). A context-source failure is swallowed —
+    enrichment is best-effort and must not sink the run (`commands.ts:734-736`).
+  - Response cache (§46): an identical request short-circuits the provider entirely and prints
+    `[cache] hit …` on stderr, exit `0` (`commands.ts:744-758`). A fresh successful answer is stored
+    (`commands.ts:774-779`).
+  - Explicit `-p` unavailable ⇒ hard error exit `1`; no `-p` ⇒ graceful fallback with a notice (§11).
+  - SIGINT cancels the turn scope (`commands.ts:380-383`).
+  - **`ask` does not accept `--resume`** — the flag parses but nothing reads it.
+- **macOS app:** `RunMode.ask` (`AppState.swift:86`), but `.ask` runs through
+  `chat --persistent` rather than `nexus ask` (`AppState.swift:248-250`). A `NexusCommand.ask(...)`
+  factory exists and appends `--resume` (`NexusClient.swift:50-62`) but is unused by the UI — and
+  the flag would do nothing. See **CONTRADICTIONS C4**.
+- **Status:** `UNVERIFIED`
+
+## 21. `nexus agent` — the native tool-execution loop
+
+- **What:** An agentic run where the harness executes tools locally and re-invokes the provider.
+- **Surface:** `cmdAgent` `packages/cli/src/commands.ts:993-1258`; dispatch
+  `dispatchAgent` `packages/core/src/orchestrate/orchestrator.ts:2227`; loop semantics documented
+  `orchestrator.ts:1685-1691`.
+- **Inputs:** prompt/stdin; `-p`, `-m`, `-s`, `-o`, `--max-turns` (default **8**,
+  `commands.ts:1075-1076`), `--cwd`, permission flags `--yolo` / `--approve` / `--read-only`,
+  `--principal` (enterprise).
+- **Tool set assembled** (`commands.ts:1040-1062`): built-ins → LSP tools (if `lsp.enabled`) →
+  enabled tool groups → MCP server tools → plugin-contributed tools.
+- **Outputs:** stdout = answer; stderr = `[tool-call] <name>`, `[tool-result] ok|error`,
+  `[file-edit] <path>` + patch, `[approval] …`, `[failover] …`, `[usage] …`.
+  `UiEvent`s: `session`, `text`, `reasoning`, `tool_call`, `tool_result`, `diff`, `approval`,
+  `usage`, `error`, `done`.
+- **Expected behaviour:**
+  - **`--role <name>` promotes the run to the OODA framework** and returns early
+    (`commands.ts:1005-1012`) — see §22.
+  - **A `cli-subprocess` provider is redirected to `cmdCode`** (`commands.ts:1032-1034`), because it
+    runs its own loop and would otherwise have its already-executed tool calls re-executed locally.
+  - Default permission mode is **`read-only`** (`resolvePermissionMode`, `commands.ts:821-826`).
+    `--yolo` → `full-access`, `--approve` → `workspace-write`.
+  - `buildToolGate(..., {approveAskTier: true})` (`commands.ts:1064`) attaches an
+    **auto-approver for the `ask` tier** even in read-only, so network/MCP tools can run while
+    write/exec stay hard-denied (`commands.ts:835-854`). There is **no human approval** on this path.
+  - Intermediate `run-start`/`run-end` chunks are collapsed so the merged stream still has exactly
+    one `run-start` first and one terminal last (`orchestrator.ts:1689-1691`).
+  - A throwing `toolInterceptor` is caught and never breaks or blocks the run
+    (`orchestrator.ts:1498-1500`).
+  - Enterprise (when `mode:"on"`): a `run.start` audit record, a pre-dispatch budget gate that can
+    `deny` (exit `1`), `downgrade` (re-point `run.adapterId`/`run.model`, or deny when no target),
+    or `warn` (`commands.ts:1136-1174`); post-run spend accrual (`commands.ts:1207-1217`).
+  - Hooks: `session-start` then `pre-run`; a `pre-run` veto aborts before any dispatch, exit `1`
+    (`commands.ts:1178-1191`). `post-run`, `on-error` on failure, and `session-end` in `finally`
+    (`commands.ts:1219-1248`).
+  - Cleanup in `finally`: hooks closed, SIGINT listener removed, observability flushed, session and
+    engine disposed, MCP closed, transfer + store closed (`commands.ts:1245-1257`).
+- **macOS app:** `RunMode.agent` with `role == nil` (`AppState.swift:88`), which routes through
+  `chat --persistent` (`AppState.swift:248-250`) — so the app's "Agent" mode is **not**
+  `nexus agent`; it is `chat -t --ask`. See **CONTRADICTIONS C5**.
+- **Status:** `UNVERIFIED`
+
+## 22. `nexus agent --role <name>` — the OODA framework
+
+- **What:** A specialized role running Observe→Reason→Plan→Act→Evaluate→Repeat, with plan drafting,
+  reflection, retry/self-correction, dynamic replanning, and sub-agent delegation.
+- **Surface:** `runAgentOoda` `packages/cli/src/commands.ts:1274-1511`; loop
+  `packages/agent/src/runner.ts`; policies `packages/agent/src/policies.ts`; role registry
+  `packages/agent/src/roles.ts`.
+- **Inputs:** `--role`, `--max-steps` (default = the role's budget, `commands.ts:1370-1373`),
+  `--max-turns` (per OODA step, default 8, `commands.ts:1374-1375`), `--cwd`, permission flags,
+  `--resume <id>` / `--continue`, `-p`, `-m`, `-o`.
+- **Outputs:**
+  - stderr: `[resume] <id> — restored N message(s) (text only; tool calls are not replayed)` or a
+    "no stored transcript" line; **always** `[session] <id>` (`commands.ts:1429-1441`); a readable
+    per-phase step log, one line per OODA narration (`commands.ts:1479-1483`);
+    `[agent] role=… steps=… stop=… progress=…% goalMet=…` and `[usage] …`
+    (`commands.ts:1533-1542`).
+  - `-o json` → `{role, goal, stopReason, goalMet, steps, finalText, progress, plan[], usage}`
+    (`agentResultJson`, `commands.ts:1514-1530`).
+  - `-o ndjson` → the `agent` `UiEvent` (phase/role/step/text/data) paired with `reasoning`.
+  - Exit `0` unless `stopReason === "error"` or `finalText` is empty (`commands.ts:1498`).
+- **Expected behaviour:**
+  - **A `cli-subprocess` provider is refused, not redirected** (`commands.ts:1322-1330`, exit `2`)
+    with a three-reason explanation: the CLI's tool names don't resolve, the role's sandbox is
+    unenforceable, and `--cwd` doesn't reach it. Both working routes are named.
+  - An unknown role ⇒ stderr listing `AGENT_ROLES`, exit `2` (`commands.ts:1291-1294`).
+  - Permission mode: an explicit CLI flag wins; otherwise **the role's own `permissionMode`**
+    (`commands.ts:1353-1361`).
+  - **`--resume` / `--continue` are honoured** through the same `resolveResumeTarget` +
+    `engine.openSession({resume})` path `chat` uses (`commands.ts:1427-1428`).
+    What resumes is the **conversation**. What deliberately does **not** resume is plan/task state —
+    `store` is a fresh `:memory:` TaskStore every invocation (`commands.ts:1380`,
+    documented `commands.ts:1412-1426`).
+  - `turn.input` is passed as `AgentRunOptions.input` (`commands.ts:1459`) — without it the loop
+    falls back to a bare `userText(goal.objective)` and drops resumed history.
+  - Background-job control tools are added to this path only (`jobTools`, `commands.ts:1339-1340`),
+    so a coder/tester role can launch and poll long-running commands.
+  - Honest success signalling (`packages/agent/src/policies.ts:15-33`): a goal is `met` only on
+    evidence — either every declared success criterion appears in the accumulated evidence, or a
+    dedicated tool-free verify turn returns a strict verdict. Otherwise the run reports
+    `indeterminate`. **Producing text is not evidence.**
+  - Delegation: a reflection may carry a `delegate` directive; the sub-agent runs with
+    `parentGate.deriveChild(def.permissionMode)`, which **intersects** the ladder so a child can
+    only narrow, never widen (`packages/agent/src/runner.ts:479-504`,
+    `packages/tools/src/permission.ts:129-150`).
+  - `processManager.killAll()` in `finally` (`commands.ts:1507`) — background jobs never outlive the run.
+  - The step log is suppressed under `-o ndjson` so structured `agent` events reach the wire
+    instead of prose on stderr (`commands.ts:1471-1483`).
+- **The nine shipped roles** (`packages/agent/src/roles.ts:54-165`):
+  | Role | Sandbox | Steps | Tools |
+  | --- | --- | --- | --- |
+  | `coordinator` | `workspace-write` | 12 | `*` |
+  | `planner` | `read-only` | 4 | `fs_read`, `fs_search` |
+  | `coder` | `workspace-write` | 10 | `fs_read`, `fs_search`, `fs_write`, `fs_patch`, `shell_exec` |
+  | `reviewer` | `read-only` | 6 | `fs_read`, `fs_search` |
+  | `tester` | `workspace-write` | 8 | `fs_read`, `fs_search`, `fs_write`, `shell_exec` |
+  | `researcher` | `read-only` | 6 | `fs_read`, `fs_search` |
+  | `architect` | `read-only` | 5 | `fs_read`, `fs_search` |
+  | `doc-writer` | `workspace-write` | 6 | `fs_read`, `fs_search`, `fs_write` |
+  | `security-reviewer` | `read-only` | 6 | `fs_read`, `fs_search` |
+  No preset pins a model or provider — roles are provider-neutral by construction.
+- **macOS app:** `ConversationController.role` exists (`AppState.swift:164`) and correctly moves the
+  run onto the one-shot path (`AppState.swift:248-250`, `:280-282`). **No UI ever sets it** — only
+  tests do. And `oneShotArguments` explicitly refuses to pass `--resume` for a role run
+  (`AppState.swift:292-298`) on the now-false premise that the CLI ignores it.
+  See **GAPS G1, G2** and **CONTRADICTIONS C1**.
+- **Status:** `UNVERIFIED`
+
+## 23. `nexus plan <objective>`
+
+- **What:** Turn an objective into a verifiable, dependency-ordered task plan.
+- **Surface:** `cmdPlan` `packages/cli/src/commands.ts:1571-1589`; tree renderer
+  `renderPlanTree` `commands.ts:1547-1569`.
+- **Inputs:** objective positional/stdin; `--role` (default `planner`, `commands.ts:1579`);
+  everything `agent --role` accepts.
+- **Outputs:** `text` → `plan for: <objective>` then an indented tree with status marks
+  `[ ]` todo, `[~]` in_progress, `[x]` blocked, `[✓]` done, `[-]` cancelled
+  (`commands.ts:1555-1561`), then the agent trailer. `(no tasks drafted)` when the plan is empty.
+- **Expected behaviour:**
+  - It is `runAgentOoda` with a role default, so every §22 behaviour applies — including
+    `--resume`, the subprocess refusal, and the `:memory:` task store.
+  - **The plan is not persisted.** `renderPlanTree` reads `res.result.plan` from the in-memory
+    store; nothing writes it to the durable `nexus task` store. See **GAPS G3**.
+  - `-o json` prints the agent result JSON (from `runAgentOoda`), not a separate plan document;
+    `-o text` is the only mode that renders the tree (`commands.ts:1582`).
+- **macOS app:** `NOT SURFACED` — the Tasks tab reads `nexus task list`, which `plan` never writes to.
+- **Status:** `UNVERIFIED`
+
+## 24. `nexus roles`
+
+- **What:** The machine-readable catalog of roles `--role` accepts.
+- **Surface:** `cmdRoles` `packages/cli/src/commands.ts:1632-1664`; listing type `RoleListing`
+  `commands.ts:1594-1607`.
+- **Inputs:** `-o json|ndjson|text`.
+- **Outputs:**
+  - `json`/`ndjson` → `{"roles":[{id, description?, tools[], maxSteps, permissionMode, model?, adapterId?}]}`
+    (`commands.ts:1651-1654`). Note ndjson emits the **same single object**, not one line per role.
+  - `text` → `id  permissionMode  NN steps  tool,tool` then an indented description line.
+- **Expected behaviour:**
+  - Every field is read from the same `createAgentRegistry()` that `--role` resolves against, so the
+    catalog cannot list a role that is not runnable (`commands.ts:1634-1649`).
+  - `permissionMode` mirrors `runAgentOoda`'s own fallback (`?? "read-only"`), so what is listed is
+    what is applied (`commands.ts:1643`).
+  - The assembled **system prompt is deliberately omitted**; the one-line human `description` is a
+    distinct `AgentDefinition` field (the role preset's `summary`,
+    `packages/agent/src/roles.ts:224`), never a slice of the prompt.
+  - `["*"]` renders as `all tools`.
+  - Always exits `0`; there is no failure path.
+- **macOS app:** **`NOT SURFACED`.** The app never invokes `nexus roles` — no occurrence of
+  `"roles"` exists anywhere in `apps/nexus-mac/Sources/`. See **GAPS G2**.
+- **Status:** `UNVERIFIED`
+
+## 25. `nexus code` — subprocess coding CLIs
+
+- **What:** Drive a wrapped vendor coding CLI (`claude-code` / `codex`) through the same engine path
+  as any other provider.
+- **Surface:** `cmdCode` `packages/cli/src/commands.ts:2208-2252`; adapters
+  `packages/providers/claude-code/src/index.ts`, `packages/providers/codex/src/index.ts`, shared
+  base `packages/providers/subprocess/src/base.ts` (574 lines).
+- **Inputs:** task positional/stdin; `-a/--agent <claude-code|codex>` (default `claude-code`,
+  `commands.ts:2222`), `--provider` also accepted; `-m`, `-s`, `-o`.
+- **Outputs:** stdout = the answer; stderr = reasoning deltas, `[file-edit] <path>` + patch,
+  `[tool-call]`/`[tool-result]`, `[approval] <kind>: <detail>`.
+  `UiEvent`s include `diff` and `approval` (the wrapped CLI's own `approval-request` chunk,
+  projected at `projection.ts:241-242` — this flow **never** carries a `resolution`).
+- **Expected behaviour:**
+  - Not installed ⇒ `nexus code: <id> — <detail>` and exit `1` **without spawning**
+    (`commands.ts:2229-2233`).
+  - Not a registered agent id ⇒ exit `1` with the valid ids (`commands.ts:2223-2226`).
+  - Model resolution never invents `--model <providerId>` (§12).
+  - Uses `buildAuthedRuntime` so an OAuth-only provider is visible (`commands.ts:2220`).
+  - **How subprocess providers differ from HTTP providers:**
+    - `transport: "cli-subprocess"`; the CLI runs its **own** agentic loop.
+    - Tool calls arrive **already executed** — the harness must not re-execute them.
+    - The sandbox is the vendor CLI's, governed by `providers.<id>.sandbox` config, **not** the
+      harness `PermissionGate`.
+    - `--cwd` does not reach it; it runs in the process cwd.
+    - It advertises no static model catalog — the vendor session owns model choice.
+    - Consequently it is excluded from `dispatchAgent` in three places: `cmdAgent`
+      (`commands.ts:1032-1034`, redirect), `runAgentOoda` (`commands.ts:1322-1330`, refuse), and the
+      TUI dispatcher (`commands.ts:3802-3815`, single dispatch).
+  - Reasoning is treated as diagnostic and kept off stdout (`commands.ts:462-465`).
+  - **No context assembly:** `cmdCode` calls `runOrchestration` without
+    `contextAlreadyAssembled`, so the assembler *does* run inside `runOrchestration`
+    (`commands.ts:346-352`) — but `cmdCode` passes no system prompt unless `-s` is given
+    (`commands.ts:2236-2238`), so the harness default system prompt is absent here.
+- **macOS app:** `NOT SURFACED` as a mode. `claude-code`/`codex` can be chosen as a **provider**
+  (`-p`), which for `.ask`/`.agent` routes into `chat --persistent` — a path that dispatches once
+  per turn without the native loop (`commands.ts:3802-3815` is the TUI equivalent; `cmdChat`'s
+  `-t` path has **no** subprocess guard). See **GAPS G8**.
+- **Status:** `UNVERIFIED`
+
+## 26. `nexus chat` — batch mode
+
+- **What:** A headless line REPL: pipe lines in, each line is one turn, later turns remember earlier ones.
+- **Surface:** `cmdChat` `packages/cli/src/commands.ts:3298-3608`; batch branch
+  `commands.ts:3509-3512`.
+- **Inputs:** piped stdin (read to EOF up front, `commands.ts:3330-3336`); `-p`, `-m`, `-s`, `-o`,
+  `-t/--tools`, `--max-turns`, `--resume <id>`, `--continue`/`-c`, permission flags.
+- **Outputs:** stdout = assistant text plus a blank line per turn; stderr = `[session] <id>`
+  (always), resume notices, and every non-text event rendered through `renderStreaming`.
+  `-o ndjson` → every `UiEvent` plus a `turn_end` line per turn.
+- **Expected behaviour:**
+  - A TTY stdin with no piped lines ⇒
+    `nexus chat: interactive REPL requires a TTY; pipe lines for headless use` and exit **`0`**
+    (`commands.ts:3333-3336`). It is not an interactive line editor.
+  - One session across every line; `turn.input` carries prior turns (`commands.ts:3452-3454`).
+  - Non-text events are **not** filtered out of `text` mode — quota/auth/empty-output failures used
+    to look like blank replies and now render (`commands.ts:3476-3481`).
+  - A thrown error inside a turn is caught, rendered as an `internal_error` `UiEvent`, and the loop
+    continues — it must not take a persistent process down (`commands.ts:3487-3495`).
+  - `turn_end` (ndjson) / a trailing newline (text) is emitted **unconditionally**, including on the
+    defensive catch, so a caller waiting on one turn never hangs (`commands.ts:3499-3503`).
+  - Exit `1` if any turn failed, else `0` (`commands.ts:3600`).
+  - `-t` in batch mode with the default/`--ask` permission attaches **no approver at all**
+    (`commands.ts:3427-3433`): stdin is already fully consumed, so an `ask` outcome fails closed
+    immediately rather than waiting out the 120 s timeout for a reply that can never arrive.
+  - **`cmdChat`'s `-t` path has no `cli-subprocess` guard** (`commands.ts:3468-3471`), unlike
+    `cmdAgent` and the TUI. See **GAPS G8**.
+- **macOS app:** This is the app's primary run path (`AppState.swift:260-270`).
+- **Status:** `UNVERIFIED`
+
+## 27. `nexus chat --persistent` — the long-lived stdio session
+
+- **What:** Hold one process open across many turns, reading stdin incrementally — what lets a native
+  client drive one backend instead of spawning per message.
+- **Surface:** `cmdChat` persistent branches `packages/cli/src/commands.ts:3513-3599`; usage contract
+  `packages/cli/src/index.ts:405-450`.
+- **Inputs:** live stdin lines; the same flags as §26; `-o ndjson` strongly implied for clients.
+- **Outputs:** as §26, streamed live; `[session] <id>` on stderr before any event.
+- **Expected behaviour:**
+  - Requires non-TTY stdin; a TTY ⇒ the same message and exit `0` (`commands.ts:3337-3340`).
+  - Ends on stdin **EOF** or SIGINT/SIGTERM. A signal cancels the in-flight turn's scope and closes
+    the readline interface, then the `finally` disposes exactly as a clean EOF would
+    (`commands.ts:3519-3524`, `:3548-3553`).
+  - **Two distinct loops:**
+    - *No approval broker* (tools off, or `--yolo`/`--approve`): a plain `for await (const raw of rl)`
+      loop. Readline queues line events internally, so turns are processed strictly one at a time,
+      never interleaved (`commands.ts:3516-3538`).
+    - *Approval broker live*: line-reading is **decoupled** from turn-processing
+      (`commands.ts:3539-3598`), because a decision line must be resolvable while a turn is blocked
+      mid-tool-call. Prompts queue in `promptQueue` and dispatch in arrival order; decision lines are
+      handled immediately, out of band.
+  - On stdin EOF the broker denies every still-pending approval with cause `stdin-closed` rather than
+    letting them time out (`commands.ts:3575-3579`).
+  - The session id printed on stderr and the `session.sessionId` ndjson field are the values to pass
+    back into `--resume`; `session.id` is a run id and must not be used.
+- **macOS app:** `PersistentSession` (`apps/nexus-mac/Sources/NexusKit/PersistentSession.swift:16-204`).
+  Notable behaviours: prompts submitted before readiness are **queued**, not dropped
+  (`PersistentSession.swift:39`, `:114-121`); readiness is signalled by the first `session` event
+  **or** a stderr line containing `[session]` (`PersistentSession.swift:154-156`, `:167-173`);
+  embedded newlines in a prompt are collapsed to spaces because a newline is the turn delimiter
+  (`PersistentSession.swift:70-75`); `stop()` closes stdin for a graceful EOF shutdown rather than
+  terminating outright (`PersistentSession.swift:84-98`); a broken pipe is reported as a
+  termination rather than leaving the UI waiting (`PersistentSession.swift:105-111`).
+- **Status:** `UNVERIFIED`
+
+## 28. Real tool approvals (the approval broker)
+
+- **What:** A tool call that needs approval genuinely blocks until a human (or scripted client)
+  answers — the honesty guarantee behind "ask" mode.
+- **Surface:**
+  - `ApprovalBroker` `packages/cli/src/commands.ts:3179-3257`.
+  - Control-line parser `parseApprovalDecision` `packages/cli/src/commands.ts:3266-3281`.
+  - Chat permission resolution `resolveChatPermissionMode` `packages/cli/src/commands.ts:3291-3296`.
+  - Timeout `APPROVAL_TIMEOUT_MS` `packages/cli/src/commands.ts:3056-3059`.
+  - Diff preview `buildApprovalDiff` `commands.ts:3137-3156`, `unifiedLineDiff` `commands.ts:3082-3127`.
+  - Detail payload shape `ApprovalDetailPayload` `commands.ts:3062-3070`.
+- **Inputs:**
+  - Enabled by `chat --persistent -t` with the default (read-only) or explicit `--ask` mode
+    (`commands.ts:3416-3426`).
+  - Decisions arrive as their own stdin line:
+    `{"type":"approval","id":"<id>","decision":"allow"|"deny"}`.
+  - `NEXUS_APPROVAL_TIMEOUT_MS` env override (test seam only; **never** read from user config or a
+    flag, `commands.ts:3053-3058`).
+- **Outputs:** two `approval` `UiEvent`s per approval — the request, then the settlement carrying
+  `resolution: {granted, cause}`. `detail` is a JSON **string** of
+  `{toolName, permission, mode, reason, input, diff?}`.
+- **Expected behaviour:**
+  - **Timeout: 120 s default, then deny with cause `timeout`** (`commands.ts:3239`). A timed-out
+    approval is explicitly *not* a refusal — `cause` exists so a client can offer to ask again
+    instead of reporting a "no" the human never gave (`commands.ts:3167-3176`).
+  - Cancelling the turn (SIGINT/SIGTERM) denies pending approvals immediately with cause `cancelled`
+    (`commands.ts:3237-3238`); an already-cancelled scope settles instantly (`commands.ts:3226-3229`).
+  - stdin EOF ⇒ `denyAll()` with cause `stdin-closed` (`commands.ts:3253-3256`).
+  - A settled approval is removed from `pending` first, so a late second decision is a no-op
+    (`commands.ts:3232`).
+  - **Any stdin line that is not exactly the control shape is dispatched as an ordinary chat
+    prompt** (`commands.ts:3259-3281`) — the control channel shares stdin with prompts and must never
+    swallow one. Non-JSON, wrong `type`, empty `id`, or a `decision` other than `allow`/`deny` all
+    fall through.
+  - `action` is derived from the tool's permission: `write`→`file`, `exec`→`shell`, else `tool`
+    (`commands.ts:3207`) — mirroring the wrapped-CLI `approval-request` `kind` so a client can render
+    both flows through one switch.
+  - Diff preview: `fs_patch`'s input **is** a unified diff and is passed through; `fs_write` is
+    diffed against the current on-disk content (empty for a new file). Everything else gets no
+    preview (`commands.ts:3137-3156`). Beyond **2000 lines** per side the LCS table is skipped in
+    favour of an honest "file too large to diff" shape (`commands.ts:3073`, `:3087-3093`).
+  - `--yolo`/`--approve` keep their existing auto-approve meanings unchanged
+    (`commands.ts:3412-3415`); the broker is only attached on the default/`--ask` + `--persistent`
+    combination.
+- **macOS app:** `ApprovalsController` (`Approvals.swift:145-217`), `PendingApproval`
+  (`Approvals.swift:15-84`), `ApprovalDecision.controlLine` (`Approvals.swift:110-134`), sent on the
+  same stdin as prompts (`AppState.swift:402-405`). The `.timeout` / `.cancelled` / `.stdinClosed`
+  distinction is decoded and documented (`Approvals.swift:86-106`, `UiEvent.swift:119-131`).
+  UI: `apps/nexus-mac/Sources/NexusApp/Features/ApprovalSheet.swift`. Enabled by default
+  (`AppState.swift:175`).
+- **Status:** `UNVERIFIED`
+
 <!-- SECTION-BREAK -->

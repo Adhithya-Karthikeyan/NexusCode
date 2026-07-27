@@ -13,13 +13,12 @@ struct SessionsView: View {
     @Environment(\.nexusTheme) private var theme
 
     @State private var controller: SessionsController?
-    /// Built alongside `controller`, from the same binary — Resume/Replay use
-    /// it to stream `nexus replay` directly rather than routing through
-    /// `SessionsController`'s list/detail-shaped API.
-    @State private var client: NexusClient?
     @State private var selectedSessionId: String?
     @State private var detail: NexusSessionDetail?
     @State private var isLoadingDetail = false
+    /// Set while a Replay is streaming `nexus replay … -o ndjson` — guards
+    /// against a second tap re-entering the fold mid-stream and disables the
+    /// button so it reads as busy rather than dead.
     @State private var isReplaying = false
 
     var body: some View {
@@ -177,7 +176,14 @@ struct SessionsView: View {
             Group {
                 if let selectedSessionId,
                    let session = controller.sessions.first(where: { $0.id == selectedSessionId }) {
-                    SessionDetailCard(session: session, detail: detail, isLoading: isLoadingDetail)
+                    SessionDetailCard(
+                        session: session,
+                        detail: detail,
+                        isLoading: isLoadingDetail,
+                        isReplaying: isReplaying,
+                        onResume: { resume(session) },
+                        onReplay: { Task { await replay(session, using: controller) } }
+                    )
                 } else {
                     HeroEmptyState(
                         icon: "doc.text.magnifyingglass",
@@ -200,6 +206,38 @@ struct SessionsView: View {
             detail = await controller.show(selectedSessionId)
             isLoadingDetail = false
         }
+    }
+
+    // MARK: - Resume / Replay
+    //
+    // Both reopen the selected session in the chat tab through
+    // `ConversationController.reopen(sessionId:)` — the seam that stops any
+    // live backend, resets the fold, and points `sessionId` at the target so
+    // the next submit carries `--resume`. They diverge from there: Resume
+    // leaves the transcript empty (the CLI restores the model's context, not
+    // a UI event log — see `reopen`'s doc), Replay immediately re-populates it
+    // by folding the session's recorded events through the same
+    // `ConversationController.ingest` every live run already uses.
+
+    /// Reopens `session` as the live conversation so the next message the
+    /// user sends builds on it via `--resume`.
+    private func resume(_ session: NexusSession) {
+        guard let conversation = workspace.conversation else { return }
+        conversation.reopen(sessionId: session.sessionId)
+        workspace.tab = .chat
+    }
+
+    /// Reopens `session` and immediately re-renders its recorded transcript
+    /// by streaming `nexus replay … -o ndjson` and folding the result — no
+    /// separate renderer, the identical `ViewState.reduce` a live run uses.
+    private func replay(_ session: NexusSession, using controller: SessionsController) async {
+        guard let conversation = workspace.conversation else { return }
+        isReplaying = true
+        defer { isReplaying = false }
+        conversation.reopen(sessionId: session.sessionId)
+        let events = await controller.replayEvents(for: session.sessionId)
+        conversation.ingest(events)
+        workspace.tab = .chat
     }
 
     // MARK: - Attach
@@ -317,6 +355,9 @@ private struct SessionDetailCard: View {
     let session: NexusSession
     let detail: NexusSessionDetail?
     let isLoading: Bool
+    let isReplaying: Bool
+    let onResume: () -> Void
+    let onReplay: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.lg) {
@@ -332,14 +373,22 @@ private struct SessionDetailCard: View {
             }
 
             HStack(spacing: Space.sm) {
-                // Intent-only: these surface the action, they don't perform it.
-                // RootView owns wiring across tabs (see its header comment on
-                // why it, not this file, drives ConversationController), so
-                // resuming/replaying into the chat tab is the lead's wiring.
-                Button("Resume") {}
+                // Both reopen this session in the chat tab (see
+                // `SessionsView.resume`/`.replay`) — Resume leaves the
+                // transcript for `--resume` to carry forward, Replay
+                // re-renders it immediately from the recorded log.
+                Button("Resume", action: onResume)
                     .buttonStyle(SoftButton(tone: .accent))
-                Button("Replay") {}
-                    .buttonStyle(SoftButton(tone: .neutral))
+                Button(action: onReplay) {
+                    HStack(spacing: Space.xs) {
+                        if isReplaying {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text("Replay")
+                    }
+                }
+                .buttonStyle(SoftButton(tone: .neutral))
+                .disabled(isReplaying)
                 Spacer(minLength: 0)
             }
 
