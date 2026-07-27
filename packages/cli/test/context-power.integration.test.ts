@@ -127,6 +127,39 @@ describe("nexus ask response cache (CAG short-circuit + savings)", () => {
     expect(Number(m![1])).toBeGreaterThan(0);
   }, 30_000);
 
+  it("-o ndjson emits a typed `cache` event (§ CAPABILITIES.md C7) — not a bare, undocumented `{t:\"cache\"}` line", async () => {
+    // Regression: `renderCachedResponse`'s ndjson path built raw object
+    // literals instead of typed `UiEvent`s — `cache` was entirely absent from
+    // the `UiEvent` union (`packages/core/src/projection.ts`) despite
+    // `ui.ts` calling `-o ndjson`'s shape "the public wrap contract, stable",
+    // and the adjacent `text`/`done` events on this SAME shortcut path were
+    // missing `lane`, unlike every other command's ndjson output.
+    const first = await runCli(["ask", "-p", "mock", "-o", "ndjson", "ndjson-cache-run"]);
+    expect(first.code).toBe(0);
+
+    const second = await runCli(["ask", "-p", "mock", "-o", "ndjson", "ndjson-cache-run"]);
+    expect(second.code).toBe(0);
+    const events = second.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { t: string; lane?: string; hit?: boolean; delta?: string });
+
+    const cache = events.find((e) => e.t === "cache");
+    expect(cache).toBeDefined();
+    expect(cache!.hit).toBe(true);
+    expect(cache!.lane).toBe("main");
+
+    const text = events.find((e) => e.t === "text");
+    expect(text).toBeDefined();
+    expect(text!.lane).toBe("main"); // was missing entirely before the fix
+    expect(text!.delta).toContain("ndjson-cache-run");
+
+    const done = events.find((e) => e.t === "done");
+    expect(done).toBeDefined();
+    expect(done!.lane).toBe("main"); // was missing entirely before the fix
+  }, 30_000);
+
   it("invalidates an identical prompt when project instructions change", async () => {
     const instructions = join(WORK_DIR, "AGENTS.md");
     writeFileSync(instructions, "Project policy revision: alpha.\n");

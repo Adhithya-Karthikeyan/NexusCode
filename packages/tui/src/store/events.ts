@@ -51,6 +51,13 @@ export type UiEvent =
     }
   | { t: "error"; lane: string; code: string; message: string; retryable: boolean }
   | { t: "done"; lane: string; finishReason: string }
+  /**
+   * A CAG response-cache hit (`nexus ask`) — the whole provider dispatch was
+   * short-circuited, so this rides between a single `text` (the full cached
+   * answer, not streamed deltas) and `done`; no `session` event precedes it.
+   * See `@nexuscode/core`'s `projection.ts` for the full contract this mirrors.
+   */
+  | { t: "cache"; lane: string; hit: boolean }
   // The single CLIENT-originated marker (the engine NEVER emits this). The TUI
   // injects it into the same append-only log at submit time so the user prompt
   // interleaves with the assistant stream and `reduceEvent` owns the prompt↔turn

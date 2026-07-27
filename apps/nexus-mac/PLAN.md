@@ -125,10 +125,18 @@ a tall scroll view.*
 
 ### STATE AS OF 2026-07-28 (overnight run)
 
-**Green:** Swift **286/286** (7.3s) · TypeScript **2208/2208** (222 files, 35s,
-exit 0) · both builds clean · 45/45 CLI commands healthy · zero hangs ·
-`docs/CAPABILITIES.md` written (2908 lines) ·
-`apps/nexus-mac/UI-INVENTORY.md` written (885 lines, ~102 controls).
+**Green:** Swift **295/295** (7.6s) · TypeScript **2213/2213** (222 files, exit 0)
+· both builds clean · 45/45 CLI commands healthy · zero hangs ·
+`docs/CAPABILITIES.md` (2908 lines) · `apps/nexus-mac/UI-INVENTORY.md`
+(885 lines, ~102 controls).
+
+⚠️ **One test file is knowingly unprotected against the `tsup` dist-rewrite
+race**: `packages/cli/test/stdin-hang.integration.test.ts` cannot use the shared
+`spawnCli()` retry helper, because that helper always calls `child.stdin.end()`
+— which would hide the exact bug the file exists to test. So it can flake ~1 run
+in N under full parallel load, and passes in isolation every time. **Do not
+"fix" it by adopting `spawnCli`.** The durable fix is making `tsup` writes atomic
+(temp-dir + rename) across the workspace.
 
 For scale: that same TypeScript suite ran **2757 seconds with 15 failures**
 earlier in this session. The stdin/context/MCP/keychain bounds plus the

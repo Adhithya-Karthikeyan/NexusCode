@@ -925,7 +925,7 @@ private struct UsageReadout: View {
             Spacer(minLength: 0)
             Metric(
                 label: "session total",
-                value: formatted(view.totals.costUsd) + (view.totals.costIncomplete ? "*" : "")
+                value: formatted(view.totals.costUsd, incomplete: view.totals.costIncomplete)
             )
         }
         .foregroundStyle(theme.color(\.textMuted))
@@ -934,12 +934,16 @@ private struct UsageReadout: View {
     /// `nil` means genuinely unknown pricing (an unpriced model's turn) —
     /// shown as "—", never coerced into a confident "$0.00" the way a real
     /// mock/local $0 run is. Mirrors `SessionsView`'s `costLabel`, which draws
-    /// the identical distinction for the Sessions tab's own cost readout; the
-    /// `*` suffix on the session total above matches that same convention.
-    private func formatted(_ usd: Double?) -> String {
+    /// the identical distinction for the Sessions tab's own cost readout,
+    /// including the edge case a bare `usd <= 0` check would miss: a PARTIAL
+    /// sum (`incomplete == true`) that happens to total exactly zero is still
+    /// "unknown", not a confirmed free run, so it reads as "—" too rather than
+    /// a confident "$0.00". `*` marks a nonzero-but-partial total instead.
+    private func formatted(_ usd: Double?, incomplete: Bool = false) -> String {
         guard let usd else { return "—" }
-        guard usd > 0 else { return "$0.00" }
-        return usd < 0.01 ? "<$0.01" : String(format: "$%.2f", usd)
+        guard usd > 0 else { return incomplete ? "—" : "$0.00" }
+        let amount = usd < 0.01 ? "<$0.01" : String(format: "$%.2f", usd)
+        return incomplete ? "\(amount)*" : amount
     }
 }
 

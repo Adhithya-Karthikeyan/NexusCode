@@ -105,7 +105,21 @@ export type UiEvent =
       costUsd: number | null;
     }
   | { t: "error"; lane: string; code: string; message: string; retryable: boolean }
-  | { t: "done"; lane: string; finishReason: string };
+  | { t: "done"; lane: string; finishReason: string }
+  | {
+      t: "cache";
+      lane: string;
+      /**
+       * `true` on every `cache` event today — the CAG response cache
+       * (`nexus ask`) only ever emits this on a HIT, short-circuiting the
+       * whole provider dispatch (a miss falls through to a normal
+       * `session`/`text`/…/`done` stream with no `cache` event at all).
+       * Typed as `boolean`, not the literal `true`, so a future "checked and
+       * missed" signal is a value change here, not a union change at every
+       * call site.
+       */
+      hit: boolean;
+    };
 
 /** Discriminant tag of a `UiEvent`. */
 export type UiEventType = UiEvent["t"];

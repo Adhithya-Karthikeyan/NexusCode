@@ -125,7 +125,12 @@ final class UiEventDecodingTests: XCTestCase {
     // along with the cost. This is the assertion that would have caught it.
 
     func testUsageWithNullCostDecodesAsUsageNotAsAMalformedUnknownEvent() throws {
-        let line = #"{"t":"usage","lane":"main","inputTokens":12,"outputTokens":6,"costUsd":null}"#
+        // These exact bytes were captured live from the CLI's real
+        // `chunkToUiEvents` (`packages/core/src/projection.ts`), not
+        // hand-typed: `node -e 'require("./packages/core/dist").chunkToUiEvents({type:"usage",usage:{inputTokens:42,outputTokens:17}}, "main")'`
+        // — i.e. exactly what a real paid call with no pricing-table entry
+        // for its model puts on the wire.
+        let line = #"{"t":"usage","lane":"main","inputTokens":42,"outputTokens":17,"costUsd":null}"#
         let event = UiEventDecoder.decodeLine(line)
         guard case .usage(let usage)? = event else {
             return XCTFail(
@@ -136,11 +141,15 @@ final class UiEventDecodingTests: XCTestCase {
         XCTAssertNil(usage.costUsd, "null means UNKNOWN pricing, never a coerced 0")
         // The whole point: the token counts must survive even though the
         // price is unknown — they must not vanish along with the cost.
-        XCTAssertEqual(usage.inputTokens, 12)
-        XCTAssertEqual(usage.outputTokens, 6)
+        XCTAssertEqual(usage.inputTokens, 42)
+        XCTAssertEqual(usage.outputTokens, 17)
     }
 
     func testUsageWithZeroCostIsGenuinelyFreeAndDistinctFromNullCost() throws {
+        // Shape verified live against `node packages/cli/dist/index.js ask -p
+        // mock -m mock-fast "hi" -o ndjson </dev/null`, which prints exactly
+        // `{"t":"usage","lane":"main","inputTokens":1,"outputTokens":5,"costUsd":0}`
+        // — no cacheRead/cacheWrite keys at all, costUsd a definite 0.
         let line = #"{"t":"usage","lane":"main","inputTokens":3,"outputTokens":8,"costUsd":0}"#
         guard case .usage(let usage)? = UiEventDecoder.decodeLine(line) else {
             return XCTFail("expected a usage event")

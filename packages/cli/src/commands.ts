@@ -924,9 +924,19 @@ function renderCachedResponse(
     return;
   }
   if (output === "ndjson") {
-    io.out(`${JSON.stringify({ t: "text", delta: cached.text })}\n`);
-    io.out(`${JSON.stringify({ t: "cache", hit: true })}\n`);
-    io.out(`${JSON.stringify({ t: "done" })}\n`);
+    // Constructed as typed `UiEvent`s (not raw object literals) so `tsc`
+    // catches drift from the real contract at compile time — this hand-rolled
+    // shortcut bypasses the normal `projectLabeled` pipeline entirely (a cache
+    // hit never dispatches to a provider, so there is no `StreamChunk` to
+    // project FROM), which is exactly how it had drifted: `lane` missing on
+    // `text`/`done`, and `cache` not in the union at all (§ CAPABILITIES.md
+    // C7). `"main"` matches every other single-lane command's convention.
+    const textEv: UiEvent = { t: "text", lane: "main", delta: cached.text };
+    const cacheEv: UiEvent = { t: "cache", lane: "main", hit: true };
+    const doneEv: UiEvent = { t: "done", lane: "main", finishReason: cached.finishReason ?? "stop" };
+    io.out(`${JSON.stringify(textEv)}\n`);
+    io.out(`${JSON.stringify(cacheEv)}\n`);
+    io.out(`${JSON.stringify(doneEv)}\n`);
     return;
   }
   io.out(cached.text);
