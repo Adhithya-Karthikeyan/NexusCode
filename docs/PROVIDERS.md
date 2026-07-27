@@ -117,6 +117,26 @@ Three widely used providers are **not** in the default catalog and need a config
 
 ---
 
+## Reasoning effort (`--effort`)
+
+`--effort off|low|medium|high` (see [COMMANDS.md](./COMMANDS.md)) only actually reaches a
+provider's request when BOTH are true: the provider advertises `capabilities().reasoning`,
+and its transport genuinely forwards a reasoning parameter on the wire. `nexus`
+checks both — `reasoningSupportedFor` in `packages/cli/src/model-switch.ts` is the single
+predicate the `--effort` flag and the TUI's `/effort` picker both consult — and warns on
+stderr (never silently) instead of sending a param that would be dropped or rejected.
+
+| Provider(s) | Honors `--effort`? | How |
+| --- | --- | --- |
+| `anthropic`, `gemini`, `bedrock`, `vertex` | Yes | Effort maps to an extended-thinking token budget (`low`=4000, `medium`=10000, `high`=24000) sent as `reasoning.budget_tokens`. |
+| `openai`, `azure-openai` | Yes | Effort is sent as-is via the native `reasoning_effort` request field. |
+| `deepseek` | **No** | `deepseek` advertises `capabilities.reasoning: true` for its `deepseek-reasoner` MODEL, but that is a model choice (pick `deepseek-reasoner` via `-m`), not a per-request effort knob — the shared OpenAI-compatible transport never puts `reasoning_effort` on the wire for it. `--effort` warns and is dropped. |
+| `groq`, `together`, `mistral`, `openrouter`, `nvidia`, `lmstudio`, `vllm`, `grok` | No | None of these advertise `capabilities.reasoning` at all. |
+| `claude-code`, `codex` | **No** | Both run their OWN agent loop as a subprocess; nothing in `ChatRequest.reasoning` is forwarded into their argv (no `--reasoning` / `-c model_reasoning_effort=…` is ever emitted). `nexus code` always warns and drops `--effort` regardless of value. |
+| `mock`, `mock-flaky`, `mock-slow` | No | Offline test doubles; `capabilities.reasoning: false`. |
+
+---
+
 ## Per-provider setup
 
 ### Anthropic (Claude)

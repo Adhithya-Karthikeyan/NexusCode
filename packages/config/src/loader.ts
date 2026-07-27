@@ -178,6 +178,10 @@ export function envOverrides(env: NodeJS.ProcessEnv): NexusConfigInput {
   if (provider) out.defaultProvider = provider;
   const model = env["NEXUS_DEFAULT_MODEL"];
   if (model) out.defaultModel = model;
+  const effort = env["NEXUS_DEFAULT_EFFORT"];
+  if (effort === "off" || effort === "low" || effort === "medium" || effort === "high") {
+    out.defaultEffort = effort;
+  }
   const approval = env["NEXUS_APPROVAL"];
   if (approval === "auto" || approval === "confirm" || approval === "dry-run") out.approval = approval;
   const dbPath = env["NEXUS_HISTORY_DB"];

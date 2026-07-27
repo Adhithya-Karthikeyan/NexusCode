@@ -116,6 +116,48 @@ describe("KeychainBackend — bounded native calls (regression: a real keychain-
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
+  it("get() names the likely cause on stderr instead of a bare 'timed out' — never a silent or generic failure", async () => {
+    const backend = new KeychainBackend("test-svc", {
+      timeoutMs: 30,
+      loadCtor: async () => neverResolvingCtor(),
+    });
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await backend.get("anthropic");
+      expect(spy).toHaveBeenCalledTimes(1);
+      const line = spy.mock.calls[0]![0] as string;
+      expect(line).toContain('keychain read for "anthropic" timed out after 30ms');
+      expect(line).toContain("authorization prompt this process cannot display");
+      expect(line).toContain("falling back to the encrypted file store");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does NOT print the timeout diagnostic for a genuine (fast) NoEntry — only for an actual timeout", async () => {
+    const NoEntryCtor = class {
+      async getPassword(): Promise<string | undefined> {
+        throw new Error("NoEntry: item not found");
+      }
+      async setPassword(): Promise<void> {}
+      async deletePassword(): Promise<boolean> {
+        return false;
+      }
+    };
+    const backend = new KeychainBackend("test-svc", {
+      timeoutMs: 30,
+      loadCtor: async () => NoEntryCtor,
+    });
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const result = await backend.get("never-stored");
+      expect(result).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("set() returns false instead of hanging, so the caller falls through to the file backend", async () => {
     const backend = new KeychainBackend("test-svc", {
       timeoutMs: 30,

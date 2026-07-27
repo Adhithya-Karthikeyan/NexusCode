@@ -689,10 +689,10 @@ export async function cmdAsk(args: ParsedArgs, io: Io = defaultIo): Promise<numb
     io.err("nexus ask: no prompt (pass an argument or pipe stdin)\n");
     return 2;
   }
-  const effortResult = parseEffortFlag(args, io, "ask");
+  const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "ask");
   if ("code" in effortResult) return effortResult.code;
 
-  const config = await loadEffectiveConfig();
   const runtime = await buildAuthedRuntime(config);
   const explicitProvider = args.flags.get("provider");
   let providerId: string;
@@ -919,19 +919,21 @@ export function reasoningParamsFor(effort: EffortLevel): SamplingParams["reasoni
 }
 
 /**
- * Parse and validate `--effort` up front — before any runtime/provider work,
- * matching the existing "cheap validation first" ordering every command
- * already uses for its prompt/positional checks. An unrecognized value is a
- * usage error (exit 2), never silently coerced to "off"; an absent flag IS
- * "off" (every command's unchanged default behavior).
+ * Resolve `--effort`, layered over `config.defaultEffort` exactly like
+ * `-p/--provider` layers over `config.defaultProvider`: the flag wins when
+ * passed; otherwise the configured default; otherwise "off". Requires
+ * `config` (so this runs right after `loadEffectiveConfig()`, not before it
+ * like the cheap prompt/positional checks) — but an unrecognized flag VALUE is
+ * still a usage error (exit 2), never silently coerced or dropped.
  */
-function parseEffortFlag(
+function resolveEffortFlag(
   args: ParsedArgs,
+  config: NexusConfig,
   io: Io,
   cmd: string,
 ): { effort: EffortLevel } | { code: number } {
   const raw = args.flags.get("effort");
-  if (raw === undefined) return { effort: "off" };
+  if (raw === undefined) return { effort: config.defaultEffort };
   if (!isEffortLevel(raw)) {
     io.err(`nexus ${cmd}: invalid --effort "${raw}" (expected off | low | medium | high)\n`);
     return { code: 2 };
@@ -1099,10 +1101,10 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     }
     return res.code;
   }
-  const effortResult = parseEffortFlag(args, io, "agent");
-  if ("code" in effortResult) return effortResult.code;
 
   const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "agent");
+  if ("code" in effortResult) return effortResult.code;
   // Enterprise subsystem (§25): off by default. When on, its private-model
   // gateway is applied at registry construction; RBAC/policy authorize each
   // tool call; budgets gate the run; every decision + the run are audited.
@@ -1377,6 +1379,8 @@ async function runAgentOoda(
 ): Promise<{ code: number; result: AgentRunResult | null }> {
   const output = parseOutput(args);
   const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "agent");
+  if ("code" in effortResult) return { code: effortResult.code, result: null };
   const runtime = await buildAuthedRuntime(config);
   const providerId = args.flags.get("provider") ?? config.defaultProvider;
   if (!isProviderUsable(runtime, providerId)) {
@@ -1427,6 +1431,7 @@ async function runAgentOoda(
   }
 
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
+  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "agent", io);
 
   // Role-filtered tool set: the built-in suite plus the background-job control
   // tools, so a coder/tester role can launch and poll long-running commands.
@@ -1554,6 +1559,7 @@ async function runAgentOoda(
       // carry it. Without this the loop always fell back to a bare `userText(goal.objective)`
       // and silently dropped any resumed (or even same-process re-threaded) history.
       input: turn.input,
+      ...(reasoning ? { reasoning } : {}),
     });
 
     if (output !== "json") {
@@ -2309,8 +2315,9 @@ export async function cmdCode(args: ParsedArgs, io: Io = defaultIo): Promise<num
     io.err("nexus code: no task (pass an argument or pipe stdin)\n");
     return 2;
   }
-
   const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "code");
+  if ("code" in effortResult) return effortResult.code;
   // `buildAuthedRuntime` — `--agent`/`--provider` can name a provider the user
   // is only signed into via OAuth (e.g. `anthropic`), which plain `buildRuntime`
   // cannot see (see `buildAuthedRuntime`'s doc in runtime.ts).
@@ -2331,8 +2338,17 @@ export async function cmdCode(args: ParsedArgs, io: Io = defaultIo): Promise<num
 
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
   const system = args.flags.get("system");
+  // Always unsupported here (see `reasoningSupportedFor`'s `cli-subprocess`
+  // case): claude-code/codex run their own agent loop with no wire path for a
+  // reasoning-effort request, so this only ever warns and returns `undefined`.
+  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "code", io);
   const template: RunTemplate = { adapterId: providerId, model };
-  if (system !== undefined) template.params = { system };
+  if (system !== undefined || reasoning) {
+    template.params = {
+      ...(system !== undefined ? { system } : {}),
+      ...(reasoning ? { reasoning } : {}),
+    };
+  }
 
   const outcome = await runOrchestration({
     kind: "single",
@@ -2479,8 +2495,9 @@ export async function cmdCompare(args: ParsedArgs, io: Io = defaultIo): Promise<
     io.err("nexus compare: no prompt\n");
     return 2;
   }
-
   const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "compare");
+  if ("code" in effortResult) return effortResult.code;
   // `-b/--backend` names providers by id — must see auth-derived (OAuth-only)
   // providers, not just statically configured ones (see `buildAuthedRuntime`).
   const runtime = await buildAuthedRuntime(config);
@@ -2496,10 +2513,16 @@ export async function cmdCompare(args: ParsedArgs, io: Io = defaultIo): Promise<
       io.err(`nexus compare: provider "${b.provider}" not available\n`);
       return 1;
     }
-    templates.push({
+    // Each lane warns independently (via `applyEffort`) when ITS provider
+    // can't honor `--effort` — a mixed `-b anthropic -b mock` run applies it
+    // where it works and says exactly where it doesn't, per lane.
+    const reasoning = applyEffort(effortResult.effort, b.provider, runtime, "compare", io);
+    const template: RunTemplate = {
       adapterId: b.provider,
       model: resolveRunModel(runtime, b.provider, config, b.model),
-    });
+    };
+    if (reasoning) template.params = { reasoning };
+    templates.push(template);
   }
 
   const outcome = await runOrchestration({
@@ -2664,6 +2687,7 @@ function backendRuns(
   prompt: string,
   io: Io,
   command: string,
+  effort: EffortLevel = "off",
 ): { runs: RunSpec[]; laneLabels: string[] } | number {
   const backends = parseBackends(args);
   if (backends.length < 2) {
@@ -2678,7 +2702,12 @@ function backendRuns(
       return 1;
     }
     const model = resolveRunModel(runtime, b.provider, config, b.model);
-    runs.push({ adapterId: b.provider, model, input: userText(prompt), idempotencyKey: randomUUID() });
+    // Each lane warns independently when ITS provider can't honor `--effort`
+    // (see `cmdCompare`'s identical per-lane rationale).
+    const reasoning = applyEffort(effort, b.provider, runtime, command, io);
+    const run: RunSpec = { adapterId: b.provider, model, input: userText(prompt), idempotencyKey: randomUUID() };
+    if (reasoning) run.params = { reasoning };
+    runs.push(run);
     laneLabels.push(`${b.provider}:${model}`);
   }
   return { runs, laneLabels };
@@ -2692,9 +2721,11 @@ export async function cmdRace(args: ParsedArgs, io: Io = defaultIo): Promise<num
     return 2;
   }
   const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "race");
+  if ("code" in effortResult) return effortResult.code;
   // `-b/--backend` names providers by id — see `buildAuthedRuntime`'s doc.
   const runtime = await buildAuthedRuntime(config);
-  const resolved = backendRuns(args, runtime, config, prompt, io, "race");
+  const resolved = backendRuns(args, runtime, config, prompt, io, "race", effortResult.effort);
   if (typeof resolved === "number") return resolved;
 
   const modeRaw = args.flags.get("mode");
@@ -2726,9 +2757,11 @@ export async function cmdConsensus(args: ParsedArgs, io: Io = defaultIo): Promis
     return 2;
   }
   const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "consensus");
+  if ("code" in effortResult) return effortResult.code;
   // `-b/--backend` names providers by id — see `buildAuthedRuntime`'s doc.
   const runtime = await buildAuthedRuntime(config);
-  const resolved = backendRuns(args, runtime, config, prompt, io, "consensus");
+  const resolved = backendRuns(args, runtime, config, prompt, io, "consensus", effortResult.effort);
   if (typeof resolved === "number") return resolved;
 
   const judgeModel = args.flags.get("judge");
@@ -2767,6 +2800,9 @@ export async function cmdChain(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     return 2;
   }
   const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "chain");
+  if ("code" in effortResult) return effortResult.code;
+  const { effort } = effortResult;
   // `--provider`/`--stages` name providers by id — see `buildAuthedRuntime`'s doc.
   const runtime = await buildAuthedRuntime(config);
   const provider = args.flags.get("provider") ?? "mock";
@@ -2792,10 +2828,17 @@ export async function cmdChain(args: ParsedArgs, io: Io = defaultIo): Promise<nu
         return 1;
       }
       const m = resolveRunModel(runtime, prov, config, model);
-      stages.push({
-        name: `stage${i + 1}`,
-        run: { adapterId: prov, model: m, input: i === 0 ? userText(prompt) : [], idempotencyKey: randomUUID() },
-      });
+      // Each stage warns independently when ITS provider can't honor `--effort`
+      // (same per-lane rationale as `compare`/`race`/`consensus`).
+      const reasoning = applyEffort(effort, prov, runtime, "chain", io);
+      const run: RunSpec = {
+        adapterId: prov,
+        model: m,
+        input: i === 0 ? userText(prompt) : [],
+        idempotencyKey: randomUUID(),
+      };
+      if (reasoning) run.params = { reasoning };
+      stages.push({ name: `stage${i + 1}`, run });
       laneLabels.push(`${prov}:${m}`);
     }
   } else {
@@ -2807,10 +2850,15 @@ export async function cmdChain(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     for (let i = 0; i < CHAIN_PRESET.length; i++) {
       const def = CHAIN_PRESET[i]!;
       const m = resolveRunModel(runtime, provider, config, provider === "mock" ? def.mockModel : undefined);
-      stages.push({
-        name: def.name,
-        run: { adapterId: provider, model: m, input: i === 0 ? userText(prompt) : [], idempotencyKey: randomUUID() },
-      });
+      const reasoning = applyEffort(effort, provider, runtime, "chain", io);
+      const run: RunSpec = {
+        adapterId: provider,
+        model: m,
+        input: i === 0 ? userText(prompt) : [],
+        idempotencyKey: randomUUID(),
+      };
+      if (reasoning) run.params = { reasoning };
+      stages.push({ name: def.name, run });
       laneLabels.push(`${provider}:${m}`);
     }
   }
@@ -3394,6 +3442,9 @@ function resolveChatPermissionMode(args: ParsedArgs): PermissionMode {
 
 export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const config = await loadEffectiveConfig();
+  const effortResult = resolveEffortFlag(args, config, io, "chat");
+  if ("code" in effortResult) return effortResult.code;
+
   const runtime = await buildAuthedRuntime(config);
   // Provider resolution mirrors `ask` / `tui` exactly: an explicit `-p` stays a
   // hard error when unavailable, but the DEFAULT path degrades gracefully to an
@@ -3413,6 +3464,10 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
     providerId = resolved;
   }
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
+  // Resolved once for the whole session, like `provider`/`model` — every line
+  // shares the effort a persistent process was started with, not a per-line
+  // re-evaluation of a flag that cannot change mid-session anyway.
+  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "chat", io);
   const output = parseOutput(args);
   // `--persistent`: hold the process open and read stdin INCREMENTALLY — one
   // line dispatched as a turn as soon as it arrives — instead of the default
@@ -3557,7 +3612,7 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
         model,
         input: turn.input,
         idempotencyKey: randomUUID(),
-        params: { system },
+        params: { system, ...(reasoning ? { reasoning } : {}) },
       };
       // `-t`/`--tools`: run the native agentic tool loop instead of a single
       // dispatch. Absent (the default, unchanged path), this is byte-for-byte
@@ -3860,8 +3915,9 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   // With no tools registered at all, CHAT stays a cheap single dispatch.
   const hasTools = toolRegistry.list().length > 0;
   // Reasoning-effort state for the `/effort` picker; only meaningful when the
-  // active provider advertises reasoning (the picker reflects that).
-  let activeEffort: "off" | "low" | "medium" | "high" = "off";
+  // active provider advertises reasoning (the picker reflects that). Same
+  // vocabulary the headless `--effort` flag validates against.
+  let activeEffort: EffortLevel = "off";
   const reasoningSupported = reasoningSupportedFor(runtime, providerId);
   // The preflight is pure (see `./model-switch.js`); these two adapters bind it to
   // the live dispatch state and commit an accepted switch exactly once, so the
@@ -3888,14 +3944,12 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   const dispatchTurn: TurnDispatcher = (input, ctx, mode) => {
     const run: RunSpec = { adapterId: activeProvider, model: activeModel, input, idempotencyKey: randomUUID() };
     if (system !== undefined) run.params = { system };
-    // Apply the reasoning effort chosen via `/effort`, mapped to a thinking-token
-    // budget so it affects providers that price/limit reasoning by tokens.
-    if (activeEffort !== "off") {
-      run.params = {
-        ...(run.params ?? {}),
-        reasoning: { enabled: true, effort: activeEffort, budgetTokens: EFFORT_BUDGET[activeEffort] },
-      };
-    }
+    // Apply the reasoning effort chosen via `/effort` — the SAME
+    // `reasoningParamsFor` the headless `--effort` flag builds from
+    // (`applyEffort` above), so an interactive pick and a headless run reach
+    // the provider through one seam, never two that could drift apart.
+    const reasoning = reasoningParamsFor(activeEffort);
+    if (reasoning) run.params = { ...(run.params ?? {}), reasoning };
     // A cli-subprocess provider (claude-code / codex) runs its OWN internal agent
     // loop and streams back the tool calls it already executed. Wrapping it in our
     // native tool loop would treat those as pending, re-execute them, and re-spawn
@@ -3969,7 +4023,7 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
       // `/effort` picker: apply the chosen reasoning effort to the next turn, and
       // tell the TUI whether the active provider supports reasoning at all.
       onEffortChange: (e: string) => {
-        if (e === "off" || e === "low" || e === "medium" || e === "high") activeEffort = e;
+        if (isEffortLevel(e)) activeEffort = e;
       },
       reasoningSupported,
       ...(system !== undefined ? { system } : {}),

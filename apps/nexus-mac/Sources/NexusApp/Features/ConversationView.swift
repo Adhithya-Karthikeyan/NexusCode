@@ -203,13 +203,19 @@ struct ConversationView: View {
     /// configured to run, in the same monospace/caret language the
     /// composer's command preview and the transcript's streaming cursor
     /// already use — so it reads as "this app always shows you the real
-    /// command" rather than "generic AI chat icon." The suggestions below
-    /// grow from a single row of small capsules into a labelled 2x2 grid of
-    /// full-width cards at the transcript's own reading-column measure —
-    /// real, useful content occupying the region more deliberately, not
-    /// filler added just to consume height.
+    /// command" rather than "generic AI chat icon."
+    ///
+    /// The suggestions below grow from a single row of small capsules into a
+    /// labelled, full-width LIST rather than a compact grid — measured
+    /// against the actual window (see the doc comment on `transcript`), a
+    /// 2x2 grid of small cards still left roughly half the transcript
+    /// region a bare void above a small huddle of controls. A one-per-row
+    /// list at the reading-column measure is real, legible content (each
+    /// suggestion gets room to breathe, not a filler decoration) that
+    /// genuinely occupies the space instead of merely gesturing at
+    /// occupying it.
     private var emptyState: some View {
-        VStack(spacing: Space.xl) {
+        VStack(spacing: Space.xxl) {
             ChatHeroMark(mode: controller.mode)
 
             VStack(spacing: Space.sm) {
@@ -230,15 +236,11 @@ struct ConversationView: View {
                     .tracking(0.7)
                     .foregroundStyle(theme.color(\.textMuted))
 
-                Grid(horizontalSpacing: Space.sm, verticalSpacing: Space.sm) {
-                    GridRow {
-                        suggestionCard(0)
-                        suggestionCard(1)
-                    }
-                    GridRow {
-                        suggestionCard(2)
-                        suggestionCard(3)
-                    }
+                VStack(spacing: Space.sm) {
+                    suggestionCard(0)
+                    suggestionCard(1)
+                    suggestionCard(2)
+                    suggestionCard(3)
                 }
             }
             .frame(maxWidth: readingColumnWidth)
@@ -1025,18 +1027,22 @@ private struct SuggestionCard: View {
         Button(action: action) {
             HStack(spacing: Space.md) {
                 Image(systemName: icon)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 13))
                     .foregroundStyle(theme.color(\.accentDefault))
-                    .frame(width: 16)
+                    .frame(width: 18)
                 Text(text)
-                    .font(Kind.body)
+                    .font(Kind.bodyEmphasis)
                     .foregroundStyle(theme.color(\.textSecondary))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
+                Image(systemName: "arrow.up.left")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.color(\.textMuted))
+                    .opacity(hovering ? 1 : 0)
             }
             .padding(.horizontal, Space.lg)
-            .padding(.vertical, Space.md + 2)
+            .padding(.vertical, Space.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color(\.surfaceOverlay).opacity(hovering ? 1 : 0.6), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
             .overlay {

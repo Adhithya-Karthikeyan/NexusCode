@@ -1106,6 +1106,14 @@ export const NexusConfig = z
   .object({
     defaultProvider: z.string().default("anthropic"),
     defaultModel: z.string().optional(),
+    /**
+     * Default reasoning effort for `ask`/`agent`/`chat`/`compare`/`race`/
+     * `consensus`/`chain`/`plan` when `--effort` is not passed. `--effort`
+     * always wins over this when given; a provider that cannot honor the
+     * resolved level still warns on stderr rather than silently dropping it
+     * (see `applyEffort` in `packages/cli/src/commands.ts`).
+     */
+    defaultEffort: z.enum(["off", "low", "medium", "high"]).default("off"),
     providers: z.array(ProviderConfig).default([]),
     /** Declared MCP servers (system-spec §7). Connected + tool-discovered at session startup. */
     mcp: z.array(McpServerConfig).default([]),

@@ -115,6 +115,13 @@ export interface AgentRunOptions {
   model?: string;
   /** Override the adapter preference. */
   adapterId?: string;
+  /**
+   * Reasoning effort/budget applied to every REASON+ACT step's provider
+   * dispatch (not the tool-free Evaluate-phase judgment turn — that stays a
+   * plain, deterministic `temperature: 0` check regardless). Omit for no
+   * reasoning, exactly like a plain `RunSpec` with no `params.reasoning`.
+   */
+  reasoning?: SamplingParams["reasoning"];
   /** Override the permission gate (else the role's sandbox / deps gate is used). */
   gate?: PermissionGate;
   /** Override the Plan/Evaluate policies. */
@@ -348,6 +355,7 @@ export class Agent {
       // ── REASON + ACT (native tool loop through the engine) ──────────────────
       const params: SamplingParams = { system: def.systemPrompt };
       if (def.temperature !== undefined) params.temperature = def.temperature;
+      if (options.reasoning) params.reasoning = options.reasoning;
       const spec: RunSpec = {
         adapterId,
         model,

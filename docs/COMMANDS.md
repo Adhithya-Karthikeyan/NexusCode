@@ -60,6 +60,7 @@ an unrecognized flag prints a `did you mean …?` warning rather than failing.
 | `--model <id>` | `-m` | Model id (default: the config default, else the provider's first model) |
 | `--system <text>` | `-s`, `--system-prompt` | Override the system prompt |
 | `--cwd <dir>` | | Working directory for tool, git, and job execution |
+| `--effort <lvl>` | | `off`\|`low`\|`medium`\|`high` reasoning effort (default: `config.defaultEffort`, else `off`). `ask`/`agent`/`chat`/`compare`/`race`/`consensus`/`chain`/`plan`. A provider that can't honor it warns on stderr and runs without it — never silently. |
 
 Notes:
 
@@ -229,6 +230,7 @@ One-shot completion. Reads stdin when no prompt argument is given.
 | `-s, --system <text>` | string | built-in prompt | System prompt |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
 | `-t, --tools` | bool | off | Enable the agentic tool loop (routes to `agent`) |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | `off`\|`low`\|`medium`\|`high` reasoning effort; unsupported providers warn on stderr and run without it |
 | `--read-only` | bool | on | Tool loop: read-only (default) |
 | `--approve` | bool | off | Tool loop: workspace-write, auto-approve exec/network |
 | `--yolo` | bool | off | Tool loop: full access, no approval prompts |
@@ -262,6 +264,7 @@ you pass `--role`.
 | `-r, --role <name>` | string | none | Run the OODA framework as a specialized role |
 | `--max-steps <n>` | number | role budget | Cap OODA iterations (only with `--role`) |
 | `--max-turns <n>` | number | `8` | Cap provider re-invocations (per step when `--role` is used) |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | `off`\|`low`\|`medium`\|`high` reasoning effort (both paths); unsupported providers warn on stderr and run without it. A `--role` run against a cli-subprocess agent is refused before `--effort` is evaluated. |
 | `-p, --provider <id>` | string | config default | Provider to run against |
 | `-m, --model <id>` | string | provider default | Model id |
 | `-s, --system <text>` | string | built-in prompt | System prompt |
@@ -309,6 +312,7 @@ Headless line REPL over the engine. Pipe lines in for scripted use; works on
 | `-p, --provider <id>` | string | config default | Provider to chat with |
 | `-m, --model <id>` | string | provider default | Model id |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | `off`\|`low`\|`medium`\|`high` reasoning effort, resolved once for the whole session; unsupported providers warn on stderr and run without it |
 
 **Examples**
 
@@ -338,6 +342,7 @@ Drive a subprocess coding CLI (claude-code / codex) through the engine.
 | `-m, --model <id>` | string | provider default | Model id |
 | `-s, --system <text>` | string | built-in prompt | System prompt |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | Always unsupported here — claude-code/codex run their own agent loop with no wire path for a reasoning-effort request. Any non-`off` value warns on stderr and is never sent. |
 
 **Examples**
 
@@ -371,6 +376,7 @@ planner role.
 | `-m, --model <id>` | string | provider default | Model id |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
 | `--cwd <dir>` | string | current dir | Working directory for tools and jobs |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | `off`\|`low`\|`medium`\|`high` reasoning effort (shares `agent --role`'s OODA path); unsupported providers warn on stderr and run without it |
 
 **Examples**
 
@@ -443,6 +449,7 @@ Fan one prompt across several providers and print each answer side by side.
 | --- | --- | --- | --- |
 | `-b, --backend <p[:m]>` | repeatable | — | Backend lane; at least two required |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | `off`\|`low`\|`medium`\|`high` reasoning effort applied to every lane; a lane whose provider can't honor it warns on stderr independently and runs without it |
 
 **Examples**
 
@@ -470,6 +477,7 @@ Race backends against each other.
 | `-b, --backend <p[:m]>` | repeatable | — | Backend lane; at least two required |
 | `--mode <m>` | enum | `first` | `first` = fastest healthy answer wins (losers cancelled); `best` = judge-ranked |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | `off`\|`low`\|`medium`\|`high` reasoning effort applied to every lane; a lane whose provider can't honor it warns on stderr independently and runs without it |
 
 **Examples**
 
@@ -494,6 +502,7 @@ Fan out across backends, then reconcile the answers into one via a judge.
 | `--strategy <s>` | enum | `merge` | `merge`, `rank`, or `vote` |
 | `--judge <model>` | string | offline rubric | Judge model hint |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | `off`\|`low`\|`medium`\|`high` reasoning effort applied to every lane; a lane whose provider can't honor it warns on stderr independently and runs without it |
 
 **Examples**
 
@@ -520,6 +529,7 @@ plan → edit → review over one provider.
 | `--stages <p:m,…>` | string | preset | Explicit comma-separated stage spec, each `provider[:model]` |
 | `-p, --provider <id>` | string | `mock` | Provider for the default preset |
 | `-o, --output <mode>` | enum | `text` | `text`, `json`, or `ndjson` |
+| `--effort <lvl>` | enum | `config.defaultEffort` (`off`) | `off`\|`low`\|`medium`\|`high` reasoning effort applied to every stage; a stage whose provider can't honor it warns on stderr independently and runs without it |
 
 **Examples**
 

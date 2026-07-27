@@ -18,9 +18,32 @@ source, not observing a run.
 | **Outputs** | stdout per `-o text\|json\|ndjson`, stderr, exit codes, `UiEvent`s emitted. |
 | **Expected behaviour** | The important field. Includes failure, cancel, timeout, provider-unavailable, resume, and mid-conversation switch. |
 | **macOS app** | Where the app surfaces it (`file:line`), or `NOT SURFACED`. |
-| **Status** | `UNVERIFIED` for everything. |
+| **Status** | `UNVERIFIED` unless a later pass supplied evidence — see below. |
 
-Line numbers are from the working tree at the time of writing.
+### Status vocabulary
+
+This document was written read-only, so its default is `UNVERIFIED`. A parallel execution pass has
+since supplied evidence for a few capabilities, which is recorded with attribution rather than
+merged silently:
+
+| Value | Meaning |
+| --- | --- |
+| `UNVERIFIED` | Derived from source only. Nothing was executed. **The default.** |
+| `VERIFIED (execution pass)` | A teammate ran it and reported the result. The evidence is named inline. |
+| `FIXED (in flight)` | A defect this document recorded has since been repaired in the working tree; the fix is cited. |
+
+A `VERIFIED` status covers **only** the exact path that was exercised. Where a CLI-side verification
+does not clear the corresponding app-side finding, that is stated explicitly — see **C3** and **G5**,
+both of which survive their CLI-side verifications.
+
+> **On line numbers.** `packages/cli/src/commands.ts` in particular is under active concurrent
+> edit; its line numbers drifted by roughly +100 while this document was being written. **The symbol
+> name in each citation is authoritative — the line number is a hint.** If a cited line does not
+> match, `grep` for the named function/constant/string rather than assuming the finding is stale.
+> The citations in **GAPS** and **CONTRADICTIONS** below were re-verified against the working tree
+> last; those in Parts I–VIII were not, and the `commands.ts` ones there read low by ~100 lines from
+> §21 onward. Every citation outside `commands.ts` (core, config, tools, hooks, agent, Swift) was
+> stable.
 
 ---
 
@@ -50,9 +73,18 @@ Line numbers are from the working tree at the time of writing.
   - Because every command uses `Option.Proxy()`, clipanion performs no per-command flag validation;
     all flag semantics come from `parseArgs` (§2).
   - An unknown verb reaches `DefaultCommand` (§6) and is rejected there.
+- **The 48 vs 45 reconciliation:** `index.ts` makes **48** `cli.register(...)` calls, but three are
+  not verbs — `Builtins.HelpCommand`, `Builtins.VersionCommand`, and `DefaultCommand`. The real
+  verb count is **45**, matching the execution pass exactly:
+  `agent ask audit auth budget cache chain chat code commit compare config consensus doctor explain
+  history index jobs keys login logout lsp mcp memory models plan plugin policy pr providers race
+  rbac receipt replay review roles route search serve session task tools trace tui usage`.
+  Note `session` is **singular and has no alias**; the three commands that do carry aliases are
+  `ask` (`run`, `q`), `task` (`tasks`), `plugin` (`plugins`) and `budget` (`budgets`).
 - **macOS app:** The app never registers commands; it composes argv strings
   (`apps/nexus-mac/Sources/NexusKit/NexusClient.swift:40-117`). Composition is the only coupling.
-- **Status:** `UNVERIFIED`
+- **Status:** `VERIFIED (execution pass)` — all **45/45 commands answer `--help` cleanly**; a
+  20-invocation safe read-only sweep passed with **zero hangs**, all ≤840 ms.
 
 ## 2. The shared flag grammar
 
@@ -580,7 +612,10 @@ Line numbers are from the working tree at the time of writing.
   `chat --persistent` with `--resume <sessionId>`, so continuity depends entirely on
   `history.storePrompts` and text-only resume. No switch receipt is read or displayed. See
   **GAPS G5**.
-- **Status:** `UNVERIFIED`
+- **Status:** `VERIFIED (execution pass)` for the **engine/CLI path** — a provider/model switch was
+  confirmed end to end to preserve context. This does **not** clear **G5**: the app does not switch
+  in-process, it tears the backend down and restarts with `--resume`, which is a different path and
+  was not what was exercised.
 
 ---
 
@@ -769,7 +804,8 @@ Line numbers are from the working tree at the time of writing.
   - Always exits `0`; there is no failure path.
 - **macOS app:** **`NOT SURFACED`.** The app never invokes `nexus roles` — no occurrence of
   `"roles"` exists anywhere in `apps/nexus-mac/Sources/`. See **GAPS G2**.
-- **Status:** `UNVERIFIED`
+- **Status:** `VERIFIED (execution pass)` — `nexus roles -o json` emits `id`, `tools`, `maxSteps`,
+  `permissionMode` and a one-line `description` per role, exactly as documented above.
 
 ## 25. `nexus code` — subprocess coding CLIs
 
@@ -1153,6 +1189,12 @@ Line numbers are from the working tree at the time of writing.
   - Sessions are always closed in `finally` (`commands.ts:4310-4313`, `:4394-4397`).
   - MCP tools carry the `network` permission class, which is why the agent loop opts into the
     `ask` tier and `tools run` does not (§29).
+  - **`FIXED (in flight)` — connect timeout + child reaping.** `connectAll()` previously had no
+    connect timeout, so a stdio server that never completed its handshake stalled the whole
+    invocation *before* any request-level timeout was armed, and its child was leaked. Now bounded
+    (`packages/mcp/src/client.ts:78` `timeoutMs`, race helper `:99-120`) with a process-level
+    SIGKILL reaper for tracked pids (`client.ts:139-184`), which also covers the case where the CLI
+    itself is killed by an unhandled signal and no `exit` handler would otherwise run.
 - **macOS app:** `mcp list` and `mcp tools` (`Integrations.swift:261`, `:265`), rendered in
   `IntegrationsView.swift`. `mcp add` / `rm` / `call` are `NOT SURFACED` — the app cannot add a
   server. See **GAPS G7**.
@@ -1390,6 +1432,13 @@ Line numbers are from the working tree at the time of writing.
     elsewhere.
   - Token estimation defaults to chars/4; the estimator is a swappable seam
     (`context/src/types.ts:37-38`).
+  - **`FIXED (in flight)` — per-source timeout.** `assemble()` previously had **no timeout on any
+    context source**, so one stalled source hung the entire run with no output. Each source is now
+    raced against `DEFAULT_SOURCE_TIMEOUT_MS = 10_000`
+    (`packages/context/src/engine.ts:80`, race helper `:82`, applied `:116`), resolving to a
+    fallback rather than rejecting — so a slow source degrades the context it contributes instead of
+    sinking the turn. **Design intent to preserve:** a context source is best-effort by contract;
+    exceeding its budget must cost the caller only its own timeout, never the run.
 - **macOS app:** `NOT SURFACED` — no context inspector. The TUI has `/context`
   (`packages/tui/src/chrome/commands.ts:259`); the app has no equivalent.
 - **Status:** `UNVERIFIED`
@@ -1420,6 +1469,12 @@ Line numbers are from the working tree at the time of writing.
   - `repoMapBudgetTokens(config)` clamps the raw setting against `context.budgetTokens`; `doctor`
     reports the **effective** budget, which differs from the raw one exactly when a
     misconfiguration would otherwise silently produce no map (`commands.ts:5333-5339`).
+  - **Known bound gap (mitigated, not closed).** `RepoMapSource` walks the tree bounded only by
+    `fileintel.maxTotalFiles` / `maxTotalBytes` — **never by directory count or wall-clock**. Run
+    from a large root such as `$HOME` the walk took **7+ minutes**. The §41 per-source timeout now
+    caps the damage at 10 s, but the walk itself is still unbounded in the dimensions that actually
+    blow up. **Design intent:** the map should additionally bound directory descent (depth and/or
+    visited-directory count) so the cost is predictable rather than merely truncated by a timer.
 - **macOS app:** `NOT SURFACED`.
 - **Status:** `UNVERIFIED`
 
@@ -1740,7 +1795,10 @@ Line numbers are from the working tree at the time of writing.
   `costIncomplete` entirely. Displays gate on `> 0` (`RootView.swift:428`,
   `SessionsView.swift:276`, `:352`), so unknown and free both render as nothing.
   See **CONTRADICTIONS C3**.
-- **Status:** `UNVERIFIED`
+- **Status:** `VERIFIED (execution pass)` for the **CLI renderer** — a real paid call reports
+  `cost=unpriced` and `mock` reports `$0.000000`, so unknown and free are genuinely distinguished on
+  the wire. This does **not** clear **C3**: the defect is in the app's Swift decoder, which cannot
+  represent the `null` the CLI correctly emits.
 
 ## 55. `nexus history list | show`
 
@@ -1873,6 +1931,12 @@ Line numbers are from the working tree at the time of writing.
     `wave6.ts:402-406`, `:425-452`).
   - No trace file ⇒ `no trace data yet (<path>) …`, exit `1`; zero spans ⇒ `no spans recorded`,
     exit `1`; a filter matching nothing ⇒ exit `1`.
+  - **`FIXED (in flight)` — the empty-identifier widening.** `nexus trace ""` previously returned
+    **11,134,907 bytes with exit 0**: the guard was `if (filter)`, which is falsy on `""`, so an
+    explicit empty identifier silently widened to "dump every span" while a *bogus* identifier
+    correctly errored. The guard is now `if (filter !== undefined)`
+    (`packages/cli/src/wave6.ts:430`), so only an **absent** argument means "no filter" and `""` is
+    rejected like any other non-matching identifier. Verified present in the working tree.
   - Metrics recorded include the `nexus.ttft.ms` and `nexus.latency.ms` histograms
     (`commands.ts:445-447`).
   - The trailer is **silent** when observability is off or the run produced no latency sample, so a
@@ -2302,4 +2366,543 @@ Line numbers are from the working tree at the time of writing.
   (`Auth.swift:29-32`).
 - **Status:** `UNVERIFIED`
 
-<!-- SECTION-BREAK -->
+---
+
+# Part VIII — The macOS app as a CLI client
+
+## 72. The app's command-composition contract
+
+- **What:** The app never constructs provider calls — it constructs `nexus` commands.
+- **Surface:** `NexusCommand` `apps/nexus-mac/Sources/NexusKit/NexusClient.swift:40-117`;
+  process launch `NexusClient.swift:293-347`; binary discovery `NexusBinary.discover`
+  `NexusClient.swift:151-171`.
+- **Binary resolution order** (`NexusClient.swift:154-170`): explicit URL → `$NEXUS_BIN` →
+  repo-local `packages/cli/dist/index.js` (development) → `/opt/homebrew/bin/nexus` →
+  `/usr/local/bin/nexus` → `$HOME/.local/bin/nexus` → each `$PATH` entry.
+  A `.js` entrypoint is run through a discovered `node` (`NexusClient.swift:174-182`).
+- **Expected behaviour:**
+  - A GUI `.app` launched from Finder does not inherit the shell `PATH`, so `PATH` alone is
+    insufficient — hence the explicit candidate list (`NexusClient.swift:136-139`). The child env is
+    augmented with `:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` and `NO_COLOR=1`
+    (`NexusClient.swift:307-311`, `PersistentSession.swift:132-135`).
+  - stdout is line-buffered so a JSON object split across two reads is never parsed in halves
+    (`LineBuffer`, `NexusClient.swift:382-408`; `PersistentLineBuffer`,
+    `PersistentSession.swift:208-232`).
+  - stderr lines are **surfaced, not swallowed** (`NexusClient.swift:326-332`), then classified for
+    display by `DiagnosticClassifier` (`Sources/NexusKit/DiagnosticClassifier.swift`), which drops
+    `.hidden` lines and tags the rest with urgency (`AppState.swift:130-143`).
+  - `NexusCommandError` is a typed enum so callers distinguish "nexus isn't installed" from "the
+    command failed" from "output wasn't parseable" without pattern-matching prose
+    (`NexusClient.swift:9-32`).
+  - `runJSON` rejoins all stdout lines and parses once, because `-o json` prints exactly one document
+    (`NexusClient.swift:247-283`).
+  - **The child's stdin is not set for one-shot runs** (`NexusClient.swift:313-318` sets only
+    stdout/stderr pipes), so the child inherits the app's stdin. See **GAPS G14**.
+- **Status:** `UNVERIFIED`
+
+## 73. App tabs and what each maps to
+
+- **Surface:** `WorkspaceTab` `apps/nexus-mac/Sources/NexusKit/AppState.swift:5-79`;
+  routing `apps/nexus-mac/Sources/NexusApp/RootView.swift:60-82`.
+- **Grouping** (`AppState.swift:36-65`): **Work** = `chat`, `agents`, `tasks`;
+  **History** = `sessions`, `git`; **Setup** = `accounts`, `integrations`, `settings`.
+- **The eight tabs:**
+  | Tab | View | Backing commands |
+  | --- | --- | --- |
+  | Chat | `Features/ConversationView.swift` (1330 lines) | `chat --persistent -o ndjson [-t --ask]`, `compare`, `race`, `agent --role` |
+  | Agents | `Features/AgentsView.swift` (583) | none of its own — folds live `UiEvent`s + OMC files |
+  | Sessions | `Features/SessionsView.swift` (441) | `session list`, `session show`, `replay` |
+  | Tasks | `Features/TasksView.swift` (411) | `task list\|add\|start\|done\|block\|cancel\|rm` |
+  | Accounts | `Features/AuthView.swift` (444) | `auth status`, `login`, `logout`, `logout --all`, `keys set --stdin` |
+  | Integrations | `Features/IntegrationsView.swift` (520) | `mcp list`, `mcp tools`, `tools list`, `config get hooks` |
+  | Git | `Features/GitView.swift` (655) | `explain`, `review`, `commit`, `commit --approve`, `pr [--base]`, plus raw `git` |
+  | Settings | in `RootView.swift` | none |
+- **Status:** `UNVERIFIED`
+
+## 74. The Agents tab — three kinds of concurrency
+
+- **What:** One list rendering three genuinely different things without conflating them.
+- **Surface:** `AgentRow` `AppState.swift:534-577`; `AgentRowBuilder` `AppState.swift:579-689`;
+  view `Features/AgentsView.swift`.
+- **The three origins** (`AppState.swift:535-543`):
+  - `.lane` — a provider lane inside a compare/race/consensus run (`lanes(from:)`,
+    `AppState.swift:581-598`).
+  - `.roleRun` — NexusCode's own OODA loop, one agent iterating on its own output
+    (`roleRuns(from:)`, `AppState.swift:628-662`).
+  - `.omc` — an oh-my-claudecode subagent (`omcAgents(from:)`, `AppState.swift:665-679`).
+- **Expected behaviour:**
+  - A role run rides on a provider lane, so `lanesExcludingRoleRuns` filters it out of the `.lane`
+    list to prevent double-counting (`AppState.swift:604-619`).
+  - **`AgentVerdict` is three-valued** and lives in its own field precisely because
+    `isRunning`/`isFailed` are booleans and cannot carry `.indeterminate` without squashing it into
+    "succeeded" or "failed" (`AppState.swift:552-560`). Once a role run stops the verdict **always**
+    resolves to one of the three; an unreadable outcome defaults to `.indeterminate`, never silently
+    dropped (`AppState.swift:655-659`).
+  - Rows are sorted running-first, then newest (`AppState.swift:682-688`).
+  - Role-run detail shows progress percent and delegated roles when present
+    (`AppState.swift:641-644`).
+- **Status:** `UNVERIFIED`
+
+## 75. OMC (oh-my-claudecode) integration
+
+- **What:** The app observes a second, unrelated agent system's on-disk state.
+- **Surface:** `OMCWorkspace` `apps/nexus-mac/Sources/NexusKit/OMC/OMCWorkspace.swift:38-157`;
+  models `OMC/OMCModels.swift` (334 lines); controller `OMCController`
+  `AppState.swift:484-524`.
+- **Expected behaviour:**
+  - Discovery walks up from the project directory looking for `.omc/`, the way a tool finds `.git`.
+    `nil` means the project does not use OMC — a normal state, not an error
+    (`OMCWorkspace.swift:47-66`).
+  - **Read-only by construction** — there is no write path in the type; OMC owns those files
+    (`OMCWorkspace.swift:35-37`).
+  - Polls on a 750 ms interval by default (`AppState.swift:502`).
+  - Unreadable paths are collected into `OMCSnapshot.unreadable` so the UI can say "stale" rather
+    than silently showing nothing (`OMCWorkspace.swift:9-11`).
+  - The registry (lifecycle) and mission file (current activity) are joined on `ownership`
+    (`OMCWorkspace.swift:22-30`).
+  - The poll loop holds `self` weakly, so releasing the controller ends it without a `deinit`
+    (`AppState.swift:520-523`).
+- **Note:** OMC is a **Claude-Code-specific** layer. It is surfaced regardless of which NexusCode
+  provider is active, so a session on `codex` or `gemini` still shows OMC rows if `.omc/` exists.
+  See **GAPS G15**.
+- **Status:** `UNVERIFIED`
+
+## 76. The app's Git tab
+
+- **What:** The git flows, plus raw git inspection.
+- **Surface:** `apps/nexus-mac/Sources/NexusApp/Features/GitView.swift` (655 lines);
+  raw git runner `GitView.swift:207`.
+- **Commands invoked:** `nexus explain -o json` (`:325`), `nexus review -o json` (`:414`),
+  `nexus commit -o json` (`:558`), `nexus commit --approve -o json` (`:570`),
+  `nexus pr [--base <ref>] -o json` (`:644-645`).
+- **Expected behaviour (CLI side, §ref `wave6.ts`):**
+  - `commit` generates from the **staged** diff, falling back to the working tree; nothing staged ⇒
+    exit `1` (`wave6.ts:545-559`). `--approve` (or `--yolo`) applies the commit with `-m header`
+    plus `-m body`; a git failure prints the stderr and exits `1` (`wave6.ts:569-579`).
+  - `review` exits `1` when any comment has severity `error` (`wave6.ts:603`).
+  - `explain`/`review` prefer piped stdin, then the staged diff, then the working tree; a clean tree
+    ⇒ a clear message and exit `1` (`resolveDiff`, `wave6.ts:513-531`).
+  - `pr` uses `--base` for `base..HEAD` commits and `base...HEAD` diff; without a base it summarises
+    recent history plus the working diff (or `HEAD~1` when clean). A bad ref degrades to empty
+    rather than crashing (`wave6.ts:644-657`). No commits and no diff ⇒ exit `1`.
+  - All four resolve their provider through `buildAuthedRuntime` with a `mock-fast` model fallback
+    (`wave6.ts:483-498`).
+- **Note:** These commands read stdin when it is not a TTY (`wave6.ts:64-73`), and the app does not
+  attach a stdin pipe. See **GAPS G14**.
+- **Status:** `UNVERIFIED`
+
+## 77. Cross-reference — CLI capabilities with no app surface
+
+- **What:** The reconciliation between this document's per-section "macOS app" field and the app-side
+  inventory, so the two documents cannot drift.
+- **Companion document:** `apps/nexus-mac/UI-INVENTORY.md` (885 lines) covers the app side. This
+  table is the CLI-side view of the same boundary; an execution pass independently enumerated **13**
+  capability groups with no UI, and all 13 match the `NOT SURFACED` verdicts recorded above.
+
+| Capability | Section | App verdict |
+| --- | --- | --- |
+| `agent --role` (OODA) | §22 | `role` property exists; **no UI ever sets it** → G1, G2 |
+| `roles` | §24 | `NOT SURFACED` — string `"roles"` absent from `Sources/` → G2 |
+| `consensus` | §51 | `NOT SURFACED` |
+| `chain` | §52 | `NOT SURFACED` |
+| `route` (`explain`/`test`) | §16 | `NOT SURFACED` |
+| `plan` | §23 | `NOT SURFACED` (and the plan is not persisted → G3) |
+| `index` / `search` (RAG) | §43 | `NOT SURFACED` |
+| `memory` | §40 | `NOT SURFACED` |
+| `doctor` | §65 | `NOT SURFACED` → G6 |
+| `history` | §55 | `NOT SURFACED` |
+| `cache` | §45 | `NOT SURFACED` |
+| `receipt` / `trace` | §58, §59 | `NOT SURFACED` |
+| enterprise: `rbac` `policy` `usage` `audit` `budget` | §69 | `NOT SURFACED` — none invoked anywhere |
+
+- **Additional CLI surfaces this document found unsurfaced, beyond those 13:** `code` (§25),
+  `jobs` (§39), `lsp` (§33), `serve` (§67), `plugin` (§37), `keys list`/`keys test` (§63),
+  `config set` (§64), `mcp add`/`rm`/`call` (§34), `session rename`/`branch`/`delete`/`export`
+  (§56), `providers reset`/`add` (§10), `tools run` (§32), and `race --mode` (§50 — the app can only
+  ever run `race first`).
+- **Status:** `VERIFIED (execution pass)` for the 13-item list; the additional surfaces above are
+  `UNVERIFIED` and derived from source.
+
+---
+
+# GAPS
+
+Capabilities that are missing, half-built, or that the app cannot reach. Each entry names the
+evidence and proposes a design.
+
+### G1. `nexus agent --role` supports `--resume`, but the app refuses to pass it
+- **Evidence:** the CLI resolves and applies resume on the role path
+  (`packages/cli/src/commands.ts` → `runAgentOoda`'s `resolveResumeTarget(args, config, historyDb, io, "agent")`), through the same resolver `chat` uses. The app
+  explicitly returns early before appending `--resume` for a role run
+  (`apps/nexus-mac/Sources/NexusKit/AppState.swift:292-300`), on the stated premise that
+  `runAgentOoda` "never reads a `--resume` flag" — which is no longer true.
+- **Consequence:** every role run in the app starts from nothing; a follow-up question loses the
+  conversation.
+- **Design:** delete the early return so the existing `if let sessionId { args += ["--resume", …] }`
+  applies to role runs too, and replace the comment with the accurate caveat: the *conversation*
+  resumes (text only, tool calls not replayed) while *plan/task state* deliberately does not.
+  Cover with a test asserting `--resume` is present in `oneShotArguments` for `.agent` + role.
+
+### G2. `nexus roles` exists but nothing reaches the app's picker
+- **Evidence:** `cmdRoles` (`packages/cli/src/commands.ts`) emits
+  `{roles:[{id, description, tools, maxSteps, permissionMode}]}` and was written explicitly for "the
+  app's role picker" (the `cmdRoles` doc comment). No occurrence of `"roles"` exists in
+  `apps/nexus-mac/Sources/`; nothing in the UI ever assigns `ConversationController.role`
+  (only tests do, `Tests/NexusKitTests/AppStateTests.swift:144`).
+- **Consequence:** the OODA framework — arguably the harness's most differentiated capability — is
+  unreachable from the app.
+- **Design:** a `RolesController` mirroring `ProvidersController`: `runJSON(.json(["roles"]))`,
+  decode defensively into `NexusRole {id, description?, tools, maxSteps, permissionMode}`, expose it
+  in the ControlStrip as a role picker enabled only in `.agent` mode. Show `description` as the row
+  subtitle and **warn on any `permissionMode` other than `read-only`** — that field exists precisely
+  so a client can warn before running a role that can write files.
+
+### G3. `nexus plan` produces a plan that is thrown away
+- **Evidence:** `runAgentOoda` opens a `:memory:` TaskStore (`packages/cli/src/commands.ts` → `runAgentOoda`'s `openTasks({ file: ":memory:" })`); `cmdPlan` renders
+  `res.result.plan` (`packages/cli/src/commands.ts` → `cmdPlan`'s `renderPlanTree(res.result.plan, io)`) and returns. Nothing writes to the durable store that
+  `nexus task list` reads (`packages/cli/src/commands.ts` → `openTaskStore`).
+- **Consequence:** `nexus plan 'build X'` then `nexus task list` shows nothing. The app's Tasks tab
+  can never show a generated plan.
+- **Design:** add `nexus plan --persist` (or make persistence the default with `--no-persist`) that
+  writes the drafted tasks into the durable store with their parent/deps intact, printing the created
+  ids. Keep the `:memory:` store for the *run*; copy the settled plan out at the end.
+
+### G4. `nexus jobs list` is structurally incapable of listing anything
+- **Evidence:** `commands.ts` → `cmdJobs`'s `sub === "list"` branch returns `[]` / `no background jobs` unconditionally, with a
+  comment explaining that jobs are per-process and a fresh invocation has none.
+- **Consequence:** the "background jobs" capability has no cross-invocation existence. A job started
+  by `jobs run` cannot be listed, polled, or killed from another invocation.
+- **Design:** either (a) persist a job registry (pid + metadata) under the data dir so `list`,
+  `logs <id>` and `kill <id>` are real across invocations, with liveness re-probed on read; or
+  (b) if per-process is the intended scope, rename the subcommand and make the message say so
+  explicitly ("background jobs are scoped to one invocation; use `jobs run`"). Silently returning an
+  empty list for a command named `list` is the current failure.
+
+### G5. Mid-conversation provider switch degrades to a fresh process plus text-only resume
+- **Evidence:** `AppState.swift:333-336` (`submit`) tears the live session down on any provider/model/role
+  change; `submitToPersistentSession` then starts a new `chat --persistent --resume <id>`
+  (`AppState.swift:361-384`). Resume restores **text only** — tool calls are not replayed
+  (`packages/cli/src/commands.ts` → `cmdChat`'s `[resume]` notice). The switch machinery in `packages/core/src/switching.ts` (assessment,
+  blockers, warnings, receipts) is never consulted, and no receipt is displayed.
+- **Consequence:** the harness's second governing principle ("switching must never lose context,
+  meaning, or capability") is enforced inside a single engine process, and the app's switch path
+  leaves that process.
+- **Design:** add a persistent-mode control line for switching — symmetric with the approval control
+  line — e.g. `{"type":"switch","provider":"…","model":"…"}`, handled in `cmdChat`'s reading loop.
+  The engine then performs a real in-process switch with preflight, compaction and a receipt, and
+  emits the receipt as a `UiEvent` the app renders. This is the single highest-value fix in this list.
+
+### G6. `doctor`, the provider circuit, and observability are invisible to the app
+- **Evidence:** no `doctor` invocation in `apps/nexus-mac/Sources/`; `ProvidersController.refresh`
+  reads only `providers` and `pricing` from `providers status` and ignores `circuits`
+  (`Providers.swift:161-175`); no `trace` invocation.
+- **Consequence:** a quota-blocked provider shows as merely "usable" in the picker; a broken
+  subsystem is invisible until a run fails.
+- **Design:** decode `circuits[]` into `NexusProvider` (a `blockedUntil` + `reason`) and grey the row
+  with the reason, reusing the `SelectableProvider.reason` slot that already exists. Add a Settings
+  → Diagnostics pane running `nexus doctor` and rendering its sections.
+
+### G7. The app is read-only for every configuration surface
+- **Evidence:** it invokes `mcp list`/`mcp tools` but not `mcp add`/`rm`
+  (`Integrations.swift:261-269`); `tools list` but not group enabling; `config get hooks` but never
+  `config set` (`IntegrationsView.swift:255`); `session list`/`show` but not
+  `rename`/`branch`/`delete`/`export` (`Sessions.swift:145-178`).
+- **Consequence:** every configuration change requires dropping to a terminal, which contradicts the
+  app being a full client of the CLI.
+- **Design:** add write paths for the safe, well-validated cases — `mcp add`/`rm`,
+  `config set tools.enabledGroups`, `session rename`/`delete`/`export`. All four already validate
+  server-side before writing, so the app only needs to surface the error.
+
+### G8. `chat -t` has no `cli-subprocess` guard
+- **Evidence:** `cmdAgent` redirects a subprocess provider (`packages/cli/src/commands.ts` → `cmdAgent`'s `return cmdCode(args, io)`), `runAgentOoda`
+  refuses it (`packages/cli/src/commands.ts` → `runAgentOoda`'s `--role is not supported with` refusal), and the TUI dispatcher excludes it
+  (`packages/cli/src/commands.ts` → `cmdTui`'s `dispatchTurn` `isSubprocess` probe). `cmdChat`'s tool-loop dispatch has no such check
+  (`packages/cli/src/commands.ts` → `cmdChat`'s `runTurn` `dispatchAgent` call).
+- **Consequence:** the app's default path is `chat --persistent -t --ask`. Selecting `claude-code` or
+  `codex` as the provider there wraps a CLI that runs its own agent loop inside our native tool loop
+  — the exact failure the other three sites document (unresolvable tool names, an unenforceable
+  sandbox, and re-spawning that burned ~400k input tokens on a trivial read).
+- **Design:** apply the same guard in `cmdChat`: when `registry.get(providerId).transport ===
+  "cli-subprocess"`, ignore `-t` and dispatch once per turn (matching the TUI), emitting one
+  explanatory stderr line so the degradation is not silent.
+
+### G9. The app cannot detect an incompatible CLI
+- **Evidence:** `NexusBinary.discover` resolves any executable named `nexus` on `PATH`
+  (`NexusClient.swift:151-171`); nothing invokes `--version`.
+- **Consequence:** an older CLI that omits `session.sessionId` silently breaks resume; a newer one
+  that changes a field breaks decoding at runtime rather than at startup.
+- **Design:** run `nexus --version` once at launch, compare against a minimum the app declares, and
+  show a single clear banner on mismatch. The `UiEvent.Session.sessionId` optionality
+  (`UiEvent.swift:43-49`) already anticipates this — it just has no place to report it.
+
+### G10. Session snapshots exist in the store but have no command
+- **Evidence:** `SessionStore.snapshot` (`packages/session/src/store.ts:328`) and
+  `listSnapshots` are implemented and exported (`packages/session/src/index.ts:31`), but
+  `cmdSession` handles only `list|show|rename|branch|delete|export` (`wave6.ts:274`).
+- **Design:** add `nexus session snapshot <id> [--name]` and `nexus session snapshots <id>`.
+  The engine work is already done.
+
+### G11. Three hook events are declared but never fired
+- **Evidence:** `HookEvent` declares ten (`packages/hooks/src/types.ts:12-22`) and marks
+  `pre-agent-step` and `on-approval` as vetoable . The CLI emits only `session-start`,
+  `pre-run`, `post-run`, `on-error`, `session-end` (`packages/cli/src/commands.ts` → the five `hooks.emit(...)` sites in `cmdAgent`) plus
+  `pre-tool`/`post-tool` (`extensions.ts:99-124`). `pre-agent-step`, `post-agent-step` and
+  `on-approval` have no emit site.
+- **Consequence:** a user configures a hook on `on-approval` and it silently never runs — a silent
+  failure, and the config validates happily because `HookEventName` accepts all ten
+  (`schema.ts:771-783`).
+- **Design:** emit `pre-agent-step`/`post-agent-step` around each OODA step in `runAgentOoda`, and
+  `on-approval` from `ApprovalBroker.request` (honouring the returned `approve` verdict, which is
+  why it is in `VETOABLE_EVENTS`). Until then, reject the three unimplemented names at config
+  validation rather than accepting a hook that cannot fire.
+
+### G12. The `route` UiEvent is defined but never emitted
+- **Evidence:** the union declares `{t:"route", chosen, reason, candidates}`
+  (`packages/core/src/projection.ts:36-40`) and the app decodes it
+  (`UiEvent.swift:57-61`), but no `chunkToUiEvents` case produces it and `route explain` prints its
+  own text/JSON (`cmdRoute`'s `explain` branch in `packages/cli/src/commands.ts`).
+- **Design:** emit it from `dispatchRoute` when candidates are selected, so `route test -o ndjson`
+  and any client can see the decision rather than only its outcome.
+
+### G13. `cancel` in the app does not stop the backend
+- **Evidence:** `ConversationController.cancel` cancels the Swift Task and clears `isRunning`
+  (`AppState.swift:432-436`) but leaves `session` and the child process alive. Only `endSession`
+  and `stopLiveSession` stop it.
+- **Consequence:** the stop button stops the UI from listening; the model keeps generating and
+  keeps spending. Tool calls already in flight still execute.
+- **Design:** `cancel` should send SIGINT to the persistent child (which the CLI already handles by
+  cancelling the in-flight turn and denying its pending approvals, `cmdChat`'s persistent signal handler and `ApprovalBroker`'s abort path) while keeping the process alive for the next turn — a real per-turn interrupt rather
+  than a UI-only one.
+
+### G14. One-shot app commands inherit stdin, and several CLI commands read stdin
+- **Evidence:** `NexusClient.launch` sets `standardOutput` and `standardError` but never
+  `standardInput` (`NexusClient.swift:313-318`). `readStdin` iterates `process.stdin` whenever it is
+  not a TTY (`packages/cli/src/commands.ts` → `readStdin`; `wave6.ts:64`), and the git flows call it first
+  (`wave6.ts:519`).
+- **Consequence:** if the inherited stdin is an open pipe that never closes, `nexus explain` /
+  `review` / `commit` / `pr` block in `readStdin` **before producing any output**. This is also the
+  shape of the reported hang (`nexus agent --role … -p mock -m mock-tools` running with both streams
+  empty): `readPrompt` → `readStdin` runs before any provider work.
+- **Design:** the app should attach an explicitly closed stdin pipe for every one-shot command.
+  Independently, the CLI should not block indefinitely on stdin when a prompt was already supplied
+  as a positional — `readPrompt` (`packages/cli/src/commands.ts`) currently reads stdin unconditionally even
+  when `positionals` is non-empty. Making the stdin read conditional on an empty positional prompt
+  (or bounding it) removes the hang class entirely.
+
+### G15. OMC is Claude-Code-shaped and surfaced regardless of provider
+- **Evidence:** `OMCWorkspace` reads `.omc/state/…` files written by oh-my-claudecode
+  (`OMCWorkspace.swift:68-125`); `AgentRowBuilder.combined` merges OMC rows unconditionally
+  (`AppState.swift:682-688`).
+- **Consequence:** a run on `gemini` or `codex` shows OMC subagents that have nothing to do with it,
+  while a non-Claude provider gets no equivalent orchestration surface. The harness's own OODA
+  framework is the provider-neutral answer — and it is the thing not surfaced (G2).
+- **Design:** treat OMC as one *source* among several behind a common protocol, gate its rows on the
+  active provider actually being Claude-Code-backed (or on an explicit user toggle), and make
+  NexusCode's own role runs the primary content of the Agents tab.
+
+### G16. No `nexus team` command exists
+- **Evidence:** no occurrence of a `team` command path anywhere in `packages/`; it is not registered
+  in `index.ts:1000-1047`. A `--roles` flag likewise does not exist in `FLAG_SPEC`.
+- **Consequence:** anything referring to `nexus team --roles` refers to a command that does not exist.
+- **Design:** if multi-role concurrent execution is wanted, it is already reachable as a composition:
+  the `coordinator` role delegates to sub-agents with `deriveChild` gating
+  (`packages/agent/src/runner.ts:479-504`). A `nexus team --roles a,b,c` would be a thin front end
+  over `compare`-style fan-out of `agent --role` runs sharing one task store. Do not add the flag
+  without deciding whether it fans out roles or delegates within one run — they are different
+  products.
+
+### G17. `lsp diagnostics` cannot be distinguished from success by an automated caller
+- **Reported:** `nexus lsp diagnostics <file>` reports "no language server available for typescript"
+  **and exits 0** in a TypeScript repo. The brief asked whether that is honest degradation or a gap.
+- **The call: it is a real gap, but not the one it looks like.** Two things have to be separated.
+  - The **registry is fine.** `typescript-language-server` *is* a shipped default for `typescript`,
+    `typescriptreact` and `javascript` (`packages/lsp/src/registry.ts:22-46`). The message means the
+    binary is not on `PATH` — accurate, not a coverage hole.
+  - The **exit code is the defect.** `cmdLsp` returns `0` for *both* "the server answered and found
+    no diagnostics" and "there is no server at all" (`commands.ts` → `cmdLsp`'s trailing
+    `return 0`), and routes the second to stderr. So a script — or the agent tool loop — cannot tell
+    "clean file" from "nothing ran". That is a silent failure by the project's own standard: an
+    unavailable capability is being reported through the same channel as a successful one.
+- **Why exit 0 was chosen:** deliberately, so scripts can *probe* availability without treating
+  absence as a crash (`commands.ts` → `cmdLsp`'s closing comment). That intent is right; the
+  encoding is wrong — it spends the only signal a caller has.
+- **Design:** keep exit `0` for a real answer, and give unavailability its own distinguishable
+  outcome. Cheapest honest fix: a distinct exit code (e.g. `3`) for "no server / unknown language",
+  documented as non-fatal; and in `-o json`, an explicit `{"available": false, "reason": …}` beside
+  the existing `ok`, so the machine-readable mode carries the distinction the exit code currently
+  cannot. `nexus doctor` already reports detected servers, so the probe use case survives either way.
+
+### G18. `nexus ask` silently ignores its own `--cwd`
+- **Evidence:** `--cwd` is a declared value flag in the shared grammar (`index.ts:87`) and is
+  honoured by `cmdAgent`, `runAgentOoda`, `cmdTools`, `cmdLsp` and the git flows. `cmdAsk` never
+  reads it — its only cwd reference is a hard-coded `buildPowerSources(config, { cwd: process.cwd() })`.
+  Confirmed still open in the working tree.
+- **Consequence:** `nexus ask --cwd /some/project 'what does this repo do?'` assembles project
+  context (conventions, repo map, RAG, git diff) from the **invoking** directory, silently answering
+  about the wrong tree. `parseArgs` consumes the flag as a valid value flag, so no
+  `unknown flag(s) ignored` warning fires — the user gets no signal at all.
+- **Design:** resolve `const cwd = args.flags.get("cwd") ?? process.cwd()` once in `cmdAsk` and thread
+  it into `buildPowerSources`, matching `cmdAgent`. Worth auditing the same way across every command
+  that assembles context, since the flag is global in the grammar but honoured ad hoc.
+
+---
+
+# CONTRADICTIONS
+
+Places where the code, the docs, and the app disagree. Bug candidates, listed even when small.
+
+### C1. App says `agent --role` has no `--resume`; the CLI implements it
+- **App:** `AppState.swift:292-297` — "`nexus agent --role` has no `--resume`: the OODA framework
+  (`runAgentOoda` in packages/cli/src/commands.ts) opens a fresh engine session on every invocation
+  and never reads a `--resume` flag".
+- **CLI:** `runAgentOoda` calls `resolveResumeTarget(args, config, historyDb, io, "agent")`
+  and passes `{resume}` to `engine.openSession`. `index.ts:303` documents it. `index.ts:307` even
+  gives the example `nexus agent --role researcher --resume s_1234 …`.
+- **Severity:** high — the app disables a working capability. See **G1**.
+
+### C2. `--effort` is shown in the app's command preview but does not exist in the CLI
+- **App:** `ConversationView.swift:337` — `if effort != .off { args += ["--effort", effort.rawValue] }`,
+  inside `commandPreview`, in a view whose own comment says it "can't silently omit a flag the user
+  picked".
+- **CLI:** no `effort` entry in `FLAG_SPEC` (`index.ts:68-171`); no `--effort` anywhere in
+  `packages/cli/src/` or `packages/tui/src/`. Effort exists **only** as the TUI `/effort` slash
+  command (`packages/tui/src/chrome/commands.ts:215`).
+- **Two failures at once:** (a) the preview shows a flag the spawned argv does **not** contain,
+  directly violating "a command preview must equal the command actually spawned"; (b) even if it
+  were passed, `parseArgs` would swallow it as an unknown boolean and print
+  `warning: unknown flag(s) ignored: --effort` (`args.ts:168-186`) — the effort level would be
+  silently discarded.
+- **Severity:** high — it is the named precedent, violated in the one place that promises it.
+- **Status:** **confirmed by the execution pass** (absent from `FLAG_SPEC.value`; reasoning effort
+  lives only in `nexus tui`'s interactive `/effort` picker, which `chat --persistent` never mounts —
+  so the app's control has no reachable backend at all). A CLI-side fix is in flight. The app side
+  is separate: even once `--effort` exists, the preview must stop diverging from the spawned argv,
+  which means routing effort through `plannedCommand` rather than splicing it in the view.
+
+### C3. `usage.costUsd: null` cannot be decoded by the app
+- **CLI:** `costUsd: number | null`, with `null` meaning UNKNOWN and an explicit instruction never to
+  render it as `$0.00` (`packages/core/src/projection.ts:98-105`).
+- **App:** `public let costUsd: Double` — non-optional (`UiEvent.swift:188`). A `null` throws during
+  decode, and `decodeLine`'s catch converts the **entire event** to
+  `.unknown(type: "malformed", raw:)` (`UiEvent.swift:313-320`).
+- **Consequence:** for an unpriced model the usage event is silently dropped — losing the token
+  counts too — and `ViewState.totals` never advances (`ViewState.swift:378-384`). No test covers a
+  null cost (`Tests/NexusKitTests/UiEventDecodingTests.swift:105` cover `0.0042` and `0`).
+- **Related:** `NexusSession.costUsd = json["costUsd"]?.doubleValue ?? 0` (`Sessions.swift:84`)
+  coerces missing cost to `0` — the exact `?? 0` the CLI forbids (`formatCostUsd` in `packages/cli/src/commands.ts`) — and
+  drops `SessionMeta.costIncomplete` entirely. Displays gate on `> 0`
+  (`RootView.swift:428`, `SessionsView.swift:276`), so unknown and free render identically.
+- **Severity:** high — the "unknown cost is not `$0.00`" precedent is inverted into a silent failure.
+
+### C4. `NexusCommand.ask` appends `--resume`, which `nexus ask` ignores
+- **App:** `NexusClient.swift:50-62` builds `["ask", prompt, "-o","ndjson", …, "--resume", id]`.
+- **CLI:** `cmdAsk` never reads `resume`; only `chat` and `agent --role` do.
+  `parseArgs` accepts it as a value flag, so no warning is printed — it is consumed and dropped.
+- **Same class:** `oneShotArguments` appends `--resume` for `.compare`/`.race`
+  (`AppState.swift:299`), and neither `cmdCompare` nor `cmdRace` reads it.
+- **Severity:** medium — a silently ignored flag. `NexusCommand.ask` is currently unused by the UI,
+  but it is public API.
+
+### C5. The app's "Agent" mode does not run `nexus agent`
+- **App:** `RunMode.agent` is documented as "`nexus agent` — the native tool loop"
+  (`AppState.swift:87-88`), but `usesPersistentSession` returns `true` for `.agent` with no role
+  (`AppState.swift:248-250`), so it runs `chat --persistent -t --ask`.
+- **Consequence:** the mode label names a command it does not invoke. The behaviours do differ:
+  `nexus agent` auto-approves the ask tier with no human in the loop
+  (`cmdAgent`'s `buildToolGate(mode, config, { approveAskTier: true })`), while `chat -t --ask` requires a real approval for write/exec/network
+  (`resolveChatPermissionMode` in `packages/cli/src/commands.ts`). The app's choice is the *safer* one — but the label is wrong.
+- **Severity:** low-medium — a naming/documentation contradiction, not a behavioural bug.
+
+### C6. `nexus agent` does not apply the graceful default-provider fallback
+- **Evidence:** `ask` (`cmdAsk`), `chat` (`cmdChat`), `tui` (`cmdTui`) and `models` (`cmdModels`) all route the no-`-p` case through `resolveDefaultProviderForRun`.
+  `cmdAgent` and `runAgentOoda` (both `args.flags.get("provider") ?? config.defaultProvider`) use
+  `args.flags.get("provider") ?? config.defaultProvider` directly and then hard-fail.
+- **Consequence:** on a fresh machine `nexus ask hi` works (falls back to `mock`) while
+  `nexus agent hi` exits `1` with `provider "anthropic" is not available`. The git flows
+  (`wave6.ts:489` (`resolveGitProvider`)) behave like `agent`.
+- **Severity:** medium — inconsistent first-run behaviour across sibling commands.
+
+### C7. `nexus ask` emits a `cache` ndjson line that is not in the `UiEvent` union
+- **Evidence:** `commands.ts` → `renderCachedResponse` writes `{"t":"cache","hit":true}` into the ndjson stream. The union
+  (`projection.ts:14-108`) has no `cache` member, and `ui.ts` claims `--output ndjson` "is the public
+  wrap contract, so its shape is stable" (`packages/cli/src/ui.ts:4-5`).
+- **Consequence:** a strict consumer sees an undocumented event. The app degrades it to `.unknown`
+  (`UiEvent.swift:296-297`), so no crash — but the contract statement is false.
+- **Severity:** low. Either add `cache` to the union or emit it on stderr.
+
+### C8. `history.storePrompts` defaults to `true`, but the CLI tells users it is off
+- **Schema:** `storePrompts: z.boolean.default(true)` with the comment "ON by default so provider
+  switching and process restart preserve the conversation" (`packages/config/src/schema.ts:473-481`).
+- **Docs:** `docs/CONFIGURATION.md:222` correctly documents the default as `true`.
+- **CLI, two places, both wrong:**
+ - `packages/cli/src/index.ts:431` — "Resume requires `history.storePrompts` (off by default —
+  it is what writes your prompts to disk)".
+ - `commands.ts` → `resolveResumeTarget`'s error text — the runtime error says
+  "(history.storePrompts is off, the default)" and instructs the user to enable it.
+ - `commands.ts` → the `resolveResumeTarget` doc comment — "Resume depends on `history.storePrompts`, which is OFF by default".
+- **Consequence:** the help text tells users to enable something already on. Worse, the *error* text
+  misdiagnoses: if a user has explicitly set it to `false`, they are told it is "the default", which
+  hides that they configured it.
+- **Severity:** medium — user-facing misinformation on the resume path.
+
+### C9. `docs/COMMANDS.md` omits `nexus roles` entirely
+- **Evidence:** the section list runs from `nexus tui` to `nexus keys`
+  (`docs/COMMANDS.md:176-1687`) with no `### \`nexus roles\`` heading. The only `roles` matches are
+  the enterprise `rbac list` alias (`COMMANDS.md:1269`) and the enterprise config key
+  (`CONFIGURATION.md:503`).
+- **Consequence:** a top-level registered command (`index.ts:1007`) is undocumented — the same
+  discoverability problem `cmdRoles` was written to solve, one layer up.
+- **Severity:** medium.
+
+### C10. `--resume` / `--continue` appear nowhere in `docs/COMMANDS.md`
+- **Evidence:** no match for `--resume` in `docs/COMMANDS.md`, despite `### nexus chat`
+  (`COMMANDS.md:298`) and `### nexus agent` both having sections and both supporting it
+  (`index.ts:405-450`).
+- **Severity:** medium — session continuity is a headline capability with no documentation.
+
+### C11. `DEFAULT_PRICING`'s comment contradicts the codebase's cost rule
+- **Evidence:** `packages/config/src/schema.ts:1180-1183` — "An unknown model id simply falls through
+  to $0 (as before) — never a wrong number."
+- **Reality:** the rest of the codebase treats unknown-as-zero as precisely the wrong number
+  (`formatCostUsd` in `packages/cli/src/commands.ts`, `projection.ts:98-105`), and `formatCostUsd` renders `null` as `unpriced`.
+  The lookup returns `undefined`, which becomes `null`, which renders `unpriced` — the *behaviour*
+  is right; the comment describes the old, rejected semantics.
+- **Severity:** low — stale prose in a load-bearing file, likely to mislead the next editor.
+
+### C12. `nexus roles -o ndjson` emits a single JSON object, not newline-delimited records
+- **Evidence:** `cmdRoles`'s `output === "json" || output === "ndjson"` branch — `if (output === "json" || output === "ndjson")` prints one
+  `{"roles":[…]}` document for both.
+- **Consequence:** `ndjson` is defined as one record per line everywhere else. A consumer streaming
+  `nexus roles -o ndjson` gets one line containing everything.
+- **Severity:** low.
+
+### C13. The top-level `USAGE` string is unreachable from `--help`
+- **Evidence:** `USAGE` (`index.ts:173-265`) is written only by the bare non-TTY default path
+  (`index.ts:989` (`DefaultCommand`)). `nexus --help` goes to clipanion's `Builtins.HelpCommand`
+  (`index.ts:1000`), which renders per-command descriptions instead.
+- **Consequence:** the carefully written flag reference — including `--theme`'s full theme list and
+  every permission flag — is invisible to anyone who types `nexus --help` on a terminal.
+  It also means `USAGE` can drift from the registered commands without any check: it lists
+  `plugin list|add|…` and `roles` but is never diffed against `cli.register` calls.
+- **Severity:** low-medium.
+
+### C14. `providers list -o json` and `providers status -o json` have different top-level shapes
+- **Evidence:** `list` prints a bare **array** (`cmdProviders`'s `list` JSON branch); `status` prints an **object**
+  with `providers`/`circuits`/`circuitStore`/`pricing` (`cmdProviders`'s `status` JSON branch). The comment calls
+  the array a deliberately frozen contract.
+- **Consequence:** the app defines `providersList` (`Providers.swift:220-222`) and
+  `NexusCommand.providers` (`NexusClient.swift:69-71`) but neither is used — `refresh` calls
+  `providersStatus` and reads `value["providers"]`. A caller that switches between the two silently
+  gets `nil`.
+- **Severity:** low — documented, but a live trap for two unused code paths in the app.
+
+### C15. The `mock` search provider shadows a tool name
+- **Evidence:** `packages/tools-web/src/search.ts:59` declares `name: "mock"` for the offline search
+  *provider*, while `:189` declares the tool `web_search`. `STATIC_TOOL_NAMES.web` lists only
+  `web_search`, `web_fetch`, `web_crawl` (`tool-groups.ts:207`).
+- **Consequence:** no functional collision today, but `groupOfTool` does a reverse lookup by name
+  (`tool-groups.ts:196-200`) against a hand-kept roster, so any drift between the factories and
+  `STATIC_TOOL_NAMES` silently mis-attributes a tool's group — and `tools run` uses exactly that
+  lookup to decide whether a group is enabled (`cmdTools`'s disabled-group guard in `packages/cli/src/commands.ts`).
+- **Severity:** low — a latent consistency hazard rather than a present bug.
+
