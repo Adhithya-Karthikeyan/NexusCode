@@ -750,6 +750,13 @@ struct ControlStrip: View {
     /// `persistentSessionArguments()`, which both `commandPreview` and the
     /// real spawn call through) — so this switches genuine behavior rather
     /// than reading it back the way a disabled/dimmed readout would.
+    ///
+    /// Neutral tone regardless of state — see `DESIGN.md`'s colour system:
+    /// accent is earned by selection, the one primary action, or live state,
+    /// never by "this setting happens to be on." A persistent configuration
+    /// toggle read accent when enabled used to be one of the four unrelated
+    /// places accent showed up with no shared meaning; the filled vs.
+    /// slashed glyph already carries the on/off distinction on its own.
     private var approvalControl: some View {
         Button {
             controller.approvalsEnabled.toggle()
@@ -761,7 +768,7 @@ struct ControlStrip: View {
                     .font(Kind.monoSmall)
             }
         }
-        .buttonStyle(SoftButton(tone: controller.approvalsEnabled ? .accent : .neutral, size: .compact))
+        .buttonStyle(SoftButton(tone: .neutral, size: .compact))
         .disabled(!approvalsApply)
         .opacity(approvalsApply ? 1 : 0.5)
         .help(
