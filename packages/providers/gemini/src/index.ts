@@ -73,11 +73,33 @@ export const GEMINI_API_KEY_ENV = "GEMINI_API_KEY";
  * This list WILL go stale again — that is exactly why `ModelListSource`
  * exists: staleness is now labelled (`"fallback"`), never silently
  * presented as a verified catalog.
+ *
+ * SECOND VERIFICATION PASS (2026-07-29, independent re-check of the above
+ * against the same two Google pages) — the list was right about the 2.0
+ * shutdowns and about 3.6-flash/3.1-flash-lite, but was INCOMPLETE:
+ *  - `gemini-3.5-flash` was MISSING and is GA on both pages. The models page
+ *    describes it as the "most intelligent model for sustained frontier
+ *    performance on agentic and coding tasks" — for a coding harness that is
+ *    arguably the single most important Gemini model to offer, so it now
+ *    leads the list.
+ *  - `gemini-3.5-flash-lite` was MISSING and is GA on both pages. Added.
+ *  - `gemini-2.5-pro`: the two sources DISAGREE. The models page does not
+ *    list it under GA (it appears preview-only there); the pricing page
+ *    lists it with full standard/batch/flex/priority tiers, i.e. billable
+ *    and current. Kept, because a model you can be billed for is one a user
+ *    can select — but this is the entry to re-check first when this list is
+ *    next revised, and the disagreement is recorded here rather than
+ *    silently resolved.
+ * Order is deliberate: frontier coding models first, cost-optimised
+ * `-lite` tiers last, because callers that take the head of this list as a
+ * default should land on a capable model rather than the cheapest one.
  */
 export const DEFAULT_GEMINI_MODELS: ModelInfo[] = [
+  { id: "gemini-3.5-flash", modalities: ["text", "image", "audio"] },
+  { id: "gemini-3.6-flash", modalities: ["text", "image", "audio"] },
   { id: "gemini-2.5-pro", modalities: ["text", "image", "audio"] },
   { id: "gemini-2.5-flash", modalities: ["text", "image", "audio"] },
-  { id: "gemini-3.6-flash", modalities: ["text", "image", "audio"] },
+  { id: "gemini-3.5-flash-lite", modalities: ["text", "image", "audio"] },
   { id: "gemini-3.1-flash-lite", modalities: ["text", "image", "audio"] },
 ];
 

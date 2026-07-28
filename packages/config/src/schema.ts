@@ -598,10 +598,21 @@ export const GeminiProviderConfig = z
     enabled: z.boolean().default(true),
     /** Env var read for the API key (falls back to the SecretStore under `gemini`). */
     apiKeyEnv: z.string().default("GEMINI_API_KEY"),
-    /** Logical alias → native Gemini model id. */
+    /**
+     * Logical alias → native Gemini model id. Refreshed 2026-07-29 — same
+     * verification as `DEFAULT_GEMINI_MODELS`
+     * (`packages/providers/gemini/src/index.ts`, see its doc for the two
+     * verification passes and the recorded pro-tier source disagreement):
+     * `gemini-2.0-flash` is CONFIRMED deprecated/shut down (2026-06-01);
+     * `gemini-1.5-pro` is older still. `gemini-3.5-flash` is Google's own
+     * stated flagship for "sustained frontier performance on agentic and
+     * coding tasks" — the appropriate pick for a coding harness over the
+     * newer-but-more-general `gemini-3.6-flash`. `gemini-2.5-pro` is kept
+     * for the "pro" alias per that same doc's note.
+     */
     modelMap: z.record(z.string(), z.string()).default({
-      "gemini-flash": "gemini-2.0-flash",
-      "gemini-pro": "gemini-1.5-pro",
+      "gemini-flash": "gemini-3.5-flash",
+      "gemini-pro": "gemini-2.5-pro",
     }),
   })
   .strict();
@@ -630,10 +641,14 @@ export const VertexProviderConfig = z
     project: z.string().optional(),
     /** Vertex location/region. */
     location: z.string().default("us-central1"),
-    /** Logical alias → native Vertex model id. */
+    /**
+     * Logical alias → native Vertex model id. Refreshed 2026-07-29 — same
+     * verification as `GeminiProviderConfig.modelMap` above (Vertex serves
+     * the same Gemini model family).
+     */
     modelMap: z.record(z.string(), z.string()).default({
-      "vertex-flash": "gemini-2.0-flash",
-      "vertex-pro": "gemini-1.5-pro",
+      "vertex-flash": "gemini-3.5-flash",
+      "vertex-pro": "gemini-2.5-pro",
     }),
   })
   .strict();

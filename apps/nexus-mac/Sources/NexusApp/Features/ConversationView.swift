@@ -776,9 +776,23 @@ struct ControlStrip: View {
 
         if controller.provider == nil {
             picker.help("Pick a provider first")
+        } else if isDefaultModelSelected {
+            // The value shown is real either way — `ChatTab.loadModels`
+            // preselects `models.first` so this is never blank — but the
+            // tooltip still tells the two states apart: a provider default
+            // the user never looked at vs. a deliberate pick, without
+            // spending the width a visible "(default)" label would cost
+            // right after the truncation fix on this same row.
+            picker.help("Provider default — not explicitly chosen. Click to pick a specific model.")
         } else {
             picker
         }
+    }
+
+    /// Whether `controller.model` is still the provider's first model —
+    /// i.e. what `ChatTab.loadModels` auto-selected, not a deliberate pick.
+    private var isDefaultModelSelected: Bool {
+        controller.model != nil && controller.model == models.first?.id
     }
 
     /// A real toggle. `ConversationController.approvalsEnabled` already drives
@@ -909,10 +923,18 @@ extension PickerOption {
     /// Maps `ProvidersController.models(for:)`'s `NexusModel` onto this
     /// picker's option shape, preferring the parsed context window over the
     /// raw hint string when both are available.
+    ///
+    /// `warning` rides `model.isVerified`: an unverified (`.fallback`) entry
+    /// is the CLI's own built-in guess, not a live-confirmed catalog — same
+    /// distinction `gemini`'s all-fallback list vs. `anthropic`'s all-provider
+    /// one makes real. Reuses the exact "visible, not blocking" mechanism
+    /// `rolePicker` already uses for a write-capable role, rather than adding
+    /// a second warning idiom mid this file's own accent-rationing pass.
     init(model: NexusModel) {
         self.init(
             id: model.id,
-            detail: model.contextWindow.map { "\($0 / 1_000)k ctx" } ?? model.hint
+            detail: model.contextWindow.map { "\($0 / 1_000)k ctx" } ?? model.hint,
+            warning: model.isVerified ? nil : "Unverified — the CLI's built-in default for this provider, not confirmed live"
         )
     }
 }

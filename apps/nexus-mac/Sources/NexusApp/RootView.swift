@@ -943,7 +943,12 @@ struct ChatTab: View {
         loadingModels = true
         Task {
             let loaded = await providers.models(for: providerId)
-            models = loaded.map { PickerOption(id: $0.id, detail: $0.hint) }
+            // `PickerOption(model:)`, not the bare id/hint pair this used to
+            // build directly — that dropped `model.isVerified` on the floor,
+            // which is exactly how an unconfirmed `.fallback` list (e.g.
+            // gemini's) would have rendered identically to a live-verified
+            // one (anthropic's) with no distinction at all.
+            models = loaded.map { PickerOption(model: $0) }
             loadingModels = false
             // Preselect the first model, same reasoning as the provider
             // preselect above: an empty "model" placeholder reads as broken
