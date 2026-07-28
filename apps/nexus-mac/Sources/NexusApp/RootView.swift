@@ -761,9 +761,14 @@ struct ChatTab: View {
             await loaded.refresh()
             // Preselect whatever the CLI would have resolved anyway, so the
             // picker reflects reality instead of reading "none" while the
-            // backend quietly uses its own default.
+            // backend quietly uses its own default. `isReadyForAutoSelect`,
+            // not bare `isUsable` — a confirmed-unreachable local server
+            // (lmstudio/vllm with nothing running) is structurally "usable"
+            // but landing here on one anyway is the same experience as the
+            // mock-fixture leak this picker cleanup started with, just with
+            // a real provider's name on it (see that property's doc).
             if controller.provider == nil,
-               let first = loaded.selectable.first(where: \.isUsable) {
+               let first = loaded.selectable.first(where: \.isReadyForAutoSelect) {
                 controller.provider = first.id
                 loadModels(first.id)
             }
@@ -778,13 +783,17 @@ struct ChatTab: View {
                 available: entry.isUsable,
                 disabledReason: entry.reason,
                 kind: entry.provider.kind,
-                // A tripped circuit (quota/rate-limit/repeated failures) rides
-                // `PickerOption.warning` — the SAME "visible but not blocking"
-                // mechanism `ControlStrip.rolePicker` already uses for a
-                // write-capable agent role, not `disabledReason`/`available`:
-                // the provider stays fully selectable (see
-                // `SelectableProvider.circuitWarning`'s doc for why).
-                warning: entry.circuitWarning,
+                // A tripped circuit (quota/rate-limit/repeated failures) OR a
+                // confirmed-unreachable local server (lmstudio/vllm with
+                // nothing running) rides `PickerOption.warning` — the SAME
+                // "visible but not blocking" mechanism `ControlStrip
+                // .rolePicker` already uses for a write-capable agent role,
+                // not `disabledReason`/`available`: the provider stays fully
+                // selectable either way (see `SelectableProvider
+                // .circuitWarning`/`.localServerWarning`'s docs for why).
+                // Circuit wins if somehow both are set — it is the more
+                // urgent, live-operational one of the two.
+                warning: entry.circuitWarning ?? entry.localServerWarning,
                 // Threads `NexusProvider.reasoning` through to
                 // `EffortPicker` via `ControlStrip.selectedProviderReasoning`
                 // — see `PickerOption.reasoning`'s doc for why this rides the

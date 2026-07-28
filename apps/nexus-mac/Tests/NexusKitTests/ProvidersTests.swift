@@ -74,6 +74,44 @@ final class ProvidersTests: XCTestCase {
         XCTAssertFalse(groq.isTestFixture)
     }
 
+    // MARK: - NexusProvider.localServerReachable decode
+    //
+    // Bytes below mirror a live `nexus providers status -o json` run with
+    // lmstudio genuinely not running: the CLI's own
+    // `probeLocalServerReachability` (`packages/runtime/src/index.ts`)
+    // reports `false` for a confirmed-refused connection, `null` for a
+    // timed-out/inconclusive probe (verified live against a black-holed
+    // TCP listener), and omits the key entirely for a provider this axis
+    // does not apply to at all — three wire-visible states collapsing to
+    // TWO here (see the property's doc for why `null` and absent share one
+    // Swift `nil`).
+
+    func testLocalServerReachableDecodesTrueWhenConfirmedReachable() throws {
+        let json = try reasoningJSON(#"{"id":"lmstudio","kind":"openai-compat","available":true,"needsKey":false,"localServerReachable":true}"#)
+        let provider = try XCTUnwrap(NexusProvider(json: json))
+        XCTAssertEqual(provider.localServerReachable, true)
+    }
+
+    func testLocalServerReachableDecodesFalseWhenConfirmedUnreachable() throws {
+        let json = try reasoningJSON(#"{"id":"lmstudio","kind":"openai-compat","available":true,"needsKey":false,"localServerReachable":false}"#)
+        let provider = try XCTUnwrap(NexusProvider(json: json))
+        XCTAssertEqual(provider.localServerReachable, false)
+    }
+
+    func testLocalServerReachableDecodesNilForAnExplicitJSONNull() throws {
+        // The probe was attempted but timed out — inconclusive, NOT "down".
+        let json = try reasoningJSON(#"{"id":"lmstudio","kind":"openai-compat","available":true,"needsKey":false,"localServerReachable":null}"#)
+        let provider = try XCTUnwrap(NexusProvider(json: json))
+        XCTAssertNil(provider.localServerReachable)
+    }
+
+    func testLocalServerReachableDefaultsToNilWhenTheKeyIsAbsent() throws {
+        // Every non-local-server provider (anthropic, groq, mock, …) and
+        // every older CLI that predates this field.
+        let anthropic = try XCTUnwrap(try decodedProviders().first { $0.id == "groq" })
+        XCTAssertNil(anthropic.localServerReachable)
+    }
+
     func testAvailableTrueWithNeedsKeyTrueIsNotUsable() throws {
         // groq/together/etc. all report `available: true` even with zero API
         // keys configured (verified against a live `providers list -o json`
@@ -524,6 +562,60 @@ final class ProvidersTests: XCTestCase {
         let warning = try XCTUnwrap(SelectableProvider(provider: mock, circuit: circuit).circuitWarning)
         XCTAssertTrue(warning.contains("retry after"))
         XCTAssertFalse(warning.contains("credentials or status change"), "a real blockedUntil must win over the generic fallback")
+    }
+
+    // MARK: - SelectableProvider.localServerWarning / isReadyForAutoSelect
+    //
+    // The "available: true does NOT mean usable" gap, closed: lmstudio/vllm
+    // report `available: true, needsKey: false` unconditionally, so nothing
+    // used to distinguish "a server is actually listening" from "nothing is
+    // running at localhost:1234" — a live run against an intentionally-not-
+    // running lmstudio confirmed both looked identical before this axis
+    // existed. `isUsable` is deliberately left alone by all of this (still
+    // asserted directly below) — these are two NEW, narrower properties.
+
+    private func lmstudioProvider(reachable: Bool?) -> NexusProvider {
+        NexusProvider(id: "lmstudio", kind: "openai-compat", available: true, needsKey: false, localServerReachable: reachable)
+    }
+
+    func testLocalServerWarningIsNilWhenConfirmedReachable() {
+        let selectable = SelectableProvider(provider: lmstudioProvider(reachable: true))
+        XCTAssertTrue(selectable.isUsable)
+        XCTAssertNil(selectable.localServerWarning)
+    }
+
+    func testLocalServerWarningIsSetWhenConfirmedUnreachable() {
+        let selectable = SelectableProvider(provider: lmstudioProvider(reachable: false))
+        XCTAssertNotNil(selectable.localServerWarning)
+        // Still fully usable/selectable — a warning, never a block. The user
+        // may be about to start the server and should still be able to pick it.
+        XCTAssertTrue(selectable.isUsable, "reachability must never change isUsable's own meaning")
+    }
+
+    func testLocalServerWarningIsNilWhenUnconfirmedEitherReason() {
+        // `nil` covers BOTH "not a local-server candidate at all" (e.g.
+        // anthropic — never probed) and "probed but inconclusive" (a
+        // timeout) — an unconfirmed state must never render as a confident
+        // warning, matching the CLI's own text-mode rule (never mark "down"
+        // on a mere timeout).
+        let notProbed = NexusProvider(id: "anthropic", kind: "anthropic", available: true, needsKey: false, localServerReachable: nil)
+        XCTAssertNil(SelectableProvider(provider: notProbed).localServerWarning)
+        let inconclusive = lmstudioProvider(reachable: nil)
+        XCTAssertNil(SelectableProvider(provider: inconclusive).localServerWarning)
+    }
+
+    func testIsReadyForAutoSelectIsFalseOnlyForAConfirmedUnreachableLocalServer() {
+        XCTAssertTrue(SelectableProvider(provider: lmstudioProvider(reachable: true)).isReadyForAutoSelect)
+        XCTAssertTrue(SelectableProvider(provider: lmstudioProvider(reachable: nil)).isReadyForAutoSelect, "unconfirmed must not block auto-select — only a POSITIVE finding does")
+        XCTAssertFalse(SelectableProvider(provider: lmstudioProvider(reachable: false)).isReadyForAutoSelect)
+    }
+
+    func testIsReadyForAutoSelectStillRequiresIsUsable() {
+        // A provider that needs a key is never auto-select-ready regardless
+        // of `localServerReachable` — `isReadyForAutoSelect` narrows
+        // `isUsable`, it does not replace its own gate.
+        let needsKey = NexusProvider(id: "groq", kind: "openai-compat", available: true, needsKey: true, localServerReachable: true)
+        XCTAssertFalse(SelectableProvider(provider: needsKey).isReadyForAutoSelect)
     }
 
     // MARK: - NexusModel decode + contextWindow

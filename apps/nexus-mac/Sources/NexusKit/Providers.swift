@@ -33,6 +33,35 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
     /// stale binary degrades to "show everything" rather than hiding real
     /// providers.
     public let isTestFixture: Bool
+    /// Whether a LOCAL SERVER this provider depends on is actually running
+    /// right now — straight off the wire's `localServerReachable`
+    /// (`probeLocalServerReachability`, `packages/runtime/src/index.ts`).
+    /// This is the "`available: true` does NOT mean usable" gap: lmstudio/
+    /// vllm register `available: true, needsKey: false` unconditionally
+    /// (no credential to check), so — before this field existed — nothing
+    /// distinguished "installed and a server is listening" from "nothing is
+    /// listening at localhost:1234" (a live run with nothing running there
+    /// confirms this: `available`/`needsKey` alone are identical either way).
+    ///
+    /// THREE-valued, same discipline as `reasoning` above — deliberately
+    /// NOT collapsed to a plain `Bool`:
+    ///  - `nil` — either this provider has nothing to probe (most providers:
+    ///    a cloud API, `mock`, a subprocess CLI — this axis simply does not
+    ///    apply) OR the CLI tried and the probe was inconclusive (timed out).
+    ///    A live run confirms the CLI itself keeps a THIRD, wire-level state
+    ///    for the timeout case (JSON `null`, distinct from the key being
+    ///    absent) but this decode intentionally collapses both into `nil`:
+    ///    every consumer of this property treats them identically — "no
+    ///    confirmed evidence either way, don't warn, don't block auto-select"
+    ///    — see `SelectableProvider.localServerWarning`/`isReadyForAutoSelect`.
+    ///    A caller that ever needs the finer distinction should decode
+    ///    `json["localServerReachable"]` directly rather than add it here.
+    ///  - `.some(false)` — CONFIRMED unreachable: the CLI's own probe
+    ///    completed within its bound and got a real connection failure.
+    ///    Never render this as merely "unknown"; it is the one state worth
+    ///    acting on.
+    ///  - `.some(true)` — confirmed reachable.
+    public let localServerReachable: Bool?
     /// Reasoning/thinking-effort capability, straight from the wire's
     /// `reasoning` object.
     ///
@@ -61,6 +90,7 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         needsKey: Bool = false,
         detail: String? = nil,
         isTestFixture: Bool = false,
+        localServerReachable: Bool? = nil,
         reasoning: ReasoningCapability? = nil
     ) {
         self.id = id
@@ -69,6 +99,7 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         self.needsKey = needsKey
         self.detail = detail
         self.isTestFixture = isTestFixture
+        self.localServerReachable = localServerReachable
         self.reasoning = reasoning
     }
 
@@ -82,6 +113,10 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         self.needsKey = json["needsKey"]?.boolValue ?? false
         self.detail = json["detail"]?.stringValue
         self.isTestFixture = json["isTestFixture"]?.boolValue ?? false
+        // `?.boolValue` already collapses "key absent" and "JSON null" into
+        // the same Swift `nil` for free (see this property's doc) — no
+        // special-case decode needed for the two-vs-three-state distinction.
+        self.localServerReachable = json["localServerReachable"]?.boolValue
         self.reasoning = json["reasoning"].flatMap(ReasoningCapability.init(json:))
     }
 
@@ -373,6 +408,42 @@ public struct SelectableProvider: Sendable, Hashable, Identifiable {
             return "\(label) — retry after credentials or status change"
         }
         return "\(label) — retry after \(until.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    /// A caution for a CONFIRMED-unreachable local-server dependency
+    /// (lmstudio/vllm with nothing listening) — a THIRD axis, separate from
+    /// both `reason` (structural usability — needs a key) and
+    /// `circuitWarning` (an operational trip the CLI's own breaker tracks).
+    /// This one the app itself just found out by asking, this run, right
+    /// now — see `NexusProvider.localServerReachable`'s doc for the
+    /// three-valued decode this reads.
+    ///
+    /// Same "visible, not blocking" shape as `circuitWarning`: `isUsable` is
+    /// UNCHANGED (a user who knows they are about to start the server should
+    /// still be able to pick it), only `isReadyForAutoSelect` below acts on
+    /// this. `nil` for `localServerReachable == nil` (not a local-server
+    /// candidate at all, OR the probe was inconclusive) — an unconfirmed
+    /// state must never render as a confident warning, exactly as it must
+    /// never render as a confident "down" mark in the CLI's own text output
+    /// (`commands.ts`'s `cmdProviders`).
+    public var localServerWarning: String? {
+        provider.localServerReachable == false ? "local server not reachable — start it, then retry" : nil
+    }
+
+    /// Whether this provider should be eligible for an AUTOMATIC preselect
+    /// (`ChatTab`'s `task` in `RootView.swift`) — deliberately a DIFFERENT,
+    /// narrower question than `isUsable`. `isUsable` keeps meaning exactly
+    /// what it means today (own it), so this is a NEW seam rather than a
+    /// redefinition: a confirmed-unreachable local server is structurally
+    /// "usable" (no key needed, package loaded fine) but landing a user on
+    /// it with no server running is the same experience as the mock-fixture
+    /// leak this whole picker cleanup started with, just wearing a real
+    /// provider's name — see `localServerWarning`'s doc. `nil`
+    /// (unconfirmed/not-applicable) does NOT block this, matching the same
+    /// "don't punish what we don't know" rule as everywhere else on this
+    /// axis: only a POSITIVE finding of unreachability disqualifies.
+    public var isReadyForAutoSelect: Bool {
+        isUsable && provider.localServerReachable != false
     }
 
     public init(provider: NexusProvider, circuit: ProviderCircuit? = nil) {
