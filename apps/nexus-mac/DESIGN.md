@@ -151,6 +151,19 @@ pass (the composer's focus shadow, `AgentCard`'s running-state glow): one
 signal per meaning, and elevation is surfaces + hairlines regardless of what
 that signal is.
 
+**A condition that applies to an entire SET gets one marker on the set,
+never one marker per member.** Established when a model-list warning was
+first proposed per-row (`PickerOption.warning`, the amber triangle a
+write-capable role already earns) for `NexusModel.isVerified`: verification
+isn't a per-row fact — when a probe can't run, EVERY model in that
+provider's list comes back `.fallback` together, so a per-row treatment
+paints one fact as N warnings, spending the accent/attention budget this
+section rations for nothing. The fix was one quiet, neutral caption on the
+model picker as a whole (`ControlStrip.modelListVerificationCaption`),
+appearing only while the WHOLE list is unverified. The same question is
+worth asking of any future warning: is this true of one row, or of the set
+that row belongs to?
+
 Accent is NOT allowed on: decorative icon tints, placeholder copy, static
 segmented-control tracks that aren't mid-interaction, dropdown chevrons, or
 "because the row needs some colour." `accentSecondary` is reserved for

@@ -1393,6 +1393,30 @@ one asserts real wall-clock boundedness, one greps `ps` for a UUID-scoped
 script path to prove the child was reaped. **412 executed, 0 failures, 0
 skipped.**
 
+### ✅ INSTALLED to /Applications (2026-07-29 01:25)
+Release build from this session's OWN `--scratch-path`, not the shared
+`.build` — with many agents compiling against one checkout, the shared
+directory produced a genuinely corrupt result earlier ("wrong nexus binary"),
+so a private path makes the installed bits unambiguously the ones that were
+just compiled AND screenshotted. Ad-hoc signed, verified, launched, confirmed
+running against the owner's own remembered state (`llm_handler` project,
+`cinder` theme, anthropic/`claude-opus-5`), then quit so the machine is left
+as found.
+
+**Verify UI claims with your OWN build.** A full-screen `screencapture` caught
+`redesign`'s concurrently-running instance — an OLDER build — and read as "the
+fix didn't land" when the fix was in the source all along. Launch your own
+bundle id, bring it frontmost by ITS pid, then capture. `verify-shot.sh` in
+the scratchpad does this.
+
+All four regressions confirmed fixed in a first-hand capture: suggestion icons
+back inside their cards (`LazyVGrid` was placing every icon at the top-trailing
+corner of the WRONG cell — replaced with plain `VStack`/`HStack`; four fixed
+items never needed a lazy grid), provider control given a real 150pt ceiling
+rather than unbounded, command preview `.tail` instead of `.middle` (eliding
+the middle of a real command reads as corruption, not brevity), no stray
+composer icon.
+
 ### Open
 1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
    `IntegrationsView`/`GitView`/`ApprovalSheet`), plus a before/after
