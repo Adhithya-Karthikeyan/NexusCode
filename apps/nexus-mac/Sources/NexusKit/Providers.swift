@@ -20,6 +20,23 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
     public let available: Bool
     public let needsKey: Bool
     public let detail: String?
+    /// Reasoning/thinking-effort capability, straight from the wire's
+    /// `reasoning` object.
+    ///
+    /// THREE states, deliberately not collapsed to two:
+    ///  - `nil` — the row had no `reasoning` key at all. A live `nexus
+    ///    providers list -o json` run (as opposed to `status`) confirms this
+    ///    still happens today, not just on an older CLI: "unknown", not "no".
+    ///  - `.some(x)` with `x.supported == false` — a confirmed negative (a
+    ///    live run shows codex, claude-code, and every plain `openai-compat`
+    ///    provider report exactly `{"supported":false}`). The control should
+    ///    say "not supported here", not just greyed out for no stated reason.
+    ///  - `.some(x)` with `x.supported == true` — see `ReasoningCapability`
+    ///    for `kind`/`levels`.
+    ///
+    /// See `Providers.swift`'s module doc / `ReasoningCapability` for the
+    /// captured wire shapes this was decoded against.
+    public let reasoning: ReasoningCapability?
 
     /// Plain memberwise construction — for previews and tests. Kept separate
     /// from `init?(json:)` below, which is the only one that talks to the
@@ -29,13 +46,15 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         kind: String? = nil,
         available: Bool = true,
         needsKey: Bool = false,
-        detail: String? = nil
+        detail: String? = nil,
+        reasoning: ReasoningCapability? = nil
     ) {
         self.id = id
         self.kind = kind
         self.available = available
         self.needsKey = needsKey
         self.detail = detail
+        self.reasoning = reasoning
     }
 
     /// `nil` only when the row has no `id` at all — every other field
@@ -47,11 +66,112 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         self.available = json["available"]?.boolValue ?? false
         self.needsKey = json["needsKey"]?.boolValue ?? false
         self.detail = json["detail"]?.stringValue
+        self.reasoning = json["reasoning"].flatMap(ReasoningCapability.init(json:))
     }
 
     /// Whether picking this provider would actually work right now —
     /// `available` alone isn't enough (see the type doc above).
     public var isUsable: Bool { available && !needsKey }
+
+    /// A truthful display label for `level` ON THIS PROVIDER — driven
+    /// entirely by what the CLI reported, never a guess.
+    ///
+    /// `.off` is always labeled: it means "send no `--effort` flag at all"
+    /// (see `EffortLevel`/`ConversationController.effort`'s doc), which works
+    /// uniformly regardless of provider capability.
+    ///
+    /// For `low`/`medium`/`high`, `nil` means this level cannot actually be
+    /// used right now — either `reasoning` is `nil` (unknown) or
+    /// `reasoning?.supported == false` (a confirmed negative). Those two
+    /// cases are DELIBERATELY not distinguished here, because there is no
+    /// truthful label to show for either; a caller that needs to render them
+    /// differently (e.g. greyed out vs. a specific "not supported" caption)
+    /// should read `reasoning` directly rather than infer it from this
+    /// returning `nil`.
+    ///
+    /// When supported, a `.tokenBudget` provider gets the real token count
+    /// folded in (e.g. "High — 24k thinking tokens"); an `.effortString`
+    /// provider (native `reasoning_effort`, no numeric budget on the wire)
+    /// gets just the level name, e.g. "High".
+    public func reasoningLabel(for level: EffortLevel) -> String? {
+        guard level != .off else { return level.title }
+        guard let reasoning, reasoning.supported else { return nil }
+        guard case .tokenBudget = reasoning.kind, let tokens = reasoning.levels[level.rawValue] else {
+            return level.title
+        }
+        return "\(level.title) — \(Self.formatThinkingTokens(tokens)) thinking tokens"
+    }
+
+    /// `4000` -> `"4000"`, `24000` -> `"24k"` — only a display nicety, never
+    /// a re-derivation of the number itself (that always comes straight off
+    /// the wire via `ReasoningCapability.levels`).
+    private static func formatThinkingTokens(_ tokens: Int) -> String {
+        guard tokens >= 1000, tokens.isMultiple(of: 1000) else { return "\(tokens)" }
+        return "\(tokens / 1_000)k"
+    }
+}
+
+/// One provider row's `reasoning` object from `providers list|status -o
+/// json` — whether/how thinking effort can be requested.
+///
+/// Two `kind`s confirmed live so far, both captured from a real run (not
+/// hand-typed from the TypeScript source):
+///  - `"token-budget"` (anthropic, gemini, bedrock, vertex) — carries a
+///    `levels` object mapping `"low"/"medium"/"high"` to an actual token
+///    count, e.g. `{"low":4000,"medium":10000,"high":24000}`.
+///  - `"effort-string"` (azure-openai) — a native `reasoning_effort`
+///    parameter with no numeric budget; the real row is bare
+///    `{"supported":true,"kind":"effort-string"}`, no `levels` key at all.
+///
+/// Every currently-unsupported provider (codex, claude-code, mock, and every
+/// plain `openai-compat` provider without a native reasoning param) reports
+/// exactly `{"supported":false}` — no `kind`, no `levels`.
+public struct ReasoningCapability: Sendable, Hashable {
+    public enum Kind: Sendable, Hashable {
+        case tokenBudget
+        case effortString
+        /// A `kind` string this build doesn't recognize yet. Preserved
+        /// verbatim rather than dropped, so a future provider's capability
+        /// doesn't silently disappear — `reasoningLabel(for:)` still falls
+        /// back to a bare level name for it, the same as `.effortString`.
+        case unknown(String)
+
+        init(wireValue: String) {
+            switch wireValue {
+            case "token-budget": self = .tokenBudget
+            case "effort-string": self = .effortString
+            default: self = .unknown(wireValue)
+            }
+        }
+    }
+
+    public let supported: Bool
+    /// `nil` when `supported` is `false` — every confirmed-negative row on a
+    /// live run is bare `{"supported":false}`, with no `kind` at all — or
+    /// when `supported` is `true` but the row still omits `kind` (degrade,
+    /// don't crash).
+    public let kind: Kind?
+    /// Level name (`"low"`/`"medium"`/`"high"`) -> token budget. Empty for
+    /// `.effortString` (no `levels` key on the wire, see the type doc) and
+    /// for anything unsupported; may also be missing individual levels if a
+    /// future wire shape only carries some of them.
+    public let levels: [String: Int]
+
+    /// `nil` only when the row has no `supported` field at all — every other
+    /// field degrades independently, the same defensive style as
+    /// `NexusProvider`/`ProviderCircuit`.
+    public init?(json: JSONValue) {
+        guard let supported = json["supported"]?.boolValue else { return nil }
+        self.supported = supported
+        self.kind = json["kind"]?.stringValue.map(Kind.init(wireValue:))
+        var levels: [String: Int] = [:]
+        if case .object(let fields)? = json["levels"] {
+            for (name, value) in fields {
+                if let tokens = value.intValue { levels[name] = tokens }
+            }
+        }
+        self.levels = levels
+    }
 }
 
 /// One entry from `providers status -o json`'s `circuits` array — the
