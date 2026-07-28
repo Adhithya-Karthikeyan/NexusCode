@@ -596,14 +596,18 @@ export function createCodexAdapter(cfg: CodexConfig = {}): ProviderAdapter {
   const modelCache: ModelListCache = createModelListCache();
   const spec: CliSpec<CodexConfig> = {
     ...codexSpec,
-    listModels: (c) =>
+    listModels: (c): Promise<ModelListResult> =>
       modelCache.get(async () => {
         const configured = await probeCodexConfiguredModel(c);
         const probed: ModelInfo[] = [{ id: DEFAULT_MODEL_ID, modalities: ["text"] }];
         if (configured && configured !== DEFAULT_MODEL_ID) {
           probed.push({ id: configured, modalities: ["text"] });
         }
-        return unionModels(probed, buildModelInfos(c.modelMap));
+        const models = unionModels(probed, buildModelInfos(c.modelMap));
+        // "provider" only when `codex doctor` actually confirmed a configured
+        // model — otherwise this is just the "default" sentinel + config
+        // aliases, i.e. "we could not ask", not a verified catalog.
+        return { models, source: configured ? "provider" : "fallback" };
       }),
   };
   return createSubprocessAdapter(cfg, spec);

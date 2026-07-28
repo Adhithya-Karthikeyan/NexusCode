@@ -113,3 +113,45 @@ describe("codex — listModels (live-probed via `codex doctor --json`)", () => {
     expect(args).not.toContain("--model");
   });
 });
+
+describe("codex — listModelsWithSource (provenance)", () => {
+  it("tags a genuine configured-model confirmation \"provider\"", async () => {
+    const adapter = adapterFor("doctor-success");
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("provider");
+    expect(result.models.map((m) => m.id)).toEqual(["default", "gpt-5.6-fake"]);
+  });
+
+  it("tags a timed-out doctor probe \"fallback\" — the \"default\" sentinel is not a confirmation", async () => {
+    const adapter = adapterFor("doctor-hang");
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+    expect(result.models.map((m) => m.id)).toEqual(["default"]);
+  });
+
+  it("tags a non-zero doctor exit \"fallback\"", async () => {
+    const adapter = adapterFor("doctor-error");
+    expect((await adapter.listModelsWithSource!()).source).toBe("fallback");
+  });
+
+  it("tags a doctor report with no resolvable model \"fallback\"", async () => {
+    const adapter = adapterFor("doctor-no-model");
+    expect((await adapter.listModelsWithSource!()).source).toBe("fallback");
+  });
+
+  it("listModels() and listModelsWithSource() share one cache — codex is only actually spawned once", async () => {
+    let spawnCount = 0;
+    const spawn: SpawnFn = (bin, args, opts) => {
+      spawnCount++;
+      return defaultSpawn(bin, args, opts) as SpawnedChild;
+    };
+    const adapter = createCodexAdapter({
+      bin: FAKE,
+      resolveEnv: async () => ({ FAKE_CODEX_MODE: "doctor-success" }),
+      spawn,
+    });
+    await adapter.listModels!();
+    await adapter.listModelsWithSource!();
+    expect(spawnCount).toBe(1);
+  });
+});
