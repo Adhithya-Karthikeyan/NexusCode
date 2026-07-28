@@ -4633,6 +4633,26 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
 
 // ── providers ─────────────────────────────────────────────────────────────────
 
+/**
+ * Whether a `providers list|status` row is a TEST FIXTURE (the built-in
+ * `mock` adapter family) rather than a real, dispatchable provider —
+ * derived from `kind`, the closed `ProviderKind` enum's own
+ * adapter-implementation tag (`packages/config/src/schema.ts`), never from
+ * `id` spelling. `mock-flaky` and `mock-slow` prove the two are different
+ * axes: their `id` is not "mock", but their `kind` still is, because
+ * `buildRuntime` constructs all three through the same mock adapter family
+ * (`register(createMockAdapter(), "mock")` / `register(createFlakyMockAdapter(),
+ * "mock")` / `register(createSlowMockAdapter(), "mock")`) — and a
+ * user-configured `providers add --kind mock` entry is caught the same way.
+ * Exposed on the wire as `isTestFixture` so a client (the macOS app's
+ * provider picker) has an honest, structural signal to filter test fixtures
+ * out of a user-facing surface, instead of string-matching an `id` that
+ * could be renamed out from under it.
+ */
+function isTestFixtureProvider(kind: string): boolean {
+  return kind === "mock";
+}
+
 export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
   const sub = args.positionals[0] ?? "list";
   const output = parseOutput(args);
@@ -4652,7 +4672,11 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
       // Keep the long-standing `providers list -o json` array contract intact.
       // `status` is the richer operational view with circuit and pricing data.
       if (sub === "list") {
-        io.out(`${JSON.stringify(runtime.statuses)}\n`);
+        io.out(
+          `${JSON.stringify(
+            runtime.statuses.map((s) => ({ ...s, isTestFixture: isTestFixtureProvider(s.kind) })),
+          )}\n`,
+        );
       } else {
         io.out(
           `${JSON.stringify({
@@ -4660,10 +4684,12 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
             // per-provider effort capability a client needs to label its
             // Off/Low/Med/High control truthfully instead of showing it for
             // every provider regardless of whether `--effort` actually reaches
-            // the wire (see `reasoningCapabilityFor`'s doc comment).
+            // the wire (see `reasoningCapabilityFor`'s doc comment) — and
+            // `isTestFixture`, see `isTestFixtureProvider`'s doc comment.
             providers: runtime.statuses.map((s) => ({
               ...s,
               reasoning: reasoningCapabilityFor(runtime, s.id),
+              isTestFixture: isTestFixtureProvider(s.kind),
             })),
             circuits: circuitStatuses,
             circuitStore: config.providerCircuit.enabled ? providerCircuitPath(config) : null,

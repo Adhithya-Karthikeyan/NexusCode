@@ -20,6 +20,19 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
     public let available: Bool
     public let needsKey: Bool
     public let detail: String?
+    /// True when this row is a TEST FIXTURE (the CLI's built-in `mock`
+    /// adapter family — `mock`, `mock-flaky`, `mock-slow`, and any
+    /// provider a user configures with `kind: "mock"`) rather than a real,
+    /// dispatchable provider. Straight off the wire's own `isTestFixture`
+    /// field (`cmdProviders`'s `isTestFixtureProvider`, `commands.ts`),
+    /// itself derived from `kind` — the closed `ProviderKind` enum's
+    /// adapter-implementation tag (`packages/config/src/schema.ts`) — NOT
+    /// from `id` spelling: a live run confirms `mock-flaky`/`mock-slow`
+    /// report `isTestFixture: true` despite neither `id` being "mock".
+    /// Defaults to `false` on an older CLI that predates this field, so a
+    /// stale binary degrades to "show everything" rather than hiding real
+    /// providers.
+    public let isTestFixture: Bool
     /// Reasoning/thinking-effort capability, straight from the wire's
     /// `reasoning` object.
     ///
@@ -47,6 +60,7 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         available: Bool = true,
         needsKey: Bool = false,
         detail: String? = nil,
+        isTestFixture: Bool = false,
         reasoning: ReasoningCapability? = nil
     ) {
         self.id = id
@@ -54,6 +68,7 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         self.available = available
         self.needsKey = needsKey
         self.detail = detail
+        self.isTestFixture = isTestFixture
         self.reasoning = reasoning
     }
 
@@ -66,6 +81,7 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         self.available = json["available"]?.boolValue ?? false
         self.needsKey = json["needsKey"]?.boolValue ?? false
         self.detail = json["detail"]?.stringValue
+        self.isTestFixture = json["isTestFixture"]?.boolValue ?? false
         self.reasoning = json["reasoning"].flatMap(ReasoningCapability.init(json:))
     }
 
@@ -94,20 +110,7 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
     /// provider (native `reasoning_effort`, no numeric budget on the wire)
     /// gets just the level name, e.g. "High".
     public func reasoningLabel(for level: EffortLevel) -> String? {
-        guard level != .off else { return level.title }
-        guard let reasoning, reasoning.supported else { return nil }
-        guard case .tokenBudget = reasoning.kind, let tokens = reasoning.levels[level.rawValue] else {
-            return level.title
-        }
-        return "\(level.title) — \(Self.formatThinkingTokens(tokens)) thinking tokens"
-    }
-
-    /// `4000` -> `"4000"`, `24000` -> `"24k"` — only a display nicety, never
-    /// a re-derivation of the number itself (that always comes straight off
-    /// the wire via `ReasoningCapability.levels`).
-    private static func formatThinkingTokens(_ tokens: Int) -> String {
-        guard tokens >= 1000, tokens.isMultiple(of: 1000) else { return "\(tokens)" }
-        return "\(tokens / 1_000)k"
+        ReasoningCapability.label(for: level, reasoning: reasoning)
     }
 }
 
@@ -171,6 +174,70 @@ public struct ReasoningCapability: Sendable, Hashable {
             }
         }
         self.levels = levels
+    }
+
+    /// The picker-facing rule set, in ONE place so no call site re-derives
+    /// it: `.off` is always available (see `NexusProvider.reasoningLabel(for:)`'s
+    /// doc); `low`/`medium`/`high` have no truthful label when `reasoning` is
+    /// `nil` (unknown) or `.supported == false` (confirmed negative —
+    /// deliberately not distinguished here); a `.tokenBudget` level folds in
+    /// its real token count, everything else supported gets just the level
+    /// name.
+    ///
+    /// Two callers share this: `NexusProvider.reasoningLabel(for:)` (the full
+    /// decode) and `ConversationView.swift`'s `EffortPicker`, which only has
+    /// `PickerOption.reasoning` — a provider row already flattened down to
+    /// just this capability, not the whole `NexusProvider` — because
+    /// `ControlStrip` builds the control off the SELECTED provider's row in
+    /// the SAME `[PickerOption]` list already threaded through for the
+    /// dropdown, rather than a second parallel `NexusProvider` lookup.
+    public static func label(for level: EffortLevel, reasoning: ReasoningCapability?) -> String? {
+        guard level != .off else { return level.title }
+        guard let reasoning, reasoning.supported else { return nil }
+        guard case .tokenBudget = reasoning.kind, let tokens = reasoning.levels[level.rawValue] else {
+            return level.title
+        }
+        return "\(level.title) — \(formatThinkingTokens(tokens)) thinking tokens"
+    }
+
+    /// `4000` -> `"4k"`, `4001` -> `"4001"` — only a display nicety, never a
+    /// re-derivation of the number itself (that always comes straight off
+    /// the wire via `levels`).
+    private static func formatThinkingTokens(_ tokens: Int) -> String {
+        guard tokens >= 1000, tokens.isMultiple(of: 1000) else { return "\(tokens)" }
+        return "\(tokens / 1_000)k"
+    }
+
+    /// Whether `level` should render DISABLED for this capability — true
+    /// ONLY for a CONFIRMED negative (`reasoning != nil && !supported`).
+    /// Unknown (`reasoning == nil`) must never disable anything — collapsing
+    /// "we don't know" into "no" is exactly the conflation `NexusProvider
+    /// .reasoning`'s doc calls out as the thing this task removed. `.off` is
+    /// never disabled — it always works, on every provider.
+    ///
+    /// Lives here (not in `EffortPicker`, `ConversationView.swift`) because
+    /// `NexusApp` has no test target — see this file's module doc — and this
+    /// is exactly the kind of policy decision that belongs in `NexusKit` so
+    /// it stays under `swift test` instead of only checkable by eye.
+    public static func isUnsupported(_ level: EffortLevel, reasoning: ReasoningCapability?) -> Bool {
+        guard level != .off, let reasoning else { return false }
+        return !reasoning.supported
+    }
+
+    /// What a picker's effort selection should become right after switching
+    /// TO a provider whose capability is `newReasoning` — closes the exact
+    /// bug this task exists to remove: silently keeping `effort` selected at
+    /// a level the new provider has just CONFIRMED it can't honor would look
+    /// identical to it still working, when the CLI's own `applyEffort`
+    /// (`packages/cli/src/commands.ts`) would drop it with a stderr warning
+    /// instead. Falls back to `.off`, exactly like the picker's own default,
+    /// rather than leaving a decorative selection in place.
+    ///
+    /// Never resets on merely UNKNOWN support — only a confirmed negative is
+    /// reason enough to override the user's choice (same reasoning as
+    /// `isUnsupported(_:reasoning:)` above).
+    public static func effortAfterProviderSwitch(from effort: EffortLevel, to newReasoning: ReasoningCapability?) -> EffortLevel {
+        isUnsupported(effort, reasoning: newReasoning) ? .off : effort
     }
 }
 
@@ -249,11 +316,21 @@ public struct ProviderCircuit: Sendable, Hashable {
     }
 }
 
-/// One row for a provider picker that must show EVERY provider — including
-/// ones that can't be used yet — rather than silently filtering them out.
-/// Mirrors the same "grey it out, don't hide it" rule the Tasks/Sessions tabs
-/// use for other degraded states: a user switching providers needs to see
-/// "groq exists, but needs GROQ_API_KEY" instead of groq just not being there.
+/// One row for a provider picker that must show EVERY REAL provider —
+/// including ones that can't be used yet — rather than silently filtering
+/// them out. Mirrors the same "grey it out, don't hide it" rule the
+/// Tasks/Sessions tabs use for other degraded states: a user switching
+/// providers needs to see "groq exists, but needs GROQ_API_KEY" instead of
+/// groq just not being there.
+///
+/// A TEST FIXTURE (`provider.isTestFixture`) is a deliberately DIFFERENT
+/// axis from this rule, not an exception to it: it isn't a degraded real
+/// provider a user might still want to pick (like groq needing a key), it
+/// is a CLI-internal offline harness (`mock`/`mock-flaky`/`mock-slow`) that
+/// was never meant to be end-user-selectable in the first place — its
+/// presence here was a leak, not a feature. `ProvidersController.selectable`
+/// omits it entirely (rather than greying it out) for exactly that reason;
+/// see that property's doc for the developer escape hatch.
 public struct SelectableProvider: Sendable, Hashable, Identifiable {
     public let provider: NexusProvider
     /// The strongest currently-blocking circuit for this provider (any
@@ -375,10 +452,25 @@ public final class ProvidersController {
     /// `models(for:)` call, so fetching one provider's models never needs a
     /// second round trip just to attach pricing.
     private var pricingIndex: [String: [String: JSONValue]] = [:]
+    /// The developer escape hatch for `selectable`'s test-fixture filter —
+    /// see that property's doc for why one exists at all. `NEXUS_BIN`
+    /// (`NexusClient.swift`) is this app's one other env-var override, and
+    /// this follows its exact rule: blank/whitespace-only counts as unset.
+    /// Captured once at `init` (not re-read per `selectable` access) and
+    /// threaded through an injectable `environment` parameter — the same
+    /// pattern `NexusBinary.discover` uses — so a test can set it without
+    /// mutating real process-wide state.
+    private let showTestFixtures: Bool
 
-    public init(client: NexusClient, workingDirectory: URL? = nil) {
+    public init(
+        client: NexusClient,
+        workingDirectory: URL? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
         self.client = client
         self.workingDirectory = workingDirectory
+        self.showTestFixtures = !(environment["NEXUS_SHOW_TEST_PROVIDERS"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     /// Reloads from `nexus providers status -o json` — a superset of
@@ -426,12 +518,34 @@ public final class ProvidersController {
         }
     }
 
-    /// Every provider, annotated for a picker that greys out but never hides
-    /// ones that aren't usable yet — and now also carries a tripped circuit's
-    /// warning, when it has one, without touching usability (see
-    /// `SelectableProvider.circuitWarning`'s doc for why the two stay separate).
+    /// Every REAL provider, annotated for a picker that greys out but never
+    /// hides ones that aren't usable yet — and now also carries a tripped
+    /// circuit's warning, when it has one, without touching usability (see
+    /// `SelectableProvider.circuitWarning`'s doc for why the two stay
+    /// separate).
+    ///
+    /// Test fixtures (`provider.isTestFixture` — the CLI's built-in
+    /// `mock`/`mock-flaky`/`mock-slow` family, see `NexusProvider
+    /// .isTestFixture`'s doc) are excluded here rather than greyed out: they
+    /// are an offline test harness, not a real provider a user is choosing
+    /// between, and their presence in a user-facing picker (or as an
+    /// accidental auto-selection — every consumer of `selectable`, including
+    /// `ChatTab`'s `first(where: \.isUsable)` preselect in `RootView.swift`,
+    /// reads from this ONE list) is the exact leak this property exists to
+    /// close. `NexusProvider.isUsable`/`isTestFixture` themselves are left
+    /// alone — `mock` really is usable, so decoding/CLI-facing code (e.g.
+    /// `nexus ask -p mock`) is untouched; only THIS app-facing aggregation
+    /// point filters.
+    ///
+    /// A developer working on this app who genuinely needs `mock` in the
+    /// picker can set `NEXUS_SHOW_TEST_PROVIDERS` (any non-blank value) —
+    /// see `showTestFixtures`'s doc. Deliberately just an env var, not a
+    /// Settings toggle: this is a workbench need for someone already running
+    /// the app from source, not a product feature end users should discover.
     public var selectable: [SelectableProvider] {
-        providers.map { SelectableProvider(provider: $0, circuit: blockingCircuit(for: $0.id)) }
+        providers
+            .filter { showTestFixtures || !$0.isTestFixture }
+            .map { SelectableProvider(provider: $0, circuit: blockingCircuit(for: $0.id)) }
     }
 
     /// The strongest currently-blocking circuit for `providerId` (any

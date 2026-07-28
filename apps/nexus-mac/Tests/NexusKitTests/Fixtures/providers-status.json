@@ -1,6 +1,6 @@
 {
   "providers": [
-    { "id": "mock", "kind": "mock", "available": true, "reasoning": { "supported": false } },
+    { "id": "mock", "kind": "mock", "available": true, "isTestFixture": true, "reasoning": { "supported": false } },
     {
       "id": "groq",
       "kind": "openai-compat",

@@ -784,7 +784,12 @@ struct ChatTab: View {
                 // write-capable agent role, not `disabledReason`/`available`:
                 // the provider stays fully selectable (see
                 // `SelectableProvider.circuitWarning`'s doc for why).
-                warning: entry.circuitWarning
+                warning: entry.circuitWarning,
+                // Threads `NexusProvider.reasoning` through to
+                // `EffortPicker` via `ControlStrip.selectedProviderReasoning`
+                // — see `PickerOption.reasoning`'s doc for why this rides the
+                // existing option list instead of a second parameter.
+                reasoning: entry.provider.reasoning
             )
         }
     }

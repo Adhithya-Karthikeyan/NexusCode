@@ -555,7 +555,11 @@ struct ControlStrip: View {
 
             GroupDivider()
 
-            EffortPicker(effort: $controller.effort)
+            EffortPicker(
+                effort: $controller.effort,
+                providerReasoning: selectedProviderReasoning,
+                providerId: controller.provider
+            )
 
             GroupDivider()
 
@@ -621,6 +625,35 @@ struct ControlStrip: View {
             )
         }
         return [native] + roles
+    }
+
+    /// The single currently-selected provider's reasoning capability, for
+    /// `EffortPicker` to gate/label `low`/`medium`/`high` against.
+    ///
+    /// `nil` in Compare/Race (`controller.provider` is nil there — effort
+    /// still gets appended per-backend, see `EffortLevel`'s doc, but there is
+    /// no ONE provider to check) and while nothing is selected yet in
+    /// single-lane mode either. Looked up from `providers` (this file's
+    /// existing `[PickerOption]` list, which `PickerOption.init(provider:)`
+    /// already carries `reasoning` through on) rather than a second parallel
+    /// `[NexusProvider]` parameter.
+    private var selectedProviderReasoning: ReasoningCapability? {
+        guard let id = controller.provider else { return nil }
+        return providers.first(where: { $0.id == id })?.reasoning
+    }
+
+    /// Called right after a provider switch — the policy itself (reset to
+    /// `.off` only on a CONFIRMED negative, never on merely unknown support)
+    /// lives in, and is tested via, `ReasoningCapability
+    /// .effortAfterProviderSwitch(from:to:)`; this is just the hook. No
+    /// separate toast/diagnostic is raised for the reset — the `EffortPicker`
+    /// snapping its highlighted segment back to "Off" is immediate, visible
+    /// feedback, and a synthesized diagnostic line here would misrepresent
+    /// the real ones, which only ever come from the CLI's own stderr
+    /// (`ConversationController.presentedDiagnostics`).
+    private func resetEffortIfUnsupported(by providerId: String) {
+        let reasoning = providers.first(where: { $0.id == providerId })?.reasoning
+        controller.effort = ReasoningCapability.effortAfterProviderSwitch(from: controller.effort, to: reasoning)
     }
 
     /// Conversation-wide utility actions — not part of configuring the next
@@ -702,6 +735,7 @@ struct ControlStrip: View {
                 controller.provider = id
                 controller.model = nil
                 onLoadModels(id)
+                resetEffortIfUnsupported(by: id)
             }
 
             modelPicker
@@ -771,18 +805,38 @@ struct ControlStrip: View {
 /// A themed 4-way segmented control — the same visual language as
 /// `ModePicker` but generic over `EffortLevel`, so the strip doesn't read as
 /// two different segmented-control styles side by side.
+///
+/// Labels and enablement are driven per-segment by `providerReasoning`
+/// (`NexusProvider.reasoning`, flattened onto the selected `PickerOption` —
+/// see `ControlStrip.selectedProviderReasoning`), so this no longer renders
+/// the same four names for every provider regardless of whether picking one
+/// would do anything — the owner's report this task exists to fix ("pick
+/// codex and set effort to High and nothing happens; the control is
+/// decorative there").
 private struct EffortPicker: View {
     @Environment(\.nexusTheme) private var theme
     @Binding var effort: EffortLevel
+    /// `nil` in Compare/Race or while the selected provider's capability is
+    /// UNKNOWN (an older CLI, or nothing selected yet) — see
+    /// `ControlStrip.selectedProviderReasoning`'s doc. Unknown deliberately
+    /// renders identically to "no information at hand": every segment stays
+    /// enabled with its plain name, never dimmed as if it were a confirmed
+    /// no (`NexusProvider.reasoning`'s doc explains why the two must not
+    /// collapse together).
+    var providerReasoning: ReasoningCapability?
+    /// Only for the disabled-segment tooltip's wording — never used to
+    /// decide anything.
+    var providerId: String?
 
     var body: some View {
         HStack(spacing: 1) {
             ForEach(EffortLevel.allCases) { level in
                 let selected = level == effort
+                let disabled = isDisabled(level)
                 Button {
                     effort = level
                 } label: {
-                    Text(level.title)
+                    Text(label(for: level))
                         .font(.system(size: 10, weight: selected ? .semibold : .regular))
                         .foregroundStyle(selected ? theme.color(\.accentFg) : theme.color(\.textSecondary))
                         .padding(.horizontal, 6)
@@ -795,6 +849,17 @@ private struct EffortPicker: View {
                         }
                 }
                 .buttonStyle(.plain)
+                // Dim + disable + a specific tooltip on hover — the SAME
+                // "visible but not clickable" treatment `modelPicker` and
+                // `DropdownList`'s rows already use for "usable in principle,
+                // not right now" (see their `.opacity`/`.disabled`/`.help`
+                // below), rather than inventing a third convention. Inline
+                // text explaining WHY was ruled out: the strip already wraps
+                // to two rows at 900pt (`ControlStrip`'s doc), and four
+                // already-narrow segments have no room to spare for prose.
+                .opacity(disabled ? 0.4 : 1)
+                .disabled(disabled)
+                .help(help(for: level, disabled: disabled))
             }
         }
         .padding(1.5)
@@ -805,7 +870,32 @@ private struct EffortPicker: View {
                 .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
         }
         .animation(.easeOut(duration: 0.15), value: effort)
-        .help("Reasoning effort — appended as --effort when not Off")
+    }
+
+    /// The rule itself (only a CONFIRMED negative disables) lives in, and is
+    /// tested via, `ReasoningCapability.isUnsupported(_:reasoning:)`.
+    private func isDisabled(_ level: EffortLevel) -> Bool {
+        ReasoningCapability.isUnsupported(level, reasoning: providerReasoning)
+    }
+
+    /// `ReasoningCapability.label(for:reasoning:)` already returns `nil` for
+    /// both "unknown" and "confirmed negative" (no truthful label exists for
+    /// either) — falling back to the plain level name here is exactly right
+    /// for both: unknown shows it because it might still work, and a
+    /// disabled/confirmed-negative segment shows it because the greyed-out
+    /// state (not the text) is what's carrying "won't work" here.
+    private func label(for level: EffortLevel) -> String {
+        ReasoningCapability.label(for: level, reasoning: providerReasoning) ?? level.title
+    }
+
+    private func help(for level: EffortLevel, disabled: Bool) -> String {
+        guard disabled else {
+            let base = "Reasoning effort — appended as --effort when not Off"
+            guard level != .off, providerReasoning == nil else { return base }
+            return "\(base) (support for this provider hasn't been confirmed yet)"
+        }
+        let provider = providerId.map { " on \($0)" } ?? " on this provider"
+        return "\(level.title) reasoning effort isn't supported\(provider) — picking it would do nothing"
     }
 }
 
@@ -846,6 +936,13 @@ struct PickerOption: Identifiable, Equatable {
     /// `.agent` role whose `permissionMode` isn't `"read-only"` sets this
     /// (see `NexusRole.canWrite` and `ControlStrip.rolePicker`).
     var warning: String?
+    /// `NexusProvider.reasoning`, carried through for provider rows only —
+    /// `nil` for models/roles/backends, same idiom as `kind`/`warning` above.
+    /// This is how `ControlStrip.selectedProviderReasoning` looks up the
+    /// CURRENTLY SELECTED provider's reasoning capability to drive
+    /// `EffortPicker`, without a second parallel `[NexusProvider]` parameter
+    /// threaded alongside this already-flattened `[PickerOption]` list.
+    var reasoning: ReasoningCapability?
 
     init(
         id: String,
@@ -853,7 +950,8 @@ struct PickerOption: Identifiable, Equatable {
         available: Bool = true,
         disabledReason: String? = nil,
         kind: String? = nil,
-        warning: String? = nil
+        warning: String? = nil,
+        reasoning: ReasoningCapability? = nil
     ) {
         self.id = id
         self.detail = detail
@@ -861,6 +959,7 @@ struct PickerOption: Identifiable, Equatable {
         self.disabledReason = disabledReason
         self.kind = kind
         self.warning = warning
+        self.reasoning = reasoning
     }
 
     fileprivate func dotColor(theme: AppTheme) -> Color? {
@@ -882,7 +981,8 @@ extension PickerOption {
             detail: provider.isUsable ? nil : provider.detail,
             available: provider.isUsable,
             disabledReason: provider.isUsable ? nil : provider.detail,
-            kind: provider.kind
+            kind: provider.kind,
+            reasoning: provider.reasoning
         )
     }
 

@@ -42,6 +42,36 @@ final class ProvidersTests: XCTestCase {
         XCTAssertFalse(mock.needsKey)
         XCTAssertNil(mock.detail)
         XCTAssertTrue(mock.isUsable)
+        // `mock` really is a test fixture (see `NexusProvider.isTestFixture`'s
+        // doc) — this does NOT change `isUsable` above, only who gets to
+        // decide whether a picker shows it (`ProvidersController.selectable`).
+        XCTAssertTrue(mock.isTestFixture)
+    }
+
+    func testIsTestFixtureIsDerivedFromKindNotFromIdSpelling() throws {
+        // `mock-flaky`/`mock-slow` are the proof: their `id` is NOT "mock",
+        // but a live `nexus providers status -o json` run still reports
+        // `kind: "mock"` (and so `isTestFixture: true`) for both, because
+        // `buildRuntime` constructs all three through the same mock adapter
+        // family. A naive `id == "mock"` check would miss these two.
+        let raw = #"""
+        [
+          {"id":"mock-flaky","kind":"mock","available":true,"isTestFixture":true},
+          {"id":"mock-slow","kind":"mock","available":true,"isTestFixture":true}
+        ]
+        """#
+        let json = try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))
+        let providers = try XCTUnwrap(json.arrayValue).compactMap(NexusProvider.init(json:))
+        XCTAssertEqual(providers.count, 2)
+        XCTAssertTrue(providers.allSatisfy(\.isTestFixture))
+    }
+
+    func testIsTestFixtureDefaultsToFalseWhenAbsent() throws {
+        // An older CLI that predates this field must degrade to "not a
+        // fixture" — the safe default that shows a real provider rather than
+        // silently hiding one (see `NexusProvider.isTestFixture`'s doc).
+        let groq = try XCTUnwrap(try decodedProviders().first { $0.id == "groq" })
+        XCTAssertFalse(groq.isTestFixture)
     }
 
     func testAvailableTrueWithNeedsKeyTrueIsNotUsable() throws {
@@ -238,6 +268,70 @@ final class ProvidersTests: XCTestCase {
         XCTAssertNil(unknown.reasoningLabel(for: .low))
         XCTAssertNil(unknown.reasoningLabel(for: .medium))
         XCTAssertNil(unknown.reasoningLabel(for: .high))
+    }
+
+    // MARK: - ReasoningCapability.isUnsupported / effortAfterProviderSwitch
+    //
+    // These back `ConversationView.swift`'s `EffortPicker` (segment
+    // disabling) and `ControlStrip.resetEffortIfUnsupported` (clearing a
+    // decorative selection on provider switch). They live here rather than
+    // in `NexusApp` because that target has no test target of its own (see
+    // this file's decode tests' module doc) — `swift build`/manual QA is the
+    // only check a `NexusApp`-only implementation would ever get.
+
+    func testIsUnsupportedIsFalseForOffRegardlessOfCapability() throws {
+        let negative = try reasoningCapability(#"{"supported":false}"#)
+        XCTAssertFalse(ReasoningCapability.isUnsupported(.off, reasoning: negative))
+        XCTAssertFalse(ReasoningCapability.isUnsupported(.off, reasoning: nil))
+    }
+
+    func testIsUnsupportedIsFalseWhenCapabilityIsUnknown() {
+        // `nil` (no `reasoning` at all) must never disable a segment — that
+        // would render "we don't know" as "no", the exact conflation this
+        // task exists to remove.
+        for level in [EffortLevel.low, .medium, .high] {
+            XCTAssertFalse(ReasoningCapability.isUnsupported(level, reasoning: nil))
+        }
+    }
+
+    func testIsUnsupportedIsTrueOnlyForAConfirmedNegative() throws {
+        let negative = try reasoningCapability(#"{"supported":false}"#)
+        for level in [EffortLevel.low, .medium, .high] {
+            XCTAssertTrue(ReasoningCapability.isUnsupported(level, reasoning: negative))
+        }
+    }
+
+    func testIsUnsupportedIsFalseWhenSupported() throws {
+        let supported = try reasoningCapability(#"{"supported":true,"kind":"effort-string"}"#)
+        for level in [EffortLevel.low, .medium, .high] {
+            XCTAssertFalse(ReasoningCapability.isUnsupported(level, reasoning: supported))
+        }
+    }
+
+    func testEffortAfterProviderSwitchResetsToOffOnlyOnAConfirmedNegative() throws {
+        // The owner's report, made concrete: switching TO codex with `.high`
+        // still selected must not leave a selection that does nothing.
+        let negative = try reasoningCapability(#"{"supported":false}"#)
+        XCTAssertEqual(ReasoningCapability.effortAfterProviderSwitch(from: .high, to: negative), .off)
+        XCTAssertEqual(ReasoningCapability.effortAfterProviderSwitch(from: .low, to: negative), .off)
+    }
+
+    func testEffortAfterProviderSwitchLeavesEffortAloneWhenSupportIsUnknown() {
+        // Switching to a provider an older CLI never reported on must not
+        // clobber the user's choice — unknown is not a reason to override it.
+        XCTAssertEqual(ReasoningCapability.effortAfterProviderSwitch(from: .high, to: nil), .high)
+    }
+
+    func testEffortAfterProviderSwitchLeavesEffortAloneWhenSupported() throws {
+        let supported = try reasoningCapability(#"{"supported":true,"kind":"token-budget","levels":{"high":24000}}"#)
+        XCTAssertEqual(ReasoningCapability.effortAfterProviderSwitch(from: .high, to: supported), .high)
+    }
+
+    func testEffortAfterProviderSwitchLeavesOffAloneRegardlessOfCapability() throws {
+        // Nothing to reset — already the no-op state.
+        let negative = try reasoningCapability(#"{"supported":false}"#)
+        XCTAssertEqual(ReasoningCapability.effortAfterProviderSwitch(from: .off, to: negative), .off)
+        XCTAssertEqual(ReasoningCapability.effortAfterProviderSwitch(from: .off, to: nil), .off)
     }
 
     // MARK: - ProviderCircuit decode (G6 — provider health was computed and thrown away)
@@ -578,13 +672,45 @@ final class ProvidersTests: XCTestCase {
     }
 
     @MainActor
-    func testSelectableComputedFromControllerNeverHidesProviders() async throws {
+    func testSelectableComputedFromControllerNeverHidesARealProviderButHidesTestFixturesByDefault() async throws {
+        // The fixture has two rows: "mock" (a test fixture) and "groq" (a
+        // REAL provider that just needs a key). Those are two DIFFERENT
+        // axes — see `SelectableProvider`'s doc: "groq" must still show up,
+        // greyed out; "mock" must not show up at all, by default.
         let binary = try fakeNexusBinary(routing: ["providers status": try fixtureText("providers-status")])
         let controller = ProvidersController(client: NexusClient(binary: binary))
         await controller.refresh()
 
-        XCTAssertEqual(controller.selectable.count, controller.providers.count)
+        XCTAssertEqual(controller.providers.count, 2, "fixture shape changed")
+        XCTAssertEqual(controller.selectable.map(\.id), ["groq"], "the test fixture must be excluded, not just greyed out")
         XCTAssertEqual(controller.selectable.filter { !$0.isUsable }.map(\.id), ["groq"])
+    }
+
+    @MainActor
+    func testSelectableIncludesTestFixturesWhenTheDeveloperEscapeHatchIsSet() async throws {
+        let binary = try fakeNexusBinary(routing: ["providers status": try fixtureText("providers-status")])
+        let controller = ProvidersController(
+            client: NexusClient(binary: binary),
+            environment: ["NEXUS_SHOW_TEST_PROVIDERS": "1"]
+        )
+        await controller.refresh()
+
+        XCTAssertEqual(controller.selectable.map(\.id).sorted(), ["groq", "mock"])
+    }
+
+    @MainActor
+    func testSelectableEscapeHatchTreatsABlankValueAsUnset() async throws {
+        // Mirrors `NEXUS_BIN`'s own rule (`NexusClient.swift`): a set-but-blank
+        // env var (a real way one ends up that way, e.g. an unquoted shell
+        // substitution) is treated as unset, not as a literal "on".
+        let binary = try fakeNexusBinary(routing: ["providers status": try fixtureText("providers-status")])
+        let controller = ProvidersController(
+            client: NexusClient(binary: binary),
+            environment: ["NEXUS_SHOW_TEST_PROVIDERS": "   "]
+        )
+        await controller.refresh()
+
+        XCTAssertEqual(controller.selectable.map(\.id), ["groq"])
     }
 
     // MARK: - Circuits end to end (G6)
@@ -611,8 +737,14 @@ final class ProvidersTests: XCTestCase {
 
     @MainActor
     func testSelectableJoinsEachProviderToItsOwnBlockingCircuitByProviderId() async throws {
+        // This test is about the circuit JOIN, not fixture-filtering — it
+        // opts into the developer escape hatch so "mock" (the fixture's only
+        // row with a circuit attached) stays in `selectable` to exercise it.
         let binary = try fakeNexusBinary(routing: ["providers status": try fixtureText("providers-status")])
-        let controller = ProvidersController(client: NexusClient(binary: binary))
+        let controller = ProvidersController(
+            client: NexusClient(binary: binary),
+            environment: ["NEXUS_SHOW_TEST_PROVIDERS": "1"]
+        )
         await controller.refresh()
 
         let mock = try XCTUnwrap(controller.selectable.first { $0.id == "mock" })

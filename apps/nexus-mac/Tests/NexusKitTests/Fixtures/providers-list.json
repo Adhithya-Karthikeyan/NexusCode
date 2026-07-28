@@ -1,5 +1,5 @@
 [
-  { "id": "mock", "kind": "mock", "available": true },
+  { "id": "mock", "kind": "mock", "available": true, "isTestFixture": true },
   {
     "id": "groq",
     "kind": "openai-compat",
