@@ -418,6 +418,36 @@ function handleEvent(
   }
 }
 
+// ── Failure translation ────────────────────────────────────────────────────────
+
+// codex-rs's own wording for its trusted-directory safety check. Matched
+// narrowly on BOTH the refusal phrase and the flag it names, not either alone
+// — a single generic word ("trusted") would risk swallowing unrelated codex
+// failures under this translation, the same over-broad-matcher bug the shared
+// redactor's doc comment (`redactDiagnostic`) warns about one layer down.
+const TRUSTED_DIR_RE = /not inside a trusted directory/i;
+const SKIP_FLAG_RE = /--skip-git-repo-check/i;
+
+/**
+ * codex refuses to run outside a git repository unless `--skip-git-repo-check`
+ * is passed — codex's own safety check, not ours, and this adapter does not
+ * bypass it silently (that would be making the same "quiet decision on the
+ * user's behalf" this codebase has deliberately been removing elsewhere). The
+ * raw CLI text is accurate but assumes the reader already knows what codex is
+ * and what a "trusted directory" means. Translate it into a message that names
+ * the actual directory and the two real options, while keeping the original
+ * CLI line intact underneath for anyone debugging the launch.
+ */
+function translateFailure(detail: string, cfg: CodexConfig): string | undefined {
+  if (!TRUSTED_DIR_RE.test(detail) || !SKIP_FLAG_RE.test(detail)) return undefined;
+  const dir = cfg.workdir ?? cfg.cwd ?? process.cwd();
+  return (
+    `codex will not run in ${dir} because it is not a git repository. ` +
+    `Open a project folder that is a git repo, or run "codex" there yourself once to trust it.\n\n` +
+    `(codex said: ${detail})`
+  );
+}
+
 // ── Capabilities ──────────────────────────────────────────────────────────────
 
 function buildModelInfos(modelMap: Record<string, string> | undefined): ModelInfo[] {
@@ -491,6 +521,7 @@ const codexSpec: CliSpec<CodexConfig> = {
   resolveModel,
   buildArgs,
   handleEvent,
+  translateFailure,
 };
 
 /**

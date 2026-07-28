@@ -103,6 +103,28 @@ public struct Turn: Sendable, Hashable, Identifiable {
     /// confirmed — this answer came from cache" rather than "cost unknown".
     public var cacheHit: Bool?
     public let startedTs: Double
+    /// The provider/model actually serving the conversation when THIS turn
+    /// started — captured once, from `ViewState.session` as it stood the
+    /// instant the turn's first event folded (`ViewState.newTurn`), and never
+    /// updated afterwards.
+    ///
+    /// `ViewState.session.provider`/`.model` themselves move forward on a
+    /// later ACCEPTED `switch` (see `reduce`'s `.switch` case) — reading
+    /// `session` fresh from a view instead of this stored value is exactly
+    /// how a turn answered by one provider would silently relabel itself
+    /// once a later switch changed what `session` currently reports. This is
+    /// what lets a transcript that mixes providers tell turns apart at all;
+    /// see `TurnView`'s doc for why that matters (a mock reply rendered
+    /// under an unrelated provider's picker selection, with nothing marking
+    /// it as having come from somewhere else).
+    ///
+    /// Derived from a folded event, like every other id/timestamp in this
+    /// file — never `UUID()`, never a wall-clock read, never "whatever the
+    /// picker currently shows" — so replaying the same log twice produces
+    /// byte-identical attribution. `nil` only when no `session` event has
+    /// landed yet (practically never in a real run).
+    public let provider: String? = nil
+    public let model: String? = nil
 
     /// Whether this turn came from the agent loop at all.
     public var isAgentRun: Bool { !agentSteps.isEmpty }
@@ -391,9 +413,13 @@ public enum TurnCost: Sendable, Hashable {
 
 extension ViewState {
     /// A turn's id is derived from `(lane, finalized-count)` — deterministic
-    /// given the log, so replaying a prefix yields identical ids.
-    private static func newTurn(lane: String, ts: Double, index: Int) -> Turn {
-        Turn(id: "turn-\(lane)-\(index)", lane: lane, startedTs: ts)
+    /// given the log, so replaying a prefix yields identical ids. Not
+    /// `static`: `Turn.provider`/`.model` are stamped from `self.session` AS
+    /// IT STANDS at this exact fold — the whole point of "captured when the
+    /// turn started" (see `Turn.provider`'s doc) is that this reads current
+    /// fold state, not a static/global default.
+    private func newTurn(lane: String, ts: Double, index: Int) -> Turn {
+        Turn(id: "turn-\(lane)-\(index)", lane: lane, startedTs: ts, provider: session?.provider, model: session?.model)
     }
 
     private mutating func ensureLane(_ lane: String) {
@@ -406,7 +432,7 @@ extension ViewState {
     private mutating func withLiveTurn(_ lane: String, ts: Double, _ mutate: (inout Turn) -> Void) {
         ensureLane(lane)
         var state = lanes[lane]!
-        var turn = state.live ?? Self.newTurn(lane: lane, ts: ts, index: state.finalized.count)
+        var turn = state.live ?? newTurn(lane: lane, ts: ts, index: state.finalized.count)
         mutate(&turn)
         state.live = turn
         lanes[lane] = state
@@ -462,7 +488,7 @@ extension ViewState {
             finalizeLive(e.lane, finishReason: "interrupted")
             ensureLane(e.lane)
             var state = lanes[e.lane]!
-            var turn = Self.newTurn(lane: e.lane, ts: ts, index: state.finalized.count)
+            var turn = newTurn(lane: e.lane, ts: ts, index: state.finalized.count)
             turn.prompt = e.text
             state.live = turn
             lanes[e.lane] = state
