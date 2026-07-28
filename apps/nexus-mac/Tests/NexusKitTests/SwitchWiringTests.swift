@@ -76,11 +76,16 @@ final class SwitchWiringTests: XCTestCase {
         // The SAME engine session carried the switch — never a new one.
         XCTAssertEqual(c.sessionId, sessionIdAfterFirstTurn)
         // No relaunch: the CLI announces `[session] <id>` exactly once per
-        // process lifetime (`cmdChat`, `packages/cli/src/commands.ts`) — a
-        // SECOND line would mean a second process actually started.
-        XCTAssertEqual(
-            c.diagnostics.filter { $0.contains("[session]") }.count, 1,
-            "a second `[session]` line would mean the backend was relaunched instead of switched in-process"
+        // process lifetime (`cmdChat`, `packages/cli/src/commands.ts`), and
+        // `submit()` resets `diagnostics` on every call (see
+        // `ConversationController.submit`) — so if the switch had torn the
+        // process down and started a fresh one, ITS startup announcement
+        // would show up fresh here too. Seeing NONE since the reset is what
+        // proves this turn's diagnostics came from the SAME, already-running
+        // process, not a new one.
+        XCTAssertTrue(
+            c.diagnostics.filter { $0.contains("[session]") }.isEmpty,
+            "a `[session]` line here would mean the backend was relaunched instead of switched in-process: \(c.diagnostics)"
         )
 
         // The picker and the live backend both reflect the new target.
@@ -143,7 +148,12 @@ final class SwitchWiringTests: XCTestCase {
 
         // ...and the conversation kept going on that same original process —
         // no relaunch was ever attempted just because the switch failed.
-        XCTAssertEqual(c.diagnostics.filter { $0.contains("[session]") }.count, 1)
+        // `submit()` resets `diagnostics` on every call, so a `[session]`
+        // line here would mean a NEW process just announced itself.
+        XCTAssertTrue(
+            c.diagnostics.filter { $0.contains("[session]") }.isEmpty,
+            "a `[session]` line here would mean a relaunch was attempted despite the switch being refused: \(c.diagnostics)"
+        )
         let secondTurn = try XCTUnwrap(c.view.lanes["main"]?.finalized.last)
         XCTAssertFalse(secondTurn.text.isEmpty, "the prompt after a refused switch must still get answered")
         XCTAssertNil(secondTurn.error, "a refused SWITCH must not be reported as a TURN error")

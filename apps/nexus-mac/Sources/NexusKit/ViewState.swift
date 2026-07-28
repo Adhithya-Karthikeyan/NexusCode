@@ -103,28 +103,45 @@ public struct Turn: Sendable, Hashable, Identifiable {
     /// confirmed — this answer came from cache" rather than "cost unknown".
     public var cacheHit: Bool?
     public let startedTs: Double
-    /// The provider/model actually serving the conversation when THIS turn
-    /// started — captured once, from `ViewState.session` as it stood the
-    /// instant the turn's first event folded (`ViewState.newTurn`), and never
-    /// updated afterwards.
+    /// The provider/model actually serving THIS turn.
+    ///
+    /// Stamped twice, deliberately, both times from folded events only —
+    /// never `UUID()`, never a wall-clock read, never "whatever the picker
+    /// currently shows":
+    ///
+    /// 1. At creation (`ViewState.newTurn`) from `ViewState.session` as it
+    ///    stood at that instant — a reasonable default immediately.
+    /// 2. Refined once this turn's OWN `session` UiEvent lands (`reduce`'s
+    ///    `.session` case) — its `provider`/`model` are that specific RUN's
+    ///    fields (`UiEvent.Session.id`'s doc: "one per dispatched run, NOT
+    ///    stable across turns"), the authoritative source for exactly this
+    ///    turn. Step 2 exists because step 1 alone is provably too early:
+    ///    `submit()` folds this turn's client-injected `.prompt` BEFORE
+    ///    dispatching to the backend at all — so for a turn that immediately
+    ///    follows an in-process `switch`, `ViewState.session` at creation
+    ///    time is still the PRE-switch target; only this turn's own real
+    ///    `session` event (which the wire orders switch → session → text,
+    ///    verified live) carries the POST-switch one.
+    ///
+    /// A turn that never gets a real backend response (interrupted before
+    /// any event landed) simply keeps step 1's best-effort value — still
+    /// derived from folded state, just not confirmed.
     ///
     /// `ViewState.session.provider`/`.model` themselves move forward on a
-    /// later ACCEPTED `switch` (see `reduce`'s `.switch` case) — reading
-    /// `session` fresh from a view instead of this stored value is exactly
-    /// how a turn answered by one provider would silently relabel itself
-    /// once a later switch changed what `session` currently reports. This is
-    /// what lets a transcript that mixes providers tell turns apart at all;
-    /// see `TurnView`'s doc for why that matters (a mock reply rendered
-    /// under an unrelated provider's picker selection, with nothing marking
-    /// it as having come from somewhere else).
+    /// later ACCEPTED `switch` — reading `session` fresh from a view instead
+    /// of this turn's OWN stored value is exactly how a turn answered by one
+    /// provider would silently relabel itself once a later switch changed
+    /// what `session` currently reports. This is what lets a transcript that
+    /// mixes providers tell turns apart at all; see `TurnView`'s doc for why
+    /// that matters (a mock reply rendered under an unrelated provider's
+    /// picker selection, with nothing marking it as having come from
+    /// somewhere else).
     ///
-    /// Derived from a folded event, like every other id/timestamp in this
-    /// file — never `UUID()`, never a wall-clock read, never "whatever the
-    /// picker currently shows" — so replaying the same log twice produces
-    /// byte-identical attribution. `nil` only when no `session` event has
-    /// landed yet (practically never in a real run).
-    public let provider: String?
-    public let model: String?
+    /// `nil` only when no `session` event has landed for the whole
+    /// conversation yet (practically never past the first turn's first
+    /// event).
+    public var provider: String?
+    public var model: String?
 
     /// Whether this turn came from the agent loop at all.
     public var isAgentRun: Bool { !agentSteps.isEmpty }
@@ -477,6 +494,22 @@ extension ViewState {
         case .session(let e):
             session = SessionInfo(id: e.id, provider: e.provider, model: e.model, ts: e.ts)
             setHealth(e.provider, .ok, "ok", e.ts)
+            // Refine the "main" lane's live turn attribution from THIS run's
+            // own provider/model (see `Turn.provider`'s doc, step 2) — the
+            // authoritative source, since `.prompt`'s earlier guess can be
+            // stale for a turn that immediately follows an in-process
+            // switch. Guarded on a turn already existing: a bare `.session`
+            // event must never MINT one out of nothing (same rule
+            // `hasLiveTurn` enforces for `.toolResult`/`.done` below), and
+            // multi-lane fan-out has no "main" lane at all, so this is a
+            // no-op there — each fan-out lane's own name already IS its
+            // provider, with no switch machinery to ever make that stale.
+            if hasLiveTurn("main") {
+                withLiveTurn("main", ts: ts) {
+                    $0.provider = e.provider
+                    $0.model = e.model
+                }
+            }
             eventCount += 1
 
         case .route(let e):
