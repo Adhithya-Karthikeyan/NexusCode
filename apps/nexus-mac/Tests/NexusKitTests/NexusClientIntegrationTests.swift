@@ -94,4 +94,64 @@ final class NexusClientIntegrationTests: XCTestCase {
         }
         XCTAssertEqual(code, 0)
     }
+
+    /// Proves the actual GUI-launch failure end to end: a `.app` launched
+    /// from Finder/Spotlight gets the OS-minimal `PATH`
+    /// (`/usr/bin:/bin:/usr/sbin:/sbin`), not the user's shell profile — and
+    /// before the fix this made every SCRIPT-shaped `nexus` (a `.js`
+    /// entrypoint run via `#!/usr/bin/env node`, or a `/bin/sh` wrapper doing
+    /// `exec node …`) unable to find `node` and fail every single command.
+    ///
+    /// Deliberately does NOT use `makeClient()` / the repo-local `.js` dist
+    /// build: that path resolves `node` through `NexusBinary.launch`'s own
+    /// hardcoded 3-path list, independent of `PATH`, so it would pass even
+    /// with the bug present and prove nothing. This targets a REAL globally
+    /// installed `nexus` — the shape that actually broke — via
+    /// `NexusClient`'s injectable `environment`, which is what lets a test
+    /// force a real spawn down to a GUI-minimal environment without
+    /// mutating this test process's own real environment.
+    ///
+    /// Skips (never fails) when nothing is installed at any location this
+    /// app knows to look, so a fresh clone without a global `nexus` install
+    /// can still run `swift test`.
+    func testAScriptShapedNexusInstallStillRunsUnderAGuiMinimalEnvironment() async throws {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let guiMinimalEnvironment: [String: String] = [
+            "HOME": home,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        ]
+        let installLocations = ["/opt/homebrew/bin/nexus", "/usr/local/bin/nexus", "\(home)/.local/bin/nexus"]
+        guard let installedPath = installLocations.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            throw XCTSkip("no globally-installed nexus at any known location — nothing to prove here")
+        }
+
+        let client = NexusClient(
+            binary: NexusBinary(url: URL(fileURLWithPath: installedPath)),
+            environment: { guiMinimalEnvironment }
+        )
+
+        let result = await client.runJSON(.providers())
+
+        switch result {
+        case .failure(let error):
+            XCTFail(
+                """
+                expected the GUI-minimal environment's augmented PATH to still \
+                resolve node for \(installedPath); got: \(error.message)
+                """
+            )
+        case .success(let value):
+            // Real decoded output from a REAL process, not just "didn't
+            // throw" — `providers list` always includes the offline `mock`
+            // provider, so this is checkable without credentials or network.
+            guard case .array(let providers) = value else {
+                return XCTFail("expected a JSON array of providers, got \(value)")
+            }
+            let hasMockProvider = providers.contains {
+                if case .object(let fields) = $0, case .string("mock") = fields["id"] { return true }
+                return false
+            }
+            XCTAssertTrue(hasMockProvider, "expected the offline mock provider in the list; got \(value)")
+        }
+    }
 }

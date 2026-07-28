@@ -166,6 +166,96 @@ export function reasoningSupportedFor(runtime: Runtime, providerId: string): boo
 }
 
 /**
+ * Reasoning-effort level → extended-thinking token budget, in tokens. This is
+ * the ONE mapping `reasoningParamsFor` (`packages/cli/src/commands.ts`) uses to
+ * build the request AND `reasoningCapabilityFor` (below) uses to describe it on
+ * the wire — so a client-visible "24k thinking tokens" label can never drift
+ * from the number a `token-budget` provider actually receives. Values are
+ * pinned by `packages/cli/test/effort-wire.test.ts`'s "reaches the outgoing
+ * ChatRequest" assertions; change them there first.
+ */
+export const EFFORT_BUDGET_TOKENS: Record<"low" | "medium" | "high", number> = {
+  low: 4000,
+  medium: 10000,
+  high: 24000,
+};
+
+/**
+ * How a `reasoningSupportedFor`-true provider actually consumes the shared
+ * `{ effort, budgetTokens }` pair `reasoningParamsFor` attaches to every
+ * request (see its doc comment: BOTH fields are always sent; each adapter
+ * family reads only the one it understands):
+ *   - `"token-budget"`: the adapter reads `budgetTokens` and ignores `effort`
+ *     (Anthropic's `thinking.budget_tokens`, mirrored by Gemini/Vertex's
+ *     `thinkingBudget`, and by Bedrock's `additionalModelRequestFields.thinking`
+ *     for the Claude models it fronts — see the bedrock adapter's own guard).
+ *   - `"effort-string"`: the adapter reads `effort` verbatim and ignores
+ *     `budgetTokens` (OpenAI's/Azure OpenAI's native `reasoning_effort` field).
+ */
+export type ReasoningCapabilityKind = "token-budget" | "effort-string";
+
+/** `ProviderStatus.kind` values (see `@nexuscode/runtime`) known to read the
+ *  shared reasoning params as a raw token budget. */
+const TOKEN_BUDGET_KINDS = new Set(["anthropic", "gemini", "vertex", "bedrock"]);
+
+/** `ProviderStatus.kind` values known to read the shared reasoning params as a
+ *  native effort string. `@nexuscode/provider-openai`'s native `"openai"`
+ *  adapter (`createOpenAIAdapter`) is this same family but is never registered
+ *  by `@nexuscode/runtime` today (only its `openai-compat` transport is, via
+ *  `createOpenAICompatAdapter`, which does NOT opt into `supportsReasoningEffort`
+ *  and so never satisfies `reasoningSupportedFor` in the first place) — so it
+ *  never reaches this classification in a real `providers status` today. */
+const EFFORT_STRING_KINDS = new Set(["azure"]);
+
+/** The reasoning-effort capability reported on the wire for one provider. */
+export interface ReasoningCapability {
+  /** Mirrors `reasoningSupportedFor` exactly — the ONE gate every surface
+   *  (TUI `/effort` picker, headless `--effort` flag, this field) shares. */
+  supported: boolean;
+  /** Omitted when unsupported, or when `supported` but the provider's `kind`
+   *  is not one of the families above — never guessed. */
+  kind?: ReasoningCapabilityKind;
+  /**
+   * The concrete token budget per level, present only for `kind:
+   * "token-budget"` — exactly what `reasoningParamsFor` puts on the wire, so a
+   * client can render e.g. "High — 24k thinking tokens" truthfully. A
+   * `kind: "effort-string"` provider needs no such table: the level name IS
+   * the value sent (`reasoning_effort: "high"`).
+   */
+  levels?: Record<"low" | "medium" | "high", number>;
+}
+
+/**
+ * The reasoning-effort capability `providers status -o json` reports for
+ * `providerId` — the answer to "the thinking-effort control's names must
+ * change based on provider": a client that only sees `reasoningSupported`
+ * cannot tell a token-budget provider (label the number) from an
+ * effort-string one (label the level alone), and previously saw NEITHER, so it
+ * rendered a live-looking `Off/Low/Med/High` control for every provider,
+ * including ones that silently ignore it (`--effort` for `cli-subprocess`/
+ * `http-openai-compat` transports) — the same "shown but not real" class
+ * `reasoningSupportedFor` already fixed for the TUI and the headless flag, now
+ * closed for the wire contract a client actually reads.
+ *
+ * Deliberately does NOT re-derive `supported` — it calls
+ * {@link reasoningSupportedFor} so this can never drift from the TUI picker or
+ * `--effort`'s own gate.
+ */
+export function reasoningCapabilityFor(runtime: Runtime, providerId: string): ReasoningCapability {
+  if (!reasoningSupportedFor(runtime, providerId)) return { supported: false };
+  const kind = runtime.statuses.find((s) => s.id === providerId)?.kind;
+  if (kind !== undefined && TOKEN_BUDGET_KINDS.has(kind)) {
+    return { supported: true, kind: "token-budget", levels: { ...EFFORT_BUDGET_TOKENS } };
+  }
+  if (kind !== undefined && EFFORT_STRING_KINDS.has(kind)) {
+    return { supported: true, kind: "effort-string" };
+  }
+  // `reasoningSupportedFor` says yes but this `kind` isn't one of the mapped
+  // families — report the flag honestly without guessing the wire shape.
+  return { supported: true };
+}
+
+/**
  * True when `model` is a legitimate pick for `providerId`: either the picker
  * offered it (the live catalog) or the curated capabilities advertise it. A
  * provider with no model catalog at all (a wrapped coding CLI, which owns its own

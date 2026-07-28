@@ -154,11 +154,13 @@ import {
   type Runtime,
 } from "./runtime.js";
 import {
+  EFFORT_BUDGET_TOKENS,
   ModelCatalog,
   contextWindowFor,
   historyBudgetFor,
   preflightModelSwitch,
   preflightProviderSwitch,
+  reasoningCapabilityFor,
   reasoningSupportedFor,
   resolveSwitchModel,
   type SwitchContext,
@@ -1031,17 +1033,6 @@ export function defaultSystemPrompt(cwd: string = process.cwd()): string {
 }
 
 /**
- * Reasoning-effort level → extended-thinking token budget. Anthropic bills/limits
- * reasoning by tokens (so the level must map to a budget), while OpenAI-compatible
- * providers read the `effort` level directly — both are set on the request.
- */
-const EFFORT_BUDGET: Record<"low" | "medium" | "high", number> = {
-  low: 4000,
-  medium: 10000,
-  high: 24000,
-};
-
-/**
  * The `--effort` flag's vocabulary — identical to the TUI's `/effort` picker
  * (`cmdTui`'s `activeEffort` below), so a headless run and an interactive pick
  * are the same four values, never a different set that has to be translated.
@@ -1061,7 +1052,7 @@ function isEffortLevel(v: string): v is EffortLevel {
  */
 export function reasoningParamsFor(effort: EffortLevel): SamplingParams["reasoning"] | undefined {
   if (effort === "off") return undefined;
-  return { enabled: true, effort, budgetTokens: EFFORT_BUDGET[effort] };
+  return { enabled: true, effort, budgetTokens: EFFORT_BUDGET_TOKENS[effort] };
 }
 
 /**

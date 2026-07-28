@@ -161,8 +161,15 @@ public struct NexusBinary: Sendable {
         repoRoot: URL? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileExists: @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
-        canLaunch: @Sendable (String) -> Bool = { defaultCanLaunch($0, environment: ProcessInfo.processInfo.environment) }
+        // `nil` rather than a closure literal as the default: the default
+        // NEEDS to search using the `environment` actually passed in above
+        // (its `HOME`/`PATH`), not whatever the real process happens to
+        // have — a closure literal used as a parameter's default value can't
+        // see this function's OTHER parameters, only a value computed in the
+        // body (below) can.
+        canLaunch: (@Sendable (String) -> Bool)? = nil
     ) -> NexusBinary? {
+        let canLaunch = canLaunch ?? { defaultCanLaunch($0, environment: environment) }
         if let explicit, fileExists(explicit.path) { return NexusBinary(url: explicit) }
 
         // Blank or whitespace-only is treated as unset, never as a literal
@@ -237,8 +244,12 @@ public struct NexusBinary: Sendable {
         repoRoot: URL? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileExists: @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
-        canLaunch: @Sendable (String) -> Bool = { defaultCanLaunch($0, environment: ProcessInfo.processInfo.environment) }
+        // See `discover`'s matching parameter for why `nil` rather than a
+        // closure literal: the default must search using THIS call's
+        // `environment`, not whatever the real process happens to have.
+        canLaunch: (@Sendable (String) -> Bool)? = nil
     ) -> String {
+        let canLaunch = canLaunch ?? { defaultCanLaunch($0, environment: environment) }
         if let override = environment["NEXUS_BIN"]?.trimmingCharacters(in: .whitespacesAndNewlines), !override.isEmpty {
             return "NEXUS_BIN is set to \"\(override)\", but nothing executable exists there."
         }
@@ -275,6 +286,113 @@ public struct NexusBinary: Sendable {
         }
         return (url, [])
     }
+
+    /// The environment a spawned `nexus` child process should run with.
+    ///
+    /// A GUI app launched from Finder/Spotlight inherits the OS-minimal
+    /// `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) — it never sees the user's
+    /// shell profile. That's invisible for a native binary, but it breaks
+    /// every SCRIPT-shaped `nexus`: a `.js` entrypoint run via `#!/usr/bin/env
+    /// node`, or a `/bin/sh` wrapper that does `exec node …`, both need
+    /// `node` findable on `PATH` at the moment they run, not at the moment
+    /// this app's window was resolved.
+    ///
+    /// `base`'s existing `PATH` is kept in front, never replaced — a `PATH`
+    /// the user set deliberately (a specific node pinned first, say) keeps
+    /// priority, and the additions below are only reached once that search
+    /// comes up empty. The directory holding this binary itself is listed
+    /// first among them because it generalizes furthest: nvm, fnm, volta, and
+    /// asdf all place a given Node version's `node` in the SAME bin directory
+    /// as anything installed globally under that version — `nexus` included
+    /// — so this one entry finds the right `node` for any of them without
+    /// this file needing to know which manager, or which version, is in use.
+    /// `extraSearchDirectories` rounds it out with the realistic common
+    /// cases that AREN'T colocated with `nexus` (a plain Homebrew or system
+    /// install of node, reached via a differently-installed `nexus`).
+    func spawnEnvironment(base: [String: String]) -> [String: String] {
+        var environment = base
+        let extraDirs = [url.deletingLastPathComponent().path] + Self.extraSearchDirectories(environment: base)
+        let pieces = (base["PATH"].map { [$0] } ?? []) + extraDirs
+        environment["PATH"] = pieces.joined(separator: ":")
+        environment["NO_COLOR"] = "1"
+        return environment
+    }
+
+    /// Directories worth adding to a `PATH` (or a name lookup) on top of
+    /// whatever it already has: common Homebrew/system locations, plus the
+    /// common Node version-manager locations that install to a fixed path
+    /// regardless of which Node version is active (`volta`, `asdf` shims).
+    /// Deliberately NOT exhaustive — `nvm`'s and `fnm`'s own directories are
+    /// versioned/per-shell and can't be guessed at without spawning those
+    /// tools, which `spawnEnvironment`'s colocated-directory trick above
+    /// covers instead for any install where `nexus` and `node` live side by
+    /// side. Kept in one place so the spawn-time `PATH` and `canLaunch`
+    /// below always agree about "the realistic set of places node lives."
+    private static func extraSearchDirectories(environment: [String: String]) -> [String] {
+        var dirs = ["/opt/homebrew/bin", "/usr/local/bin"]
+        if let home = environment["HOME"], !home.isEmpty {
+            dirs += ["\(home)/.volta/bin", "\(home)/.asdf/shims"]
+        }
+        dirs += ["/usr/bin", "/bin"]
+        return dirs
+    }
+
+    /// True unless `path` is a script whose shebang names an interpreter that
+    /// can't be found anywhere `extraSearchDirectories`/`PATH` know to look.
+    /// Never spawns a process — reads at most the first line of the file —
+    /// so calling it for every `discover` candidate stays cheap. Defaults to
+    /// `true` whenever it can't tell (no shebang, unreadable, or a shebang
+    /// shape it doesn't recognize): a false "yes" here is just the old
+    /// `fileExists`-only behavior, never a NEW failure mode, because the goal
+    /// is to catch the specific failure this app actually hit — `env node`
+    /// resolving to nothing under a GUI's minimal `PATH` — not to become a
+    /// general-purpose launch simulator.
+    public static func defaultCanLaunch(_ path: String, environment: [String: String]) -> Bool {
+        guard let interpreter = shebangInterpreter(of: path) else { return true }
+        return resolveOnDisk(interpreter, environment: environment) != nil
+    }
+
+    /// Parses a `#!` line into the interpreter it names: `#!/usr/bin/env
+    /// node` and `#!/usr/bin/env node --foo` both yield `"node"` (the
+    /// argument `env` searches `PATH` for, not `env` itself); `#!/bin/sh`
+    /// yields `/bin/sh` unchanged (an absolute interpreter path, checked
+    /// directly rather than searched for). `nil` for anything without a
+    /// recognizable `#!` line — callers treat that as "nothing to verify."
+    private static func shebangInterpreter(of path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        // A shebang line is always near the top of the file, so this never
+        // reads more than a couple hundred bytes even for a large binary —
+        // it just won't decode as UTF-8 starting with "#!" and bails below.
+        guard let chunk = try? handle.read(upToCount: 256),
+              let text = String(data: chunk, encoding: .utf8),
+              text.hasPrefix("#!")
+        else { return nil }
+        let firstLine = text.split(separator: "\n", maxSplits: 1)[0].dropFirst(2)
+        let parts = firstLine.split(separator: " ").map(String.init)
+        guard let head = parts.first else { return nil }
+        if head.hasSuffix("/env"), let name = parts.dropFirst().first {
+            return name
+        }
+        return head
+    }
+
+    /// Best-effort search for `name` — an interpreter a shebang names, or
+    /// anything else a script might shell out to — across the places a GUI
+    /// launch won't otherwise see: `extraSearchDirectories` plus whatever
+    /// `PATH` this environment actually carries. An absolute name (already a
+    /// full path, e.g. from a `#!/bin/sh` shebang) is checked directly rather
+    /// than searched for.
+    private static func resolveOnDisk(_ name: String, environment: [String: String]) -> String? {
+        if name.hasPrefix("/") {
+            return FileManager.default.isExecutableFile(atPath: name) ? name : nil
+        }
+        var dirs = extraSearchDirectories(environment: environment)
+        dirs += environment["PATH"]?.split(separator: ":").map(String.init) ?? []
+        return dirs
+            .map { "\($0)/\(name)" }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
 }
 
 /// Runs `nexus` and turns its stdout into a stream of `UiEvent`s.
@@ -283,9 +401,19 @@ public struct NexusBinary: Sendable {
 /// interpretation lives in `ViewState`. Nothing here knows what a provider is.
 public actor NexusClient {
     private let binary: NexusBinary
+    private let environmentProvider: @Sendable () -> [String: String]
 
-    public init(binary: NexusBinary) {
+    /// `environment` is injectable so a test can spawn a REAL process (not a
+    /// fixture) under a simulated GUI-minimal environment and prove the
+    /// whole launch chain, not just `NexusBinary`'s pure resolution logic —
+    /// see `NexusClientIntegrationTests`. Defaults to this app's own
+    /// environment, which is what every real call site wants.
+    public init(
+        binary: NexusBinary,
+        environment: @escaping @Sendable () -> [String: String] = { ProcessInfo.processInfo.environment }
+    ) {
         self.binary = binary
+        self.environmentProvider = environment
     }
 
     /// Stream a command's events. Cancelling the returned stream's task
@@ -398,12 +526,10 @@ public actor NexusClient {
         if let cwd = command.workingDirectory {
             process.currentDirectoryURL = cwd
         }
-        // A GUI process has a minimal environment; pass a usable PATH so any
-        // tool the CLI shells out to can still be found.
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = (environment["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        environment["NO_COLOR"] = "1"
-        process.environment = environment
+        // A GUI process has a minimal environment (no shell profile) — see
+        // `NexusBinary.spawnEnvironment`'s doc for why that breaks a
+        // script-shaped `nexus` and what this adds back.
+        process.environment = binary.spawnEnvironment(base: environmentProvider())
 
         let out = Pipe()
         let err = Pipe()
