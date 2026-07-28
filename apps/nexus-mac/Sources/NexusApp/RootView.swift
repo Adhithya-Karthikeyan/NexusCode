@@ -793,12 +793,16 @@ struct ChatTab: View {
                 // .circuitWarning`/`.localServerWarning`'s docs for why).
                 // Circuit wins if somehow both are set — it is the more
                 // urgent, live-operational one of the two.
-                warning: entry.circuitWarning ?? entry.localServerWarning,
-                // Threads `NexusProvider.reasoning` through to
-                // `EffortPicker` via `ControlStrip.selectedProviderReasoning`
-                // — see `PickerOption.reasoning`'s doc for why this rides the
-                // existing option list instead of a second parameter.
-                reasoning: entry.provider.reasoning
+                warning: entry.circuitWarning ?? entry.localServerWarning
+                // No `reasoning:` here any more. The app used to carry each
+                // provider's reasoning capability through to an effort picker
+                // in the control strip; that picker is gone. Reasoning effort
+                // is configured per-provider where it belongs — codex's
+                // `model_reasoning_effort`, claude-code's own `/model` effort —
+                // and a duplicate control here could only fight that, sending
+                // `--effort` over a value the user deliberately set.
+                // `NexusProvider.reasoning` still exists and is still tested;
+                // nothing in the UI consumes it today.
             )
         }
     }
