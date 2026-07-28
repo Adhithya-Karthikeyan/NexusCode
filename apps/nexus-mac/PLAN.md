@@ -1307,6 +1307,92 @@ order, because the first two read as *broken* rather than merely plain:
 6. At 900pt the control strip wraps into a ragged second row (one button left,
    two right, large gap).
 
+### ✅ RESOLVED this round
+- **Malformed control lines are no longer billed as prompts.** Both parsers are
+  three-valued (none / valid / malformed) and both stdin loops branch on it.
+  Verified against the real binary: the repro now returns
+  `accepted:false, blockers:["switch control line missing required \"provider\""]`
+  and never reaches the model.
+- **Theme pinning.** `displayed(for:matchSystemAppearance:)` plus a real
+  Settings toggle defaulting ON; picking a theme that contradicts the OS
+  auto-disables it so the explicit pick stands. Proven on screen — Studio
+  applied, chrome fully light, Mac confirmed in Dark mode throughout.
+  All 7 themes reachable.
+- **Model-list provenance.** `ModelListSource: "provider" | "fallback"` rides
+  on the cached value; `listModelsWithSource?` added as an optional adapter
+  method following the `embed?`/`health?` precedent. Bare `listModels` gets no
+  benefit of the doubt — always tagged `fallback`.
+- **`ollama` migration** — finished by me; it was the last blocker keeping
+  `build`+`typecheck` red. `source: "provider"` for any OK response
+  (including an empty list: a running daemon with nothing pulled is real
+  data), `fallback` when the daemon never answered.
+- **The Documents permission prompt** now explains itself.
+
+### 🔴 A verified list can still be wrong BY OMISSION
+`DEFAULT_GEMINI_MODELS` was refreshed with a genuinely good process — three
+dated sources, reasoning recorded, the deprecated 2.0 line correctly dropped.
+It was still wrong: **`gemini-3.5-flash` and `gemini-3.5-flash-lite` were
+missing**, both GA on both Google pages. `gemini-3.5-flash` is Google's own
+"most intelligent model for sustained frontier performance on agentic and
+coding tasks" — for a coding harness, the single most valuable Gemini model,
+and it was not on offer. The same agent had ALREADY used `gemini-3.5-flash` in
+`packages/config/src/schema.ts:614` in the same session, so the two files it
+edited disagreed with each other.
+
+Also found: the two Google sources **disagree** on `gemini-2.5-pro` — the
+models page does not list it as GA, the pricing page bills it with full
+tiers. Kept (billable means selectable) with the conflict recorded rather
+than silently resolved.
+
+**The lesson:** the check was "are the ids I have correct?" when it needed to
+be "is this the complete current set?" A list can be entirely accurate and
+still wrong, and omission is invisible in the output — which is why it
+survived the first verification. Ordering is now deliberate: frontier coding
+models lead, `-lite` tiers trail, because anything taking the head as a
+default should land on capable rather than cheapest.
+
+### Design rule established: one condition on a set gets ONE marker
+Provenance was proposed for `PickerOption.warning` — the per-row amber-triangle
+mechanism used by `circuitWarning`/`localServerWarning`. Overruled: those are
+per-row FACTS; provenance is a property of the whole list (when the probe
+cannot run, every row is `fallback` together), so gemini would paint six amber
+triangles for one fact. The treatment is one quiet neutral caption on the
+picker — "unverified — sign in to load the real list" — shown only when the
+entire list is `fallback`.
+
+### ⚠️ There is NO skip in the Swift suite
+Two separate agents reported "1 pre-existing environment-conditional skip".
+`swift test` reports **409 executed, 0 failures, 0 skipped**. Checked twice,
+specifically because a silently-skipped test is how a green suite hides a real
+break. Do not carry that assumption forward.
+
+### ✅ RESOLVED: `runJSON` is now bounded (the no-timeout hang)
+`NexusClient.runJSON` takes `timeoutSeconds: Double? = 20` — a **default, not
+an opt-in**, because the failure it prevents is silent. New
+`NexusCommandError.timedOut(seconds:)`, deliberately NOT folded into
+`cancelled` (the user stopped it) or `nonZeroExit` (the process answered):
+a timeout means **nothing ever answered**.
+
+The timer **terminates the process** rather than abandoning the `await` —
+dropping the continuation would leak a live `nexus` child, and for `mcp tools`
+every MCP server it had started, for the lifetime of the app, once per visit
+to the screen. Killing it is also what makes `onTerminated` fire, resuming the
+continuation exactly once, so nothing races. `ExpiryFlag` latches strictly
+BEFORE terminating (same ordering trick as `localServerReachable`) — a flag
+set after would lose the race and a timeout would masquerade as `cancelled`.
+
+`Integrations.swift` needed no change: it already carried `commandError.message`
+into `error`, cleared `isLoading` via `defer`, and `IntegrationsView` already
+rendered an `InlineBanner` plus Refresh. The screen now leaves the spinner and
+shows "nexus did not respond within 20s" with a retry.
+
+3 tests in `NexusClientTimeoutTests.swift` spawn a REAL hanging process, not a
+fixture — a fixture cannot prove the part that mattered (that the child is
+KILLED). One asserts `.timedOut` specifically rather than merely "a failure",
+one asserts real wall-clock boundedness, one greps `ps` for a UUID-scoped
+script path to prove the child was reaped. **412 executed, 0 failures, 0
+skipped.**
+
 ### Open
 1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
    `IntegrationsView`/`GitView`/`ApprovalSheet`), plus a before/after

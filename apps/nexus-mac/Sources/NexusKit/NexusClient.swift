@@ -14,6 +14,14 @@ public enum NexusCommandError: Error, Sendable, Hashable {
     /// The process exited 0, but stdout wasn't a single valid JSON document.
     case malformedJSON(String)
     case cancelled
+    /// The process was still running when its deadline expired, so we killed
+    /// it. Deliberately NOT folded into `cancelled` or `nonZeroExit`: those
+    /// mean "something answered" (the user, or the process itself), whereas
+    /// this means **nothing ever answered** — the same distinction the CLI
+    /// draws between a real failure and an inconclusive probe. A caller that
+    /// collapses the two tells the user a server is broken when the truth is
+    /// only that it was slow.
+    case timedOut(seconds: Double)
 
     /// A short, user-facing rendering — for call sites (like the controllers
     /// below) that just want something to display.
@@ -27,6 +35,8 @@ public enum NexusCommandError: Error, Sendable, Hashable {
             return "nexus did not print valid JSON: \(text)"
         case .cancelled:
             return "cancelled"
+        case .timedOut(let seconds):
+            return "nexus did not respond within \(Int(seconds))s"
         }
     }
 }
@@ -474,9 +484,30 @@ public actor NexusClient {
     /// interleaves anything else onto stdout in `-o json` mode) — so every
     /// collected line is rejoined in order and parsed once, rather than
     /// decoded line-by-line as a `UiEvent` the way `stream` does.
-    public nonisolated func runJSON(_ command: NexusCommand) async -> Result<JSONValue, NexusCommandError> {
+    /// - Parameter timeoutSeconds: kill the process and fail with
+    ///   ``NexusCommandError/timedOut(seconds:)`` if it has not exited by
+    ///   then. Pass `nil` only for a call that genuinely has no bound.
+    ///
+    ///   There is a default rather than an opt-in because the failure this
+    ///   prevents is silent: `mcp tools` STARTS every enabled MCP server, and
+    ///   one wedged server (or a pending macOS permission prompt in front of
+    ///   one) used to leave the Integrations screen spinning forever with no
+    ///   failure state and no way out but quitting. An unbounded wait is the
+    ///   wrong default for a subprocess you do not control.
+    ///
+    ///   The timer **terminates the process** rather than merely abandoning
+    ///   the `await`: dropping the continuation would leak a live `nexus`
+    ///   child (and, for `mcp tools`, every MCP server it had started) for
+    ///   the lifetime of the app. Killing it is what makes `onTerminated`
+    ///   fire, which is what resumes the continuation exactly once — so this
+    ///   races nothing and cannot double-resume.
+    public nonisolated func runJSON(
+        _ command: NexusCommand,
+        timeoutSeconds: Double? = 20
+    ) async -> Result<JSONValue, NexusCommandError> {
         let process = Process()
         let collector = OutputCollector()
+        let expiry = ExpiryFlag()
         let termination = await withCheckedContinuation { (continuation: CheckedContinuation<NexusTermination, Never>) in
             launch(
                 process, command,
@@ -484,6 +515,25 @@ public actor NexusClient {
                 onDiagnostic: { collector.addDiagnostic($0) },
                 onTerminated: { reason in continuation.resume(returning: reason) }
             )
+            guard let timeoutSeconds else { return }
+            Task.detached {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                guard process.isRunning else { return }
+                // Mark BEFORE terminating, never after: the termination this
+                // triggers is what wakes the continuation, so a flag set
+                // afterwards could lose the race against the reader below and
+                // a timeout would masquerade as an ordinary `cancelled`.
+                expiry.markExpired()
+                process.terminate()
+            }
+        }
+
+        // Checked first — a killed process reports `.cancelled` (or a signal
+        // exit), and reporting "cancelled" for something the user never
+        // cancelled is exactly the kind of dishonest state this codebase
+        // works to avoid.
+        if expiry.didExpire, let timeoutSeconds {
+            return .failure(.timedOut(seconds: timeoutSeconds))
         }
 
         switch termination {
@@ -570,6 +620,25 @@ public actor NexusClient {
 
 /// Thread-safe accumulator for `runJSON`'s callbacks, which fire on the pipes'
 /// readability queue rather than any actor — mirrors `LineBuffer` below.
+/// A one-way "the deadline fired" latch, shared between the timeout task and
+/// the awaiting caller. Same shape as `OutputCollector` below — a lock rather
+/// than an actor, because both sides touch it from arbitrary threads and the
+/// read happens on a path that cannot `await`.
+private final class ExpiryFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _expired = false
+
+    func markExpired() {
+        lock.lock(); defer { lock.unlock() }
+        _expired = true
+    }
+
+    var didExpire: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _expired
+    }
+}
+
 private final class OutputCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var _lines: [String] = []

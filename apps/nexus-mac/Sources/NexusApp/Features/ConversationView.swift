@@ -268,11 +268,24 @@ struct ConversationView: View {
                     .tracking(0.7)
                     .foregroundStyle(theme.color(\.textMuted))
 
-                LazyVGrid(columns: suggestionColumns, spacing: Space.sm) {
-                    suggestionCard(0)
-                    suggestionCard(1)
-                    suggestionCard(2)
-                    suggestionCard(3)
+                // A plain 2-row `VStack` of `HStack`s, not `LazyVGrid` — the
+                // grid put every icon at the top-trailing corner of the WRONG
+                // cell, detached from its own card entirely (confirmed on
+                // screen at both widths, a real rendering fault this file
+                // does not otherwise have an explanation for). Four fixed
+                // items never needed a lazy, dynamically-sized grid anyway;
+                // two ordinary rows lay out exactly as written, and each
+                // card's own `.frame(maxWidth: .infinity)` still splits the
+                // row width evenly between its two cards.
+                VStack(spacing: Space.sm) {
+                    HStack(spacing: Space.sm) {
+                        suggestionCard(0)
+                        suggestionCard(1)
+                    }
+                    HStack(spacing: Space.sm) {
+                        suggestionCard(2)
+                        suggestionCard(3)
+                    }
                 }
             }
             .frame(maxWidth: readingColumnWidth)
@@ -280,11 +293,6 @@ struct ConversationView: View {
         .padding(Space.xxl)
         .frame(maxWidth: .infinity)
     }
-
-    private let suggestionColumns = [
-        GridItem(.flexible(), spacing: Space.sm),
-        GridItem(.flexible()),
-    ]
 
     private func suggestionCard(_ index: Int) -> some View {
         let suggestion = Self.suggestions[index]
@@ -739,12 +747,16 @@ struct ControlStrip: View {
                 leadingDot: providerDotColor(for: controller.provider, in: providers, theme: theme),
                 options: providers,
                 selection: controller.provider,
-                // No max: the provider id is short and human-facing
-                // ("anthropic," "openai") — it must never truncate, per
-                // `DropdownPicker`'s own doc on why this control used to
-                // read as broken.
+                // A real ceiling, not `nil`: the provider id is short and
+                // human-facing ("anthropic," "openai") and must never
+                // truncate, but an UNBOUNDED max let it expand to fill
+                // whatever space existed — confirmed on screen eating over
+                // half the strip's width with a long empty gap before its
+                // own chevron. 150pt comfortably fits the longest real
+                // provider id this CLI ships (`azure-openai`, 12 characters)
+                // with room to spare, without growing past its content.
                 minWidth: 88,
-                maxWidth: nil,
+                maxWidth: 150,
                 emptyHint: "No providers loaded yet"
             ) { id in
                 controller.provider = id

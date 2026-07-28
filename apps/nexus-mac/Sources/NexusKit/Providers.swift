@@ -636,12 +636,12 @@ public final class ProvidersController {
     /// are an offline test harness, not a real provider a user is choosing
     /// between, and their presence in a user-facing picker (or as an
     /// accidental auto-selection — every consumer of `selectable`, including
-    /// `ChatTab`'s `first(where: \.isUsable)` preselect in `RootView.swift`,
-    /// reads from this ONE list) is the exact leak this property exists to
-    /// close. `NexusProvider.isUsable`/`isTestFixture` themselves are left
-    /// alone — `mock` really is usable, so decoding/CLI-facing code (e.g.
-    /// `nexus ask -p mock`) is untouched; only THIS app-facing aggregation
-    /// point filters.
+    /// `ChatTab`'s `first(where: \.isReadyForAutoSelect)` preselect in
+    /// `RootView.swift`, reads from this ONE list) is the exact leak this
+    /// property exists to close. `NexusProvider.isUsable`/`isTestFixture`
+    /// themselves are left alone — `mock` really is usable, so
+    /// decoding/CLI-facing code (e.g. `nexus ask -p mock`) is untouched;
+    /// only THIS app-facing aggregation point filters.
     ///
     /// A developer working on this app who genuinely needs `mock` in the
     /// picker can set `NEXUS_SHOW_TEST_PROVIDERS` (any non-blank value) —
