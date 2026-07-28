@@ -50,6 +50,12 @@ struct ConversationView: View {
     var providers: [PickerOption] = []
     var models: [PickerOption] = []
     var isLoadingModels = false
+    /// Whether EVERY model in `models` is an unconfirmed `.fallback` guess
+    /// rather than a live-probed catalog — a fact about the whole list, set
+    /// once by `ChatTab.loadModels` from the raw `NexusModel.isVerified`
+    /// before it gets erased mapping down to `PickerOption`. See
+    /// `ControlStrip.modelListVerificationCaption`.
+    var modelsAreUnverified = false
     var onLoadModels: (String) -> Void = { _ in }
 
     init(
@@ -57,12 +63,14 @@ struct ConversationView: View {
         providers: [PickerOption] = [],
         models: [PickerOption] = [],
         isLoadingModels: Bool = false,
+        modelsAreUnverified: Bool = false,
         onLoadModels: @escaping (String) -> Void = { _ in }
     ) {
         self.controller = controller
         self.providers = providers
         self.models = models
         self.isLoadingModels = isLoadingModels
+        self.modelsAreUnverified = modelsAreUnverified
         self.onLoadModels = onLoadModels
     }
 
@@ -81,6 +89,7 @@ struct ConversationView: View {
                         providers: providers,
                         models: models,
                         isLoadingModels: isLoadingModels,
+                        modelsAreUnverified: modelsAreUnverified,
                         onLoadModels: onLoadModels,
                         rolesController: rolesController
                     )
@@ -539,6 +548,7 @@ struct ControlStrip: View {
     let providers: [PickerOption]
     let models: [PickerOption]
     let isLoadingModels: Bool
+    let modelsAreUnverified: Bool
     let onLoadModels: (String) -> Void
     let rolesController: RolesController?
 
@@ -549,9 +559,14 @@ struct ControlStrip: View {
     @State private var confirmingClear = false
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            singleRow
-            twoRowStack
+        VStack(alignment: .leading, spacing: Space.xs) {
+            ViewThatFits(in: .horizontal) {
+                singleRow
+                twoRowStack
+            }
+            if modelsAreUnverified {
+                modelListVerificationCaption
+            }
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm)
@@ -566,6 +581,28 @@ struct ControlStrip: View {
             Spacer(minLength: Space.lg)
             utilityTray
         }
+    }
+
+    /// ONE quiet line for the whole model list, not a warning per row.
+    ///
+    /// `no-mocks` proposed reusing `PickerOption.warning` (the amber
+    /// triangle `rolePicker` already puts on a write-capable role) per
+    /// unverified model. Overruled: that mechanism is for a PER-ROW
+    /// condition — this provider's circuit is open, that local server is
+    /// unreachable. Verification isn't per-row: when a probe can't run,
+    /// EVERY model in the list is `.fallback` together (confirmed: `nexus
+    /// models gemini -o json` returns six models, every one `"fallback"`),
+    /// so six amber triangles would paint one fact as six, spending the
+    /// attention budget `DESIGN.md`'s colour system rations for nothing.
+    /// The general rule this establishes: a condition that applies to an
+    /// entire SET gets one marker on the set, never one per member.
+    ///
+    /// Neutral caption, no icon, no amber — appears only while
+    /// `modelsAreUnverified`, gone the instant a real probe succeeds.
+    private var modelListVerificationCaption: some View {
+        Text("Unverified — sign in to load the real model list")
+            .font(Kind.caption)
+            .foregroundStyle(theme.color(\.textMuted))
     }
 
     /// `approvalControl` moved onto ROW ONE with `runConfigGroup` here — it

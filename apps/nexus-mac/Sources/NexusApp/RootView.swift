@@ -875,6 +875,12 @@ struct ChatTab: View {
     @State private var providers: ProvidersController?
     @State private var models: [PickerOption] = []
     @State private var loadingModels = false
+    /// Whether the CURRENTLY loaded model list is entirely `.fallback` —
+    /// computed here, once, from the raw `NexusModel.isVerified` before
+    /// `PickerOption` (which deliberately drops it, see that init's doc)
+    /// erases it. `ControlStrip` renders this as one set-level caption
+    /// rather than a per-row warning — see its own doc for why.
+    @State private var modelsAreUnverified = false
 
     var body: some View {
         ConversationView(
@@ -882,6 +888,7 @@ struct ChatTab: View {
             providers: providerOptions,
             models: models,
             isLoadingModels: loadingModels,
+            modelsAreUnverified: modelsAreUnverified,
             onLoadModels: loadModels
         )
         .task(id: workspace.projectDirectory) {
@@ -951,6 +958,11 @@ struct ChatTab: View {
             // gemini's) would have rendered identically to a live-verified
             // one (anthropic's) with no distinction at all.
             models = loaded.map { PickerOption(model: $0) }
+            // Computed from the RAW list, before that mapping erases
+            // `isVerified` — true only when every model came back unverified
+            // together (see `ControlStrip.modelListVerificationCaption`'s
+            // doc for why this is a set-level fact, not a per-row one).
+            modelsAreUnverified = !loaded.isEmpty && loaded.allSatisfy { !$0.isVerified }
             loadingModels = false
             // Preselect the first model, same reasoning as the provider
             // preselect above: an empty "model" placeholder reads as broken
