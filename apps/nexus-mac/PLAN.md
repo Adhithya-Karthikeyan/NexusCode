@@ -1471,8 +1471,18 @@ was dropped, silently.
 Why it looked like a Sessions-only bug: this store is at 1000+ sessions, large
 enough that the tail is usually still in flight at exit. Small payloads land in
 a single read first, so every other screen and the entire test suite passed
-over it. **The same loss applied to `stream`**, where it drops trailing EVENTS
-rather than visible text — silently, with no error at all.
+over it.
+
+**Correction — `stream` was NOT shown to be affected.** It was initially
+claimed to be, by shared-code reasoning: both paths go through `launch`, so
+the loss "must" apply to events too. That reasoning did not survive testing.
+`NexusClientStreamTailTests` (4000 events, exit racing the drain) **passes
+with the fix disabled** — verified by actually disabling it. The likely reason
+is timing, not a different code path: a `stream` consumer iterates while the
+child runs, so the pipe drains continuously, whereas `runJSON`'s caller is
+suspended on a continuation and the whole payload backs up until exit. The
+test is kept as an exact-count guard, annotated so nobody later cites it as
+proof of a bug it never demonstrated.
 
 Fix: read both pipes to EOF inside `terminationHandler` before flushing. Safe
 to block — the child has exited so the write end is closed and EOF is
