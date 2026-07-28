@@ -1434,6 +1434,28 @@ manufacture a convincing, reproducible, entirely fictional UI bug — and this
 one survived three separate disproof attempts before being caught. Add it to
 the same list as "a green suite is not evidence the feature works."
 
+### ⬜ NOT visually verified: Tasks, Sessions, Accounts
+Chat, Settings, Agents, Git and Integrations were all reviewed on screen.
+These three were **not**, and the gap is honest rather than an oversight.
+
+Driving navigation needs either an accessibility action or synthetic input.
+An ad-hoc unsigned throwaway bundle is not granted accessibility control, so
+`click (first button whose name is "Tasks")` silently no-ops and every capture
+comes back showing Chat — three such captures were taken and **deleted rather
+than kept**, because a file named `sweep_tasks.png` showing the Chat tab is
+exactly the sort of stale artifact that cost this project hours already.
+Synthetic keystrokes were not used: the same standing rule that forbids
+coordinate clicks applies, and it exists because a coordinate click in this
+session typed into the owner's real Notes document.
+
+What WAS verified for these three, structurally rather than visually: each has
+exactly one `PageHeader`, none uses `.truncationMode(.middle)`, and none has an
+unbounded `maxWidth: nil` — i.e. none of the three specific defects found on
+the other screens is present. That is real but weaker than looking.
+
+To close this properly, someone needs to grant accessibility control to a
+signed build, or the owner opens those three tabs themselves.
+
 ### Open
 1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
    `IntegrationsView`/`GitView`/`ApprovalSheet`), plus a before/after
