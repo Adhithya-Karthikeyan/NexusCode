@@ -44,9 +44,18 @@ enum Radius {
 /// Body 13/16, Headline 13 bold, Title3 15, Title2 17, Title1 22, LargeTitle 26,
 /// with 10pt the readable floor. The first pass used invented sizes, which is
 /// why nothing sat right next to native controls.
+///
+/// `hero`/`title` sit at the BOLD end of that real scale on purpose (Large
+/// Title's own weight range, and Title2's exact 17pt rather than Title3's
+/// 15) rather than the middle of it: a type scale that never actually uses
+/// its own range is the "nearly everything renders at Kind.body" problem
+/// `DESIGN.md` names directly — every screen gets exactly one `.hero`/
+/// `.title` moment, and it needs to read as one at a glance, not merely
+/// technically differ from body text. Timidity here was the documented
+/// failure mode of every earlier pass.
 enum Kind {
-    static let hero = Font.system(size: 22, weight: .semibold)
-    static let title = Font.system(size: 15, weight: .semibold)
+    static let hero = Font.system(size: 28, weight: .bold)
+    static let title = Font.system(size: 17, weight: .semibold)
     static let headline = Font.system(size: 13, weight: .semibold)
     static let section = Font.system(size: 11, weight: .semibold)
     static let body = Font.system(size: 13, weight: .regular)
@@ -105,6 +114,19 @@ extension AppTheme {
             startRadius: 2,
             endRadius: 150
         )
+    }
+
+    /// Level-1 elevation's own `(color, radius, y)` shadow — the "does THIS
+    /// theme want a card shadow at all" answer, for a caller that wants the
+    /// theme's normal card shadow rather than re-deriving `Card`'s private
+    /// guard. Same convention as `Card`'s own shadow: zero at
+    /// `shadowOpacity == 0` (every theme that rejects shadows for the
+    /// surface ladder instead — see `hairline`'s doc comment), non-zero only
+    /// for the two themes (Cinder, Nightfall) that opted into one on purpose.
+    var cardShadow: (color: Color, radius: CGFloat, y: CGFloat) {
+        let step = elevation.step(1)
+        guard step.shadowOpacity > 0 else { return (.clear, 0, 0) }
+        return (.black.opacity(step.shadowOpacity), step.shadowRadius, step.shadowRadius * 0.3)
     }
 }
 
@@ -234,6 +256,46 @@ struct SectionHeader: View {
                     Text(subtitle)
                         .font(Kind.caption)
                         .foregroundStyle(theme.color(\.textMuted).opacity(0.75))
+                }
+            }
+            Spacer(minLength: 0)
+            accessory
+        }
+    }
+}
+
+/// The one title moment at the top of an entire screen — distinct from
+/// `SectionHeader`, which labels a GROUP *within* a screen.
+///
+/// Integrations, Git, Tasks and Sessions each opened with a `SectionHeader`
+/// as their page identity, and Agents and Accounts had no page title at all
+/// — both are the exact "nearly everything renders at section-label size"
+/// problem `DESIGN.md` calls out: a whole screen's own name, styled
+/// identically to "TRY ASKING" or "WORK," is not a title, it's another
+/// subsection label. `Kind.title` here is the one deliberate size/weight
+/// jump every screen gets, once.
+struct PageHeader: View {
+    @Environment(\.nexusTheme) private var theme
+    let title: String
+    var subtitle: String?
+    var accessory: AnyView?
+
+    init(_ title: String, subtitle: String? = nil, accessory: AnyView? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+        self.accessory = accessory
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(Kind.title)
+                    .foregroundStyle(theme.color(\.textPrimary))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(Kind.caption)
+                        .foregroundStyle(theme.color(\.textMuted))
                 }
             }
             Spacer(minLength: 0)

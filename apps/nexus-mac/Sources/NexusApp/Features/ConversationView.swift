@@ -423,11 +423,15 @@ struct ConversationView: View {
                     lineWidth: composerFocused ? 2 : 1
                 )
         }
+        // Neutral elevation, not an accent-tinted glow: accent is rationed to
+        // selection/primary-action/live-state elsewhere in this file, and
+        // "the composer has focus" is none of those three — the border
+        // (`chromeBorderFocus`, its own dedicated token) already carries the
+        // focus signal on its own.
         .shadow(
-            color: composerFocused
-                ? theme.color(\.accentDefault).opacity(theme.isDark ? 0.3 : 0.16)
-                : .clear,
-            radius: 12, y: 3
+            color: composerFocused ? theme.cardShadow.color : .clear,
+            radius: composerFocused ? theme.cardShadow.radius + 4 : 0,
+            y: composerFocused ? theme.cardShadow.y + 1 : 0
         )
         .animation(.easeOut(duration: 0.15), value: composerFocused)
     }
@@ -654,7 +658,11 @@ struct ControlStrip: View {
                 Image(systemName: showsReasoning ? "brain.head.profile.fill" : "brain.head.profile")
                     .font(.system(size: 12))
             }
-            .buttonStyle(SoftButton(tone: showsReasoning ? .accent : .neutral, size: .compact))
+            // Neutral, not accent: this is a persistent setting toggle, not
+            // one of the three things accent is rationed to (selection /
+            // primary action / live state) — the filled vs. outline glyph
+            // already carries on/off on its own.
+            .buttonStyle(SoftButton(tone: .neutral, size: .compact))
             .help(showsReasoning ? "Hide reasoning traces" : "Show reasoning traces")
 
             Button {
@@ -764,8 +772,11 @@ struct ControlStrip: View {
             HStack(spacing: 4) {
                 Image(systemName: controller.approvalsEnabled ? "hand.raised.fill" : "hand.raised.slash")
                     .font(.system(size: 9))
+                // Prose UI label, not machine output — `Kind.mono` is
+                // reserved for literal CLI/JSON text (the command preview,
+                // provider/model ids), not English button copy.
                 Text("Ask first")
-                    .font(Kind.monoSmall)
+                    .font(Kind.caption)
             }
         }
         .buttonStyle(SoftButton(tone: .neutral, size: .compact))
@@ -1173,7 +1184,11 @@ private struct ChatHeroMark: View {
                 .foregroundStyle(theme.color(\.textMuted))
             Text(mode.rawValue)
                 .fontWeight(.semibold)
-                .foregroundStyle(theme.accentGradient)
+                // Neutral, not the accent gradient: this word is placeholder
+                // copy naming the current mode, not a selection, the primary
+                // action, or live state — the three things accent is
+                // rationed to (see `DESIGN.md`).
+                .foregroundStyle(theme.color(\.textPrimary))
             StreamingCaret()
         }
         .font(.system(size: 19, weight: .medium, design: .monospaced))
@@ -1205,7 +1220,9 @@ private struct SuggestionCard: View {
             HStack(spacing: Space.md) {
                 Image(systemName: icon)
                     .font(.system(size: 13))
-                    .foregroundStyle(theme.color(\.accentDefault))
+                    // Neutral, not accent — a decorative per-row icon tint is
+                    // exactly the pattern `DESIGN.md`'s colour system rules out.
+                    .foregroundStyle(theme.color(\.textSecondary))
                     .frame(width: 18)
                 Text(text)
                     .font(Kind.bodyEmphasis)
@@ -1311,8 +1328,11 @@ struct LaneColumn: View {
 ///
 /// Prompt and answer share the SAME plain-text treatment — no per-message
 /// avatar, no elevated card. Claude.ai renders both on the page background
-/// with neither; the only differentiator here is a 2pt accent rule at low
-/// opacity on the assistant's answer. A round avatar bubble next to every
+/// with neither; the only differentiator here is a 2pt neutral rule at low
+/// opacity on the assistant's answer — neutral, not accent: a static
+/// per-message marker is none of the three things accent is rationed to
+/// (selection / primary action / live state; see `DESIGN.md`). A round
+/// avatar bubble next to every
 /// single message is a consumer-chat-app tell (and, past the first turn,
 /// carries no information position doesn't already give); a bordered card
 /// around every answer is the reason this used to read as a stack of
@@ -1400,12 +1420,15 @@ struct TurnView: View {
         VStack(alignment: .leading, spacing: 4) {
             innerContent
                 .padding(.leading, Space.md)
-                // The one differentiator: a quiet accent rule in the left
+                // The one differentiator: a quiet NEUTRAL rule in the left
                 // gutter, present only on the assistant's answer — never a
-                // card, never an avatar.
+                // card, never an avatar. Not accent: this marker is always
+                // present on every answer, which is exactly what accent is
+                // NOT for (see `DESIGN.md` — rationed to selection, the one
+                // primary action, and live state only).
                 .overlay(alignment: .leading) {
                     Rectangle()
-                        .fill(theme.color(\.accentDefault).opacity(0.35))
+                        .fill(theme.color(\.chromeBorderStrong).opacity(0.6))
                         .frame(width: 2)
                 }
 

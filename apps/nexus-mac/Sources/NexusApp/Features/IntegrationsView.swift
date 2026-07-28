@@ -71,7 +71,7 @@ struct IntegrationsView: View {
     // MARK: - Header
 
     private var headerRow: some View {
-        SectionHeader(
+        PageHeader(
             "Integrations",
             subtitle: "MCP servers, tools, and hooks",
             accessory: AnyView(
