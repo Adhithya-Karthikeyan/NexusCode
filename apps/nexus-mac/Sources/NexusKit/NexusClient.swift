@@ -186,6 +186,23 @@ public struct NexusBinary: Sendable {
             return fileExists(override) ? NexusBinary(url: URL(fileURLWithPath: override)) : nil
         }
 
+        // `fileExists` alone is a false positive for a script whose shebang
+        // interpreter can't be found anywhere — it passes `isExecutableFile`
+        // and then fails the moment it's actually run. Filtering with
+        // `canLaunch` too means a candidate like that is skipped in favor of
+        // a LATER one that would actually work, instead of `discover`
+        // confidently handing back something dead.
+        return candidatePaths(repoRoot: repoRoot, environment: environment)
+            .first(where: { fileExists($0) && canLaunch($0) })
+            .map { NexusBinary(url: URL(fileURLWithPath: $0)) }
+    }
+
+    /// The best-effort candidate list shared by `discover` (which returns the
+    /// first workable one) and `explainMissing` (which needs the same list to
+    /// tell "nothing exists anywhere" apart from "something exists but can't
+    /// run" — see that function). Never includes `explicit`/`NEXUS_BIN`,
+    /// which are deliberate overrides handled separately by both callers.
+    private static func candidatePaths(repoRoot: URL?, environment: [String: String]) -> [String] {
         var candidates: [String] = []
         // Repo-local dist build — the development case.
         if let repoRoot {
@@ -199,14 +216,7 @@ public struct NexusBinary: Sendable {
         for path in environment["PATH"]?.split(separator: ":") ?? [] {
             candidates.append("\(path)/nexus")
         }
-        // `fileExists` alone is a false positive for a script whose shebang
-        // interpreter can't be found anywhere — it passes `isExecutableFile`
-        // and then fails the moment it's actually run. Filtering with
-        // `canLaunch` too means a candidate like that is skipped in favor of
-        // a LATER one that would actually work, instead of `discover`
-        // confidently handing back something dead.
-        return candidates.first(where: { fileExists($0) && canLaunch($0) })
-            .map { NexusBinary(url: URL(fileURLWithPath: $0)) }
+        return candidates
     }
 
     /// Explains why `discover` returned `nil` — the ONE place that knows how
@@ -223,9 +233,30 @@ public struct NexusBinary: Sendable {
     /// install location (see that function's doc). So if it's set at all,
     /// that is always the reason a `nil` came back — never a coincidence
     /// alongside some other gap this message would otherwise have to guess at.
-    public static func explainMissing(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+    public static func explainMissing(
+        repoRoot: URL? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileExists: @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
+        canLaunch: @Sendable (String) -> Bool = { defaultCanLaunch($0, environment: ProcessInfo.processInfo.environment) }
+    ) -> String {
         if let override = environment["NEXUS_BIN"]?.trimmingCharacters(in: .whitespacesAndNewlines), !override.isEmpty {
             return "NEXUS_BIN is set to \"\(override)\", but nothing executable exists there."
+        }
+        // `discover` can also come back `nil` because a candidate WAS found
+        // but couldn't actually run (see `canLaunch`) — a different problem
+        // from "nothing here," and the generic message below would be
+        // actively wrong about it: the file is right there, it just can't
+        // execute. Naming that path and the real cause is exactly the
+        // distinction `NEXUS_BIN`'s branch above already draws; this extends
+        // the same honesty to the best-effort candidates.
+        if let brokenPath = candidatePaths(repoRoot: repoRoot, environment: environment)
+            .first(where: { fileExists($0) && !canLaunch($0) }) {
+            return """
+                Found `nexus` at \(brokenPath), but couldn't run it — its \
+                interpreter (e.g. node) isn't installed or reachable from \
+                this app. Install it where `nexus` can find it, or set \
+                NEXUS_BIN to a `nexus` that can actually run.
+                """
         }
         return """
             Could not find the `nexus` executable. Install it, or set NEXUS_BIN \
