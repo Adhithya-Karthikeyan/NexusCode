@@ -162,6 +162,24 @@ export interface CliSpec<Cfg extends SubprocessConfig> {
     push: (chunk: StreamChunk) => void,
     cfg: Cfg,
   ): void;
+  /**
+   * Optional: recognize a CLI-specific precondition failure in a raw stderr/
+   * diagnostic string and translate it into an actionable message (e.g. naming
+   * the actual working directory instead of echoing the CLI's own vocabulary
+   * verbatim). Mirrors `looksLikeQuotaExhaustion`/`cliFailureCode` below — text
+   * pattern-matching a wrapped CLI's output into a typed condition — but scoped
+   * to one CLI instead of shared across all of them, since preconditions like
+   * "requires a trusted/git directory" are not universal (most CLIs have none).
+   *
+   * Return `undefined` to leave `detail` untouched (the default for any spec
+   * that omits this). When translating, the returned string MUST still contain
+   * the original `detail` text verbatim — this enriches the message for the
+   * end user, it never replaces the evidence a debugger needs. Match narrowly:
+   * an over-broad pattern here silently misclassifies unrelated failures under
+   * this CLI's translation, the same failure mode `redactDiagnostic`'s doc
+   * comment warns about one layer down.
+   */
+  translateFailure?(detail: string, cfg: Cfg): string | undefined;
 }
 
 function truncate(s: string, n = 200): string {
@@ -238,6 +256,16 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
   spec: CliSpec<Cfg>,
 ): ProviderAdapter {
   const providerId = spec.id;
+
+  /**
+   * Give the spec a chance to enrich a raw CLI diagnostic before it becomes an
+   * `AdapterError` message. `cliFailureCode` classification above still runs
+   * against the ORIGINAL `detail` — translation only changes what the human
+   * reads, never the typed `code` a caller branches on.
+   */
+  function translatedDetail(detail: string): string {
+    return spec.translateFailure?.(detail, cfg) ?? detail;
+  }
 
   async function resolveChildEnv(): Promise<NodeJS.ProcessEnv> {
     // Scrub secret-shaped ambient env (provider API keys, tokens, etc.) before
@@ -409,7 +437,7 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
             state.terminal.subtype || stderr || firstMalformedLine || "cli error",
           );
           const code = cliFailureCode(detail, "cli_exit");
-          const error = new AdapterError(code, detail, {
+          const error = new AdapterError(code, translatedDetail(detail), {
             providerId,
             exitCode: exit.exitCode,
           });
@@ -438,7 +466,7 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
         // Rule 3: non-zero (or signalled/null) exit with no `result` line.
         const detail = stderr || firstMalformedLine || `exit ${exit.exitCode}`;
         const code = cliFailureCode(detail, firstMalformedLine && !stderr ? "parse" : "cli_exit");
-        const error = new AdapterError(code, detail, {
+        const error = new AdapterError(code, translatedDetail(detail), {
           providerId,
           exitCode: exit.exitCode,
         });
@@ -447,7 +475,7 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
         const diagnostic = stderr || firstMalformedLine;
         if (diagnostic) {
           const code = cliFailureCode(diagnostic, firstMalformedLine && !stderr ? "parse" : "empty_output");
-          const error = new AdapterError(code, diagnostic, { providerId });
+          const error = new AdapterError(code, translatedDetail(diagnostic), { providerId });
           yield { type: "error", runId, error, retryable: false };
           return;
         }

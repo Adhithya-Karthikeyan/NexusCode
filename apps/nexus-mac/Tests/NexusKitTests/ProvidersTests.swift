@@ -23,6 +23,14 @@ final class ProvidersTests: XCTestCase {
         try XCTUnwrap(try fixtureJSON("providers-list").arrayValue).compactMap(NexusProvider.init(json:))
     }
 
+    private func reasoningJSON(_ raw: String) throws -> JSONValue {
+        try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))
+    }
+
+    private func reasoningCapability(_ raw: String) throws -> ReasoningCapability {
+        try XCTUnwrap(ReasoningCapability(json: try reasoningJSON(raw)))
+    }
+
     // MARK: - NexusProvider decode
 
     func testDecodesANormalProviderRow() throws {
@@ -103,6 +111,133 @@ final class ProvidersTests: XCTestCase {
 
     func testEmptyArrayProducesAnEmptyListNotAFailure() {
         XCTAssertTrue([JSONValue]().compactMap(NexusProvider.init(json:)).isEmpty)
+    }
+
+    // MARK: - NexusProvider.reasoning decode
+    //
+    // Bytes below are copied verbatim from a live `nexus providers status -o
+    // json` run (not hand-typed from the TypeScript source) — that discipline
+    // is what caught azure-openai's `effort-string` row carrying no `levels`
+    // key at all, a wire-shape detail no type declaration alone would reveal.
+
+    func testTokenBudgetProviderDecodesWithItsLevels() throws {
+        // anthropic's real row.
+        let json = try reasoningJSON(#"""
+        {"id":"anthropic","kind":"anthropic","available":true,"needsKey":false,
+         "detail":"signed in (`nexus login anthropic`) or key present",
+         "reasoning":{"supported":true,"kind":"token-budget","levels":{"low":4000,"medium":10000,"high":24000}}}
+        """#)
+        let anthropic = try XCTUnwrap(NexusProvider(json: json))
+        let reasoning = try XCTUnwrap(anthropic.reasoning)
+        XCTAssertTrue(reasoning.supported)
+        XCTAssertEqual(reasoning.kind, .tokenBudget)
+        XCTAssertEqual(reasoning.levels, ["low": 4000, "medium": 10000, "high": 24000])
+    }
+
+    func testNativeEffortStringProviderDecodesWithNoLevels() throws {
+        // azure-openai's real row — a native `reasoning_effort` parameter,
+        // no numeric budget on the wire at all (confirmed live: this is the
+        // ENTIRE `reasoning` object, no `levels` key).
+        let json = try reasoningJSON(#"""
+        {"id":"azure-openai","kind":"azure","available":true,"needsKey":true,
+         "detail":"needs key: AZURE_OPENAI_API_KEY + endpoint",
+         "reasoning":{"supported":true,"kind":"effort-string"}}
+        """#)
+        let azure = try XCTUnwrap(NexusProvider(json: json))
+        let reasoning = try XCTUnwrap(azure.reasoning)
+        XCTAssertTrue(reasoning.supported)
+        XCTAssertEqual(reasoning.kind, .effortString)
+        XCTAssertTrue(reasoning.levels.isEmpty)
+    }
+
+    func testUnsupportedProviderDecodesAsAKnownNegative() throws {
+        // codex's real row — the exact provider the owner's report named as
+        // decorative today ("pick codex and set effort to High and nothing
+        // happens"). The wire now says so explicitly.
+        let json = try reasoningJSON(#"""
+        {"id":"codex","kind":"subprocess","available":true,"detail":"codex on PATH",
+         "reasoning":{"supported":false}}
+        """#)
+        let codex = try XCTUnwrap(NexusProvider(json: json))
+        let reasoning = try XCTUnwrap(codex.reasoning, "a known negative must still decode, not vanish")
+        XCTAssertFalse(reasoning.supported)
+        XCTAssertNil(reasoning.kind)
+        XCTAssertTrue(reasoning.levels.isEmpty)
+    }
+
+    func testProviderRowWithNoReasoningKeyDecodesAsUnknownNotSupported() throws {
+        // `providers list -o json` (as opposed to `status`) genuinely never
+        // sends `reasoning` at all on a live run — `providers-list.json` is
+        // real bytes for that, not a simulated "older CLI".
+        let mock = try XCTUnwrap(try decodedProviders().first { $0.id == "mock" })
+        XCTAssertNil(mock.reasoning, "absence must decode as unknown, never as a silent negative or positive")
+    }
+
+    func testMalformedReasoningObjectDecodesAsUnknownRatherThanCrashing() throws {
+        // No `supported` field at all — must degrade the whole `reasoning`
+        // to nil, not guess either way.
+        let json = JSONValue.object([
+            "id": .string("mystery"),
+            "reasoning": .object(["kind": .string("token-budget")]),
+        ])
+        let provider = try XCTUnwrap(NexusProvider(json: json))
+        XCTAssertNil(provider.reasoning)
+    }
+
+    func testUnrecognizedKindIsPreservedNotDropped() throws {
+        // Forward-compat: a THIRD `kind` this build doesn't know about yet
+        // must not vanish or crash the decode — the raw string survives.
+        let reasoning = try reasoningCapability(#"{"supported":true,"kind":"some-future-kind","levels":{"low":1}}"#)
+        XCTAssertEqual(reasoning.kind, .unknown("some-future-kind"))
+        XCTAssertEqual(reasoning.levels, ["low": 1])
+    }
+
+    // MARK: - NexusProvider.reasoningLabel(for:)
+    //
+    // The picker-facing derived read: this is what a control should show per
+    // level, so no call site re-derives token-budget formatting or the
+    // unsupported/unknown fallback on its own.
+
+    func testReasoningLabelForTokenBudgetIncludesTheRealTokenCount() throws {
+        let anthropic = NexusProvider(
+            id: "anthropic",
+            reasoning: try reasoningCapability(#"{"supported":true,"kind":"token-budget","levels":{"low":4000,"medium":10000,"high":24000}}"#)
+        )
+        XCTAssertEqual(anthropic.reasoningLabel(for: .off), "Off")
+        XCTAssertEqual(anthropic.reasoningLabel(for: .low), "Low — 4k thinking tokens")
+        XCTAssertEqual(anthropic.reasoningLabel(for: .medium), "Med — 10k thinking tokens")
+        XCTAssertEqual(anthropic.reasoningLabel(for: .high), "High — 24k thinking tokens")
+    }
+
+    func testReasoningLabelForEffortStringIsJustTheLevelName() throws {
+        // azure-openai: supported, but no numeric budget to fold in.
+        let azure = NexusProvider(
+            id: "azure-openai",
+            reasoning: try reasoningCapability(#"{"supported":true,"kind":"effort-string"}"#)
+        )
+        XCTAssertEqual(azure.reasoningLabel(for: .low), "Low")
+        XCTAssertEqual(azure.reasoningLabel(for: .medium), "Med")
+        XCTAssertEqual(azure.reasoningLabel(for: .high), "High")
+    }
+
+    func testReasoningLabelIsNilForLowMedHighWhenSupportIsAKnownNegative() throws {
+        // codex: the exact "decorative control" bug this task exists to fix.
+        let codex = NexusProvider(id: "codex", reasoning: try reasoningCapability(#"{"supported":false}"#))
+        XCTAssertEqual(codex.reasoningLabel(for: .off), "Off", "Off is always available — no --effort flag is sent at all")
+        XCTAssertNil(codex.reasoningLabel(for: .low))
+        XCTAssertNil(codex.reasoningLabel(for: .medium))
+        XCTAssertNil(codex.reasoningLabel(for: .high))
+    }
+
+    func testReasoningLabelIsNilForLowMedHighWhenSupportIsUnknown() {
+        // No `reasoning` at all — must read the same as a known negative for
+        // labeling purposes (no truthful label exists either way), even
+        // though `.reasoning` itself keeps the two distinguishable.
+        let unknown = NexusProvider(id: "some-provider", reasoning: nil)
+        XCTAssertEqual(unknown.reasoningLabel(for: .off), "Off")
+        XCTAssertNil(unknown.reasoningLabel(for: .low))
+        XCTAssertNil(unknown.reasoningLabel(for: .medium))
+        XCTAssertNil(unknown.reasoningLabel(for: .high))
     }
 
     // MARK: - ProviderCircuit decode (G6 — provider health was computed and thrown away)
