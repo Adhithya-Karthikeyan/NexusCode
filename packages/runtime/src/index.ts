@@ -14,7 +14,7 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { configureHttpPool } from "@nexuscode/shared";
-import { ProviderRegistry, type ProviderAdapter } from "@nexuscode/core";
+import { ProviderRegistry, type CallContext, type ProviderAdapter } from "@nexuscode/core";
 import {
   createSecretStore,
   pricingTable,
@@ -877,6 +877,102 @@ export async function buildRuntime(
   }
 
   return { registry, secrets, pricing: pricingTable(config), statuses, subsystems };
+}
+
+/**
+ * Bound for a single {@link probeLocalServerReachability} candidate. Real
+ * localhost round trips are sub-millisecond either way (a fast `200` from a
+ * running server, or a near-instant `ECONNREFUSED` kernel RST from a closed
+ * port) — this only matters for the rare "process is up but wedged" case, so
+ * it is deliberately much shorter than `@nexuscode/mcp`'s
+ * `DEFAULT_CONNECT_TIMEOUT_MS` (10s, bounding a cold-starting child process)
+ * or `@nexuscode/context`'s `DEFAULT_SOURCE_TIMEOUT_MS` (10s, bounding a
+ * directory walk): those wait out a plausibly-slow-but-real operation, this
+ * one is asking "is anything even listening."
+ */
+export const LOCAL_SERVER_PROBE_TIMEOUT_MS = 750;
+
+/**
+ * Probe ONE candidate, distinguishing "confirmed reachable/unreachable"
+ * from "we gave up waiting" — `adapter.health()` alone cannot do this: it
+ * catches everything (a real connection failure OR its own abort) into the
+ * same `{ok:false}` shape. `timedOut` is set synchronously by the timer
+ * callback, strictly before the abort it triggers can unwind back through
+ * `health()`'s `await`, so there is no window where a genuine fast failure
+ * and an abort-induced one could be confused. Never rejects.
+ */
+async function probeOne(adapter: ProviderAdapter, timeoutMs: number): Promise<boolean | null> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const ctx: CallContext = {
+    signal: controller.signal,
+    idempotencyKey: `reachability:${adapter.id}`,
+    traceId: `reachability:${adapter.id}`,
+    runId: `reachability:${adapter.id}`,
+  };
+  try {
+    // `health` is optional on `ProviderAdapter`; every compat-family adapter
+    // (the only kind ever passed here) implements it, but degrade to
+    // "inconclusive" rather than crash if a future one doesn't.
+    if (!adapter.health) return null;
+    const result = await adapter.health(ctx);
+    return timedOut ? null : result.ok;
+  } catch {
+    // `health()` is documented to never throw (always catches internally),
+    // but degrade defensively anyway, consistent with this file's style.
+    return timedOut ? null : false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Reachability for every registered provider whose usability structurally
+ * depends on a local server process being up RIGHT NOW — the
+ * `DEFAULT_COMPAT_PROVIDERS` entries with no `keyEnv` (today: lmstudio,
+ * vllm). This is the "`available: true` does NOT mean usable" gap: those two
+ * register offline with zero health probe (`registerDefaultCloudProviders`
+ * above, `skipHealth: true`, deliberately — see its doc comment), so
+ * `available`/`needsKey` alone cannot tell "installed and ready" apart from
+ * "nothing is listening at localhost:1234".
+ *
+ * Deliberately NOT part of {@link buildRuntime}: every `nexus` command pays
+ * for `buildRuntime` (`ask`, `agent`, `chat`, …), so probing there would slow
+ * down the hot path for a check almost none of those commands need. This is
+ * an explicit opt-in a caller invokes only when it actually wants the truth
+ * (`cmdProviders`'s `status` — not `list`, which stays instant on purpose).
+ *
+ * Bounded + concurrent, mirroring `@nexuscode/context`'s
+ * `DEFAULT_SOURCE_TIMEOUT_MS` pattern: every candidate races in parallel via
+ * `Promise.all`, each individually bounded by `timeoutMs`, so N candidates
+ * never cost more than ONE timeout period total — not N of them serially.
+ *
+ * Three-valued per candidate, not two: `true` (confirmed reachable), `false`
+ * (confirmed unreachable — the adapter's own health check completed within
+ * the bound and reported failure), or `null` (inconclusive — timed out, or
+ * `health` threw unexpectedly). `null` must never be read as "down"; it
+ * means exactly what it says, "we don't know." A provider that is not a
+ * local-server candidate at all (not in `DEFAULT_COMPAT_PROVIDERS` with no
+ * `keyEnv`, or not currently registered) is simply absent from the returned
+ * map — a FOURTH, structurally different state ("this axis does not apply
+ * to you") that a caller must not conflate with `null`.
+ */
+export async function probeLocalServerReachability(
+  registry: ProviderRegistry,
+  opts: { timeoutMs?: number } = {},
+): Promise<Record<string, boolean | null>> {
+  const timeoutMs = opts.timeoutMs ?? LOCAL_SERVER_PROBE_TIMEOUT_MS;
+  const candidates = DEFAULT_COMPAT_PROVIDERS.filter(
+    (spec) => spec.keyEnv === undefined && registry.has(spec.id),
+  );
+  const results = await Promise.all(
+    candidates.map(async (spec) => [spec.id, await probeOne(registry.get(spec.id), timeoutMs)] as const),
+  );
+  return Object.fromEntries(results);
 }
 
 /** Router cost/latency/quality metadata assembled from the loaded config. */

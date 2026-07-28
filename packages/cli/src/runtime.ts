@@ -12,7 +12,13 @@ import type { NexusConfig } from "@nexuscode/config";
 import { buildRuntime, type Runtime } from "@nexuscode/runtime";
 import { buildAuthRegistry, resolveAuthSecrets } from "./auth.js";
 
-export { routerMetadataFrom, binaryOnPath, type ProviderStatus } from "@nexuscode/runtime";
+export {
+  routerMetadataFrom,
+  binaryOnPath,
+  probeLocalServerReachability,
+  LOCAL_SERVER_PROBE_TIMEOUT_MS,
+  type ProviderStatus,
+} from "@nexuscode/runtime";
 export { buildRuntime, type Runtime };
 
 /**

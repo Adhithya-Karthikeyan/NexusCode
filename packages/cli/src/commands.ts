@@ -151,6 +151,7 @@ import {
   listModelsForProvider,
   routerMetadataFrom,
   resolveDefaultProvider,
+  probeLocalServerReachability,
   type Runtime,
 } from "./runtime.js";
 import {
@@ -4668,6 +4669,16 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
     const runtime = await buildAuthedRuntime(config);
     const circuit = openProviderCircuit(config);
     const circuitStatuses = circuit?.listStatuses({ includeClosed: true }) ?? [];
+    // Local-server reachability (lmstudio/vllm — "available: true does NOT
+    // mean usable", see `probeLocalServerReachability`'s doc) is a NETWORK
+    // probe, so it only runs for `status`, never `list` — `list` stays the
+    // instant, offline catalog view it has always been; `status` is already
+    // documented above as the richer operational view (circuit + pricing),
+    // so this is one more axis of the same kind, not a new kind of cost.
+    // Empty for `list`, so every lookup below degrades to "not probed"
+    // (`undefined`) exactly as if this feature did not exist.
+    const localServerReachability =
+      sub === "status" ? await probeLocalServerReachability(runtime.registry) : {};
     if (output === "json") {
       // Keep the long-standing `providers list -o json` array contract intact.
       // `status` is the richer operational view with circuit and pricing data.
@@ -4684,12 +4695,22 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
             // per-provider effort capability a client needs to label its
             // Off/Low/Med/High control truthfully instead of showing it for
             // every provider regardless of whether `--effort` actually reaches
-            // the wire (see `reasoningCapabilityFor`'s doc comment) — and
-            // `isTestFixture`, see `isTestFixtureProvider`'s doc comment.
+            // the wire (see `reasoningCapabilityFor`'s doc comment) —
+            // `isTestFixture`, see `isTestFixtureProvider`'s doc comment — and
+            // `localServerReachable`, present ONLY on a row this process
+            // actually probed (`s.id in localServerReachability`): `true`/
+            // `false` when confirmed, JSON `null` when the probe timed out
+            // (inconclusive — never treat as `false`), and the KEY ITSELF
+            // absent for every provider this axis does not apply to at all
+            // (see `probeLocalServerReachability`'s doc for why that is a
+            // fourth, deliberately distinct state from `null`).
             providers: runtime.statuses.map((s) => ({
               ...s,
               reasoning: reasoningCapabilityFor(runtime, s.id),
               isTestFixture: isTestFixtureProvider(s.kind),
+              ...(s.id in localServerReachability
+                ? { localServerReachable: localServerReachability[s.id] }
+                : {}),
             })),
             circuits: circuitStatuses,
             circuitStore: config.providerCircuit.enabled ? providerCircuitPath(config) : null,
@@ -4714,6 +4735,10 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
         const blocked = scopedCircuits.find(
           (status) => status.availability === "blocked" || status.availability === "probing",
         );
+        // `false` only — a `null` (timed out/inconclusive) or absent (not a
+        // local-server candidate) entry must render exactly like today, not
+        // as a confident "down" (see `probeLocalServerReachability`'s doc).
+        const confirmedUnreachable = localServerReachability[s.id] === false;
         const mark = blocked?.reason === "quota"
           ? "limit"
           : blocked
@@ -4722,13 +4747,17 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
               ? "--   "
               : s.needsKey
                 ? "key  "
-                : "ok   ";
+                : confirmedUnreachable
+                  ? "down "
+                  : "ok   ";
         let detail = s.detail ? ` — ${s.detail}` : "";
         if (blocked) {
           const until = blocked.blockedUntil
             ? ` until ${new Date(blocked.blockedUntil).toLocaleString()}`
             : " until credentials or status change";
           detail += ` — ${blocked.reason ?? "unavailable"}${until}`;
+        } else if (confirmedUnreachable) {
+          detail += " — not reachable (no local server responding right now)";
         }
         let models: { id: string }[] = [];
         try {
