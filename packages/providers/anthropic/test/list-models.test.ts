@@ -155,7 +155,7 @@ describe("anthropic — listModelsWithSource (provenance)", () => {
 
   it("listModels() and listModelsWithSource() share one cache — the endpoint is only actually hit once", async () => {
     let calls = 0;
-    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = (async () => {
       calls++;
       return new Response(JSON.stringify({ data: [{ id: "claude-opus-5" }] }), { status: 200 });
     }) as unknown as typeof fetch;

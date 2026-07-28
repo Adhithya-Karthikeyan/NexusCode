@@ -18,7 +18,12 @@ import { createHash } from "node:crypto";
 import type { Agent as HttpAgent } from "node:http";
 import type { Agent as HttpsAgent } from "node:https";
 import OpenAI from "openai";
-import { sharedAgentFor, createModelListCache, type ModelListCache } from "@nexuscode/shared";
+import {
+  sharedAgentFor,
+  createModelListCache,
+  type ModelListCache,
+  type ModelListResult,
+} from "@nexuscode/shared";
 import {
   AdapterError,
   type Capabilities,
@@ -241,17 +246,24 @@ class OpenAICompatAdapter implements ProviderAdapter {
   }
 
   /**
-   * Real model discovery for this provider: `GET {baseURL}/models` via the SDK
-   * (which sends the resolved `Authorization` when a key is present), mapping
-   * `data[].id`. Live ids are enriched with any metadata (contextWindow,
-   * modalities, aliases) from the curated catalog when the ids match.
+   * The SAME model discovery as {@link listModels}, plus its provenance — see
+   * `ProviderAdapter.listModelsWithSource`'s doc (`@nexuscode/core`).
+   *
+   * `GET {baseURL}/models` via the SDK (which sends the resolved
+   * `Authorization` when a key is present), mapping `data[].id`. Live ids are
+   * enriched with any metadata (contextWindow, modalities, aliases) from the
+   * curated catalog when the ids match — the id SET is still what was
+   * confirmed live, so this is tagged `source: "provider"` regardless of how
+   * many ids happened to also exist in the curated catalog.
    *
    * Graceful degradation: a missing credential, an offline/unreachable backend,
-   * or a backend with no `/models` endpoint all fall back to the curated static
-   * catalog. Never throws. Result is cached briefly per adapter.
+   * or a backend with no `/models` endpoint all fall back to the curated
+   * static catalog, tagged `source: "fallback"`. Never throws. Result is
+   * cached briefly per adapter.
    */
-  async listModels(ctx?: CallContext): Promise<ModelInfo[]> {
+  async listModelsWithSource(ctx?: CallContext): Promise<ModelListResult> {
     return this.modelCache.get(async () => {
+      const asFallback: ModelListResult = { models: this.curatedModels(), source: "fallback" };
       try {
         const client = await this.clientFor(ctx);
         const opts = ctx?.signal ? { signal: ctx.signal } : undefined;
@@ -268,11 +280,16 @@ class OpenAICompatAdapter implements ProviderAdapter {
           out.push(curated.get(id) ?? { id });
         }
         // An empty/parseless response is not a valid live catalog — fall back.
-        return out.length > 0 ? out : this.curatedModels();
+        return out.length > 0 ? { models: out, source: "provider" } : asFallback;
       } catch {
-        return this.curatedModels();
+        return asFallback;
       }
     });
+  }
+
+  /** Back-compat surface — same cache as {@link listModelsWithSource}, so calling both never doubles the probe. */
+  async listModels(ctx?: CallContext): Promise<ModelInfo[]> {
+    return (await this.listModelsWithSource(ctx)).models;
   }
 
   async *stream(req: ChatRequest, ctx: CallContext): AsyncIterable<StreamChunk> {

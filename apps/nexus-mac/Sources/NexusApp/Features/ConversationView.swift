@@ -723,7 +723,12 @@ struct ControlStrip: View {
                 leadingDot: providerDotColor(for: controller.provider, in: providers, theme: theme),
                 options: providers,
                 selection: controller.provider,
-                width: 96,
+                // No max: the provider id is short and human-facing
+                // ("anthropic," "openai") — it must never truncate, per
+                // `DropdownPicker`'s own doc on why this control used to
+                // read as broken.
+                minWidth: 88,
+                maxWidth: nil,
                 emptyHint: "No providers loaded yet"
             ) { id in
                 controller.provider = id
@@ -742,7 +747,10 @@ struct ControlStrip: View {
             options: models,
             selection: controller.model,
             isLoading: isLoadingModels,
-            width: 124,
+            // The long, technical value — this is where truncation belongs
+            // if the strip is tight, never the provider id beside it.
+            minWidth: 96,
+            maxWidth: 160,
             emptyHint: isLoadingModels ? "Loading models…" : "No models for this provider yet"
         ) { id in
             controller.model = id
