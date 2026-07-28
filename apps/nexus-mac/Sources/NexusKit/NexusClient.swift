@@ -605,7 +605,37 @@ public actor NexusClient {
         process.terminationHandler = { finished in
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
-            // Drain whatever was buffered after the last newline.
+
+            // Read the pipe to EOF before flushing. `readabilityHandler` is
+            // delivered ASYNCHRONOUSLY, so when a process exits there is
+            // routinely still data sitting in the OS pipe that the handler was
+            // never called for — and clearing the handler above means it never
+            // will be. Those bytes used to be dropped silently.
+            //
+            // This is why `Sessions` intermittently rendered "nexus did not
+            // print valid JSON:" followed by raw text ending mid-object: with
+            // 1000+ sessions the payload is large enough that its last chunks
+            // are usually still in flight at exit, whereas a small payload
+            // almost always lands in one read before the process ends. It
+            // presents as "malformed JSON" but nothing was malformed — the
+            // document was simply cut off. The same loss applies to `stream`,
+            // where it silently drops trailing EVENTS rather than text.
+            //
+            // Safe to block: the child has exited, so the write end is closed
+            // and EOF arrives immediately. `LineBuffer` is lock-guarded, so a
+            // last in-flight handler invocation racing this cannot corrupt it.
+            let remainingOut = out.fileHandleForReading.readDataToEndOfFile()
+            if !remainingOut.isEmpty {
+                for line in buffer.append(remainingOut) { onLine(line) }
+            }
+            let remainingErr = err.fileHandleForReading.readDataToEndOfFile()
+            if !remainingErr.isEmpty, let text = String(data: remainingErr, encoding: .utf8) {
+                for line in text.split(separator: "\n") where !line.isEmpty {
+                    onDiagnostic(String(line))
+                }
+            }
+
+            // Whatever is left after the last newline.
             for line in buffer.flush() { onLine(line) }
             onTerminated(.finished(exitCode: finished.terminationStatus))
         }

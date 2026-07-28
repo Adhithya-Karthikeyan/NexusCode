@@ -1456,6 +1456,36 @@ the other screens is present. That is real but weaker than looking.
 To close this properly, someone needs to grant accessibility control to a
 signed build, or the owner opens those three tabs themselves.
 
+### 🔴→✅ FOUND AND FIXED: stdout was silently truncated at process exit
+The `Sessions` screen intermittently showed `nexus did not print valid JSON:`
+followed by raw text ending mid-object. **Nothing was ever malformed** — the
+document was cut off.
+
+Cause, in `NexusClient.launch`: `readabilityHandler` is delivered
+ASYNCHRONOUSLY, so when a child exits there is routinely unread data still in
+the OS pipe. `terminationHandler` cleared the handler (guaranteeing it would
+never be delivered) and then flushed only the in-process `LineBuffer` — which
+can only hold bytes the handler already received. Everything still in the pipe
+was dropped, silently.
+
+Why it looked like a Sessions-only bug: this store is at 1000+ sessions, large
+enough that the tail is usually still in flight at exit. Small payloads land in
+a single read first, so every other screen and the entire test suite passed
+over it. **The same loss applied to `stream`**, where it drops trailing EVENTS
+rather than visible text — silently, with no error at all.
+
+Fix: read both pipes to EOF inside `terminationHandler` before flushing. Safe
+to block — the child has exited so the write end is closed and EOF is
+immediate; `LineBuffer` is lock-guarded so a last in-flight handler
+invocation cannot corrupt it.
+
+2 tests in `NexusClientOutputTests.swift` print ~700KB across many pipe
+buffers. **Both were confirmed to FAIL with the fix disabled**, reproducing the
+exact reported symptom (`nexus did not print valid JSON: [{"sessionId":…`
+truncated mid-object) — a test that has never been seen red proves nothing
+about a race. **416 executed, 0 failures, 0 skipped.** Reinstalled to
+`/Applications` afterwards, since the first install predated this fix.
+
 ### Open
 1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
    `IntegrationsView`/`GitView`/`ApprovalSheet`), plus a before/after
