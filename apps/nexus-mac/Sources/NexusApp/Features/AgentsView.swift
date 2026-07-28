@@ -69,11 +69,21 @@ struct AgentsView: View {
         // what stops the empty state from being the ENTIRE screen with no
         // context above it.
         PageScaffold {
-            if hasReadout {
-                HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud, conversation: workspace.conversation)
+            // A page title, unconditionally — before this the header slot was
+            // EMPTY whenever `hasReadout` was false, so a fresh project with
+            // nothing running yet showed no "Agents" identity anywhere on the
+            // screen at all, just the hero empty state one region down.
+            VStack(alignment: .leading, spacing: 0) {
+                PageHeader("Agents", subtitle: "Provider lanes, agent runs, and OMC subagents — everything working right now")
                     .padding(.horizontal, Space.xl)
                     .padding(.top, Space.xl)
-                    .padding(.bottom, Space.lg)
+                    .padding(.bottom, hasReadout ? Space.sm : Space.xl)
+
+                if hasReadout {
+                    HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud, conversation: workspace.conversation)
+                        .padding(.horizontal, Space.xl)
+                        .padding(.bottom, Space.lg)
+                }
             }
         } content: {
             if isFullyEmpty {

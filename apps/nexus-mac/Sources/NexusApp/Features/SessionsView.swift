@@ -78,7 +78,7 @@ struct SessionsView: View {
     // MARK: - Header
 
     private var headerBar: some View {
-        SectionHeader(
+        PageHeader(
             "Sessions",
             subtitle: "Past conversations — nexus session list",
             accessory: AnyView(

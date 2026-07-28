@@ -76,6 +76,14 @@ private struct AuthContent: View {
         // of the window instead of top-aligning inside a `ScrollView`, which
         // is what let "No providers found" float with a dead void beneath it.
         VStack(alignment: .leading, spacing: 0) {
+            // This screen had no page title at all before — straight from
+            // the window background into "Signed in"/"Available" subsection
+            // labels, so its own name never appeared anywhere on it.
+            PageHeader("Accounts", subtitle: "Provider sign-in — nexus auth status/login")
+                .padding(.horizontal, Space.xl)
+                .padding(.top, Space.xl)
+                .padding(.bottom, Space.md)
+
             // Dismissible: whatever provider list is already loaded below
             // (or the empty/loading state) stays exactly as valid either
             // way — see `InlineBanner`'s doc for why that's unconditional.

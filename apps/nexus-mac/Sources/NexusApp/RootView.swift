@@ -574,14 +574,13 @@ struct SettingsView: View {
         // letting the (genuinely tall) rest of the content own its own
         // `ScrollView` brings it into line with every other screen.
         PageScaffold {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Theme")
-                    .font(Kind.title)
-                    .foregroundStyle(theme.color(\.textPrimary))
-                Text("\(AppTheme.all.count) themes designed for this window — material, elevation and gradient a terminal palette can't express.")
-                    .font(Kind.caption)
-                    .foregroundStyle(theme.color(\.textMuted))
-            }
+            // `PageHeader`, not a hand-rolled title+subtitle stack — this was
+            // the pattern every other screen's page title now shares
+            // (`DESIGN.md`'s "one Kind.title moment per screen").
+            PageHeader(
+                "Settings",
+                subtitle: "\(AppTheme.all.count) themes designed for this window — material, elevation and gradient a terminal palette can't express."
+            )
             .padding(.horizontal, Space.xl)
             .padding(.top, Space.xl)
             .padding(.bottom, Space.lg)

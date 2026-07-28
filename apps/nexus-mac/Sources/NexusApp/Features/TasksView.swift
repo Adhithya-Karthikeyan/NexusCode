@@ -108,7 +108,7 @@ struct TasksView: View {
     }
 
     private var headerRow: some View {
-        SectionHeader(
+        PageHeader(
             "Tasks",
             subtitle: "The durable task queue — nexus task list",
             accessory: AnyView(

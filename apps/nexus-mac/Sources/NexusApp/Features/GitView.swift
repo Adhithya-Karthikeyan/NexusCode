@@ -84,7 +84,7 @@ struct GitView: View {
     // MARK: - Header
 
     private var headerRow: some View {
-        SectionHeader(
+        PageHeader(
             "Git",
             subtitle: "Commit, review, explain, and describe — nexus commit/review/explain/pr",
             accessory: AnyView(
