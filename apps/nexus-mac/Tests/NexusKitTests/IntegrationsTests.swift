@@ -259,4 +259,79 @@ final class IntegrationsTests: XCTestCase {
         XCTAssertTrue(controller.tools.isEmpty)
         XCTAssertTrue(controller.groups.isEmpty)
     }
+
+    // MARK: - refresh() must be bounded (see NexusClientTimeoutTests for the
+    // `runJSON`-level proof that the child is really killed, not just
+    // abandoned — these pin the same bug one layer up: that `refresh()`
+    // itself resolves promptly, and says WHICH of its three concurrent
+    // commands stalled, rather than a bare "timed out").
+
+    /// Like `fakeNexusBinary`, but one route hangs (`sleep`) instead of
+    /// answering, so `refresh()` is exercised against a REAL wedged process —
+    /// a canned fixture cannot prove this the way `NexusClientTimeoutTests`'
+    /// own doc explains for `runJSON` itself.
+    private func fakeNexusBinary(hangingOn hangPrefix: String, routing: [String: String]) throws -> (NexusBinary, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fake-nexus-hang-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("fake-nexus")
+        var body = "#!/bin/sh\ncase \"$*\" in\n"
+        body += "  \"\(hangPrefix)\"*) sleep 120 ;;\n"
+        for (prefix, output) in routing {
+            body += "  \"\(prefix)\"*) cat <<'NEXUS_FIXTURE_EOF'\n\(output)\nNEXUS_FIXTURE_EOF\n  ;;\n"
+        }
+        body += "  *) echo \"no fixture route for: $*\" 1>&2; exit 1 ;;\nesac\n"
+        try body.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return (NexusBinary(url: script), dir)
+    }
+
+    @MainActor
+    func testControllerRefreshNeverHangsWhenOneCommandIsWedged() async throws {
+        let (binary, dir) = try fakeNexusBinary(
+            hangingOn: "mcp tools",
+            routing: [
+                "mcp list": try fixtureText("mcp-list"),
+                "tools list": try fixtureText("tools-list"),
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let controller = IntegrationsController(client: NexusClient(binary: binary))
+
+        let started = Date()
+        await controller.refresh(timeoutSeconds: 1)
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertFalse(controller.isLoading, "must resolve, never leave the spinner up forever")
+        XCTAssertLessThan(elapsed, 20, "must not wait out the wedged command's 120s sleep")
+
+        // The two commands that DID answer must still populate real data —
+        // one wedged command must never blank out the others (same rule
+        // `testControllerSurfacesEachFailureWithoutLettingOneFailureHideTheOthers`
+        // pins for an ordinary failure).
+        XCTAssertFalse(controller.mcpServers.isEmpty)
+        XCTAssertFalse(controller.tools.isEmpty)
+    }
+
+    @MainActor
+    func testControllerRefreshNamesWhichCommandStalledAndThatItWasATimeout() async throws {
+        let (binary, dir) = try fakeNexusBinary(
+            hangingOn: "mcp tools",
+            routing: [
+                "mcp list": try fixtureText("mcp-list"),
+                "tools list": try fixtureText("tools-list"),
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let controller = IntegrationsController(client: NexusClient(binary: binary))
+
+        await controller.refresh(timeoutSeconds: 1)
+
+        let error = try XCTUnwrap(controller.error)
+        XCTAssertTrue(error.contains("nexus mcp tools"), "must name which command didn't answer; got: \(error)")
+        XCTAssertTrue(
+            error.contains("did not respond within 1s"),
+            "must read as a timeout, distinct from an ordinary failure; got: \(error)"
+        )
+    }
 }

@@ -325,9 +325,17 @@ struct ConversationView: View {
             HStack(spacing: Space.sm) {
                 Image(systemName: "terminal")
                     .font(.system(size: 9))
+                    .accessibilityHidden(true)
+                // `.tail`, not `.middle`: eliding the MIDDLE of a real command
+                // ("…nthropic -m claude-opus-5…" out of "-p anthropic") makes
+                // it read as corrupted text, not as a shortened one — the
+                // opposite of "the UI never hides the CLI" a moment above.
+                // Losing the trailing flags to `.tail` still loses
+                // information when it truncates at all, but what's LEFT
+                // reads as a real, intact command rather than garbled text.
                 Text(commandPreview)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
                 Spacer(minLength: 0)
                 if controller.mode.isMultiLane && controller.backends.count < 2 {
                     Text("add at least 2 backends")
@@ -936,17 +944,20 @@ extension PickerOption {
     /// picker's option shape, preferring the parsed context window over the
     /// raw hint string when both are available.
     ///
-    /// `warning` rides `model.isVerified`: an unverified (`.fallback`) entry
-    /// is the CLI's own built-in guess, not a live-confirmed catalog — same
-    /// distinction `gemini`'s all-fallback list vs. `anthropic`'s all-provider
-    /// one makes real. Reuses the exact "visible, not blocking" mechanism
-    /// `rolePicker` already uses for a write-capable role, rather than adding
-    /// a second warning idiom mid this file's own accent-rationing pass.
+    /// No per-row `warning` here on purpose. `model.isVerified` was first
+    /// wired to `warning` (the same amber-triangle mechanism a write-capable
+    /// role uses), then overruled: verification is a fact about the whole
+    /// LIST, not about any one row in it — when a probe can't run, EVERY
+    /// model in that provider's list is `.fallback` together, so a per-row
+    /// treatment would paint N identical amber warnings for ONE fact. See
+    /// `ControlStrip.modelListVerificationCaption` for the set-level caption
+    /// that replaced it, and `DESIGN.md`'s colour system for the rule this
+    /// established: a condition that applies to an entire set gets one
+    /// marker on the set, never one per member.
     init(model: NexusModel) {
         self.init(
             id: model.id,
-            detail: model.contextWindow.map { "\($0 / 1_000)k ctx" } ?? model.hint,
-            warning: model.isVerified ? nil : "Unverified — the CLI's built-in default for this provider, not confirmed live"
+            detail: model.contextWindow.map { "\($0 / 1_000)k ctx" } ?? model.hint
         )
     }
 }

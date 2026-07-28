@@ -193,13 +193,21 @@ public final class IntegrationsController {
     /// tools`'s live connection report — see `McpServer`'s doc for why both
     /// are needed) and the tool registry, all three requests in flight at
     /// once since none depends on another's result.
-    public func refresh() async {
+    ///
+    /// - Parameter timeoutSeconds: forwarded to every `runJSON` call below.
+    ///   Non-optional and always on, unlike `runJSON`'s own `nil`-means-
+    ///   unbounded parameter: `mcp tools` starts every enabled MCP server to
+    ///   report on it, so a caller here can never opt back into the
+    ///   "Loading integrations…forever" bug this exists to fix. Defaults to
+    ///   `runJSON`'s own default (20s); overridable so a test can prove the
+    ///   bound without a real 20-second wait.
+    public func refresh(timeoutSeconds: Double = 20) async {
         isLoading = true
         defer { isLoading = false }
 
-        async let listResult = client.runJSON(.mcpList(cwd: workingDirectory))
-        async let toolsReportResult = client.runJSON(.mcpTools(cwd: workingDirectory))
-        async let toolsListResult = client.runJSON(.toolsList(cwd: workingDirectory))
+        async let listResult = client.runJSON(.mcpList(cwd: workingDirectory), timeoutSeconds: timeoutSeconds)
+        async let toolsReportResult = client.runJSON(.mcpTools(cwd: workingDirectory), timeoutSeconds: timeoutSeconds)
+        async let toolsListResult = client.runJSON(.toolsList(cwd: workingDirectory), timeoutSeconds: timeoutSeconds)
 
         var messages: [String] = []
 
@@ -210,11 +218,16 @@ public final class IntegrationsController {
                 declared = items.compactMap { McpServer(listEntry: $0) }
             } else {
                 declared = []
-                messages.append("unexpected response shape from `nexus mcp list`")
+                messages.append("nexus mcp list: unexpected response shape")
             }
         case .failure(let commandError):
             declared = []
-            messages.append(commandError.message)
+            // Prefixed with the literal command, not just the raw error: a
+            // wedged/failed `nexus` process is exactly when a user needs to
+            // know WHICH of the three concurrent requests didn't answer, not
+            // only that something didn't — `commandError.message` alone
+            // (e.g. "nexus did not respond within 20s") doesn't say which one.
+            messages.append("nexus mcp list: \(commandError.message)")
         }
 
         var reportedByName: [String: McpServer] = [:]
@@ -226,7 +239,7 @@ public final class IntegrationsController {
                 }
             }
         case .failure(let commandError):
-            messages.append(commandError.message)
+            messages.append("nexus mcp tools: \(commandError.message)")
         }
 
         // A live connection report wins when a server is both declared and
@@ -239,7 +252,7 @@ public final class IntegrationsController {
         switch await toolsListResult {
         case .success(let value):
             guard let toolItems = value["tools"]?.arrayValue else {
-                messages.append("unexpected response shape from `nexus tools list`")
+                messages.append("nexus tools list: unexpected response shape")
                 tools = []
                 groups = []
                 break
@@ -247,7 +260,7 @@ public final class IntegrationsController {
             tools = toolItems.compactMap(NexusTool.init(json:))
             groups = value["groups"]?.arrayValue?.compactMap(ToolGroupInfo.init(json:)) ?? []
         case .failure(let commandError):
-            messages.append(commandError.message)
+            messages.append("nexus tools list: \(commandError.message)")
         }
 
         error = messages.isEmpty ? nil : messages.joined(separator: "; ")
