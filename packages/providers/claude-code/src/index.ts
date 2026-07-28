@@ -38,10 +38,13 @@ import type {
   Usage,
 } from "@nexuscode/shared";
 import { textOf } from "@nexuscode/shared";
+import { createModelListCache, type ModelListCache } from "@nexuscode/shared";
 import {
   createSubprocessAdapter,
   replaceDiff,
   writeDiff,
+  runBoundedCapture,
+  DEFAULT_PROBE_TIMEOUT_MS,
   type CliSpec,
   type StreamState,
   type SubprocessConfig,
@@ -329,24 +332,6 @@ function buildModelInfos(modelMap: Record<string, string> | undefined): ModelInf
   return infos;
 }
 
-/**
- * The models the `claude` CLI can select. `"default"` maps to the CLI's own
- * configured default; the short aliases (`sonnet`/`opus`/`haiku`) and the pinned
- * ids are all accepted by `claude --model <id>`. Used by
- * {@link ProviderAdapter.listModels}: a wrapped CLI has no models API, so this
- * curated vendor catalog IS the answer (there is no live endpoint to prefer).
- */
-export const CLAUDE_CODE_MODELS: ModelInfo[] = [
-  { id: "default", aliases: ["(default)"], modalities: ["text", "image"] },
-  { id: "sonnet", modalities: ["text", "image"] },
-  { id: "opus", modalities: ["text", "image"] },
-  { id: "haiku", modalities: ["text", "image"] },
-  { id: "claude-opus-5", modalities: ["text", "image"] },
-  { id: "claude-sonnet-5", modalities: ["text", "image"] },
-  { id: "claude-haiku-4-5-20251001", modalities: ["text", "image"] },
-  { id: "claude-fable-5", modalities: ["text", "image"] },
-];
-
 /** Union two catalogs by id, preserving order (`base` first, then new ids). */
 function unionModels(base: ModelInfo[], extra: ModelInfo[]): ModelInfo[] {
   const seen = new Set(base.map((m) => m.id));
@@ -358,6 +343,86 @@ function unionModels(base: ModelInfo[], extra: ModelInfo[]): ModelInfo[] {
     }
   }
   return out;
+}
+
+// ── Real model discovery ─────────────────────────────────────────────────────
+
+/**
+ * Matches the `Available:` clause of the `claude` CLI's own `/model` reply,
+ * e.g. (real output, `claude -p "/model"`, 2026):
+ *
+ *   Current model: Opus 5 (1M context) (effort: xhigh)
+ *   Usage: /model <name>. Available: sonnet, opus, haiku, fable, best,
+ *          sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full
+ *          model ID.
+ *
+ * Captures everything between "Available:" and the final period. The clause
+ * itself is one line in the real reply (only the "Current model:"/"Usage:"
+ * split is a real newline), but `[\s\S]` tolerates a wrapped one too.
+ */
+const AVAILABLE_RE = /Available:\s*([\s\S]*?)\.\s*$/;
+
+/**
+ * Parse the `claude -p "/model"` reply text into the exact set of values the
+ * CLI itself says `--model`/`/model` accepts. Pure and exported for direct
+ * (offline) unit coverage of the parser separate from the subprocess plumbing.
+ * The trailing "…or a full model ID" filler names no model and is dropped;
+ * so is anything empty after trimming.
+ */
+export function parseClaudeModelReply(replyText: string): string[] {
+  const m = AVAILABLE_RE.exec(replyText.trim());
+  const captured = m?.[1];
+  if (!captured) return [];
+  return captured
+    .split(",")
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter((s) => s.length > 0 && !/^or\s/i.test(s));
+}
+
+interface ClaudeModelProbeReply {
+  result?: unknown;
+}
+
+/**
+ * Real model discovery for the `claude` CLI: run its own `/model` command
+ * (`claude -p "/model" --output-format json`) and parse the `Available:` list
+ * it reports back — that IS the CLI telling us what it accepts, not a
+ * point-in-time guess baked into this file (the bug this replaces: the prior
+ * hardcoded `CLAUDE_CODE_MODELS` array went stale twice and was missing
+ * `fable`/`best`/`sonnet[1m]`/`opus[1m]`/`fable[1m]`/`opusplan` entirely).
+ *
+ * Zero API cost and fast: `/model` is answered by the CLI locally — a real
+ * run reports `total_cost_usd:0`/`duration_api_ms:0` in its own JSON reply —
+ * so this is safe to run on every uncached `listModels()` call. Bounded by
+ * `cfg.listModelsTimeoutMs` (default {@link DEFAULT_PROBE_TIMEOUT_MS}); a
+ * timeout, spawn failure, non-zero exit, or unparseable/empty reply THROWS so
+ * the caller can tell "we could not ask" apart from "the CLI answered with
+ * zero models" and fall back to something honest instead of guessing.
+ */
+async function probeClaudeCodeModels(cfg: ClaudeCodeConfig): Promise<string[]> {
+  const bin = cfg.bin ?? claudeCodeSpec.defaultBin;
+  const probe = await runBoundedCapture({
+    bin,
+    args: ["-p", "/model", "--output-format", "json"],
+    ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}),
+    ...(cfg.resolveEnv ? { resolveEnv: cfg.resolveEnv } : {}),
+    ...(cfg.spawn ? { spawn: cfg.spawn } : {}),
+    timeoutMs: cfg.listModelsTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  });
+  if (probe.spawnError) throw new Error(`${bin} not available: ${probe.spawnError.message}`);
+  if (probe.timedOut) throw new Error(`${bin} -p "/model" timed out — unknown, not empty`);
+  if (probe.exitCode !== 0) throw new Error(`${bin} -p "/model" exited ${probe.exitCode}`);
+
+  let parsed: ClaudeModelProbeReply;
+  try {
+    parsed = JSON.parse(probe.stdout) as ClaudeModelProbeReply;
+  } catch {
+    throw new Error(`${bin} -p "/model" returned unparseable output`);
+  }
+  const text = typeof parsed.result === "string" ? parsed.result : "";
+  const ids = parseClaudeModelReply(text);
+  if (ids.length === 0) throw new Error(`${bin} -p "/model" reply had no parseable "Available:" list`);
+  return ids;
 }
 
 // ── Spec + factory ────────────────────────────────────────────────────────────
@@ -383,8 +448,6 @@ const claudeCodeSpec: CliSpec<ClaudeCodeConfig> = {
     mcp: true,
     cancel: "process-kill",
   }),
-  // Curated vendor catalog unioned with any config-driven modelMap entries.
-  listModels: (cfg): ModelInfo[] => unionModels(CLAUDE_CODE_MODELS, buildModelInfos(cfg.modelMap)),
   resolveModel,
   buildArgs,
   handleEvent,
@@ -395,9 +458,37 @@ const claudeCodeSpec: CliSpec<ClaudeCodeConfig> = {
  * own OAuth session (`~/.claude`) unless `cfg.resolveEnv` injects
  * `ANTHROPIC_API_KEY`. Pass `cfg.spawn` / `cfg.bin` to point at a deterministic
  * fake CLI in tests.
+ *
+ * `listModels()` is wired here (not on the shared `claudeCodeSpec` object)
+ * because each adapter instance gets its OWN short-TTL cache
+ * ({@link createModelListCache}, 60s default) — a module-level cache would
+ * incorrectly share results across adapters built with different `bin`/`cfg`
+ * (e.g. the real CLI vs. a test's fake one). This is also what keeps a
+ * fast-refreshing picker from spawning `claude` on every open: repeat calls
+ * within the TTL are served from memory, not a new subprocess.
+ *
+ * `probeClaudeCodeModels` never resolves an empty/guessed answer — on any
+ * failure (timeout, spawn error, unparseable reply) it throws, and this
+ * wrapper catches that and degrades to the config-driven `modelMap` entries
+ * only (never the deleted hardcoded catalog) — so a failed probe reads as
+ * "we could not ask" rather than a fabricated or falsely-empty catalog.
  */
 export function createClaudeCodeAdapter(cfg: ClaudeCodeConfig = {}): ProviderAdapter {
-  return createSubprocessAdapter(cfg, claudeCodeSpec);
+  const modelCache: ModelListCache = createModelListCache();
+  const spec: CliSpec<ClaudeCodeConfig> = {
+    ...claudeCodeSpec,
+    listModels: (c) =>
+      modelCache.get(async () => {
+        try {
+          const ids = await probeClaudeCodeModels(c);
+          const probed: ModelInfo[] = ids.map((id) => ({ id, modalities: ["text", "image"] }));
+          return unionModels(probed, buildModelInfos(c.modelMap));
+        } catch {
+          return buildModelInfos(c.modelMap);
+        }
+      }),
+  };
+  return createSubprocessAdapter(cfg, spec);
 }
 
 // Re-export types callers commonly need alongside the factory.

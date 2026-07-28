@@ -41,8 +41,13 @@ struct RootView: View {
                     if let problem = workspace.setupProblem {
                         SetupBanner(message: problem)
                     }
-                    content
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // `CanvasPanel`, not a bare `.frame`: every screen gets a
+                    // bounded, bordered instrument frame instead of rendering
+                    // straight onto the window's floor colour. See
+                    // `DESIGN.md` and that view's doc comment.
+                    CanvasPanel {
+                        content
+                    }
                 }
                 .background(theme.color(\.surfaceBase))
             }

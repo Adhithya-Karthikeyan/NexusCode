@@ -5,6 +5,16 @@
  * by FAKE_CODEX_MODE. Never touches the network; not the real codex binary.
  *
  * Modes: success | error | malformed | hang | version | untrusted-dir
+ *
+ * `doctor --json` (real model discovery) is argv-gated SEPARATELY from
+ * FAKE_CODEX_MODE above so the SAME fixture serves both the chat path and the
+ * `listModels()` probe without cross-talk. Sub-modes:
+ *   doctor-hang       never exits (probe timeout test)
+ *   doctor-error      exit 1 with no report
+ *   doctor-malformed  non-JSON stdout
+ *   doctor-no-model   valid doctor JSON with no `checks["config.load"].details.model`
+ *   (anything else)   a `checks["config.load"].details.model` report, shaped
+ *                      like the real `codex doctor --json` (codex-cli 0.145.0)
  */
 
 const mode = process.env.FAKE_CODEX_MODE || "success";
@@ -12,6 +22,26 @@ const SID = "codex-sess-xyz";
 
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+if (process.argv[2] === "doctor") {
+  if (mode === "doctor-hang") {
+    setInterval(() => {}, 1000);
+  } else if (mode === "doctor-error") {
+    process.stderr.write("codex doctor: boom\n");
+    process.exit(1);
+  } else if (mode === "doctor-malformed") {
+    process.stdout.write("not json\n");
+    process.exit(0);
+  } else if (mode === "doctor-no-model") {
+    process.stdout.write(JSON.stringify({ checks: { "config.load": { details: {} } } }) + "\n");
+    process.exit(0);
+  } else {
+    process.stdout.write(
+      JSON.stringify({ checks: { "config.load": { details: { model: "gpt-5.6-fake", "model provider": "openai" } } } }) + "\n",
+    );
+    process.exit(0);
+  }
 }
 
 if (mode === "version") {

@@ -58,7 +58,7 @@ const SECRET_ENV_PREFIX_RE =
  * `@nexuscode/core` + `@nexuscode/shared`) does not pick up a new dependency on
  * the tools subsystem — a different architectural layer — for one small helper.
  */
-function scrubSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function scrubSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(env)) {
     if (SECRET_ENV_NAME_RE.test(k) || SECRET_ENV_PREFIX_RE.test(k)) continue;
@@ -106,6 +106,15 @@ export interface SubprocessConfig {
    * to one million characters.
    */
   maxOutputLineChars?: number;
+  /**
+   * Wall-clock timeout (ms) for a real model-discovery probe (see
+   * {@link runBoundedCapture}) — e.g. `claude -p "/model"` or
+   * `codex doctor --json`. On expiry the child is SIGTERM'd and the spec's
+   * `listModels` implementation treats it as a failed probe (never a false
+   * "zero models" answer) — see each spec's `listModels`. Defaults to
+   * {@link DEFAULT_PROBE_TIMEOUT_MS} (5000).
+   */
+  listModelsTimeoutMs?: number;
 }
 
 /**
@@ -231,6 +240,118 @@ export function redactDiagnostic(message: string): string {
 
 function cliFailureCode(detail: string, fallback: AdapterErrorCode): AdapterErrorCode {
   return looksLikeQuotaExhaustion(detail) ? "quota_exhausted" : fallback;
+}
+
+/** Default wall-clock timeout for a bounded, output-capturing probe (e.g. real model discovery). */
+export const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+/** Cap total captured stdout/stderr so a runaway probe cannot exhaust memory. */
+const DEFAULT_PROBE_MAX_CHARS = 262_144;
+
+export interface BoundedCaptureOptions {
+  bin: string;
+  args: readonly string[];
+  cwd?: string;
+  /** Lazily resolves extra env merged over a SCRUBBED `process.env` — mirrors
+   *  the chat/health path's `resolveChildEnv`, so a probe never leaks
+   *  secret-shaped ambient env into the child either. */
+  resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+  /** Injectable spawn (tests / `execa`). Defaults to `node:child_process`. */
+  spawn?: SpawnFn;
+  /** Wall-clock timeout (ms). Defaults to {@link DEFAULT_PROBE_TIMEOUT_MS}. */
+  timeoutMs?: number;
+  /** Cap on captured stdout/stderr each. Defaults to {@link DEFAULT_PROBE_MAX_CHARS}. */
+  maxOutputChars?: number;
+  /** Abort the probe early (e.g. a caller-level deadline). */
+  signal?: AbortSignal;
+}
+
+export interface BoundedCaptureResult {
+  stdout: string;
+  stderr: string;
+  /** `null` when the child never produced an exit code (spawn failure, or
+   *  still running at kill time). */
+  exitCode: number | null;
+  /** True when `timeoutMs` elapsed before the child exited — the caller must
+   *  treat this as "unknown", never as a successful empty answer. */
+  timedOut: boolean;
+  /** Set when the child failed to spawn at all (e.g. `ENOENT`) or the env
+   *  resolver rejected. */
+  spawnError?: Error;
+}
+
+/**
+ * Run `bin args` to completion, capturing stdout/stderr, bounded by
+ * `timeoutMs` (default {@link DEFAULT_PROBE_TIMEOUT_MS}). On expiry the child
+ * is SIGTERM'd and the result reports `timedOut: true` with whatever was
+ * captured so far — the caller decides whether a partial capture is usable
+ * (model-discovery probes below never do; they treat a timeout as a failed
+ * probe). Never leaks a child: reaps on every path (success, spawn error,
+ * timeout, or `signal` abort) via the same `exited`-tracked pattern `health()`
+ * uses above.
+ *
+ * This is for one-shot, read-only CLI probes (e.g. real model discovery via
+ * `claude -p "/model"` / `codex doctor --json`) — NOT for the long-lived chat
+ * stream, which has its own SIGINT→SIGTERM cancellation dance in `stream()`.
+ */
+export async function runBoundedCapture(opts: BoundedCaptureOptions): Promise<BoundedCaptureResult> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const maxChars = opts.maxOutputChars ?? DEFAULT_PROBE_MAX_CHARS;
+  const spawnFn: SpawnFn = opts.spawn ?? defaultSpawn;
+
+  let child: SpawnedChild;
+  try {
+    const base = scrubSecretEnv(process.env);
+    const env = opts.resolveEnv ? { ...base, ...(await opts.resolveEnv()) } : base;
+    child = spawnFn(opts.bin, opts.args, { cwd: opts.cwd, env });
+  } catch (e) {
+    return { stdout: "", stderr: "", exitCode: null, timedOut: false, spawnError: e as Error };
+  }
+
+  let exited = false;
+  void child.done.then(() => {
+    exited = true;
+  });
+  const reap = (): void => {
+    if (!exited) child.kill("SIGTERM");
+  };
+
+  let stdout = "";
+  let stderr = "";
+  if (child.stdout) {
+    child.stdout.on("data", (d: unknown) => {
+      if (stdout.length < maxChars) stdout += String(d).slice(0, maxChars - stdout.length);
+    });
+  }
+  if (child.stderr) {
+    child.stderr.on("data", (d: unknown) => {
+      if (stderr.length < maxChars) stderr += String(d).slice(0, maxChars - stderr.length);
+    });
+  }
+
+  opts.signal?.addEventListener("abort", reap, { once: true });
+  if (opts.signal?.aborted) reap();
+
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    reap();
+  }, timeoutMs);
+  timer.unref?.();
+
+  try {
+    const exit = await child.done;
+    return {
+      stdout,
+      stderr,
+      exitCode: exit.error ? null : exit.exitCode,
+      timedOut,
+      ...(exit.error ? { spawnError: exit.error } : {}),
+    };
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", reap);
+    reap();
+  }
 }
 
 function fullUsage(u: Partial<Usage> | undefined): Usage | undefined {

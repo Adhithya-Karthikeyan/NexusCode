@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Deterministic fake `claude` CLI for offline tests. It ignores its argv and
- * emits a scripted sequence of the documented `--output-format stream-json`
- * NDJSON, selected by `FAKE_CLAUDE_MODE`. It NEVER touches the network and is
- * not the real Claude Code binary.
+ * Deterministic fake `claude` CLI for offline tests. For the chat path it
+ * ignores its argv and emits a scripted sequence of the documented
+ * `--output-format stream-json` NDJSON, selected by `FAKE_CLAUDE_MODE`. It
+ * NEVER touches the network and is not the real Claude Code binary.
  *
  * Modes:
  *   success        init → text deltas → tool_use Edit → tool_result → result:success (exit 0)
@@ -17,6 +17,15 @@
  *   hang           init → text delta → stay alive forever                 (abort/cancel test)
  *   text-block-only    init → assistant text block (NO partial deltas) → result:success
  *   text-with-deltas   init → text delta → assistant text block (same text) → result:success
+ *
+ * `-p "/model" --output-format json` (real model discovery) is argv-gated
+ * SEPARATELY from `FAKE_CLAUDE_MODE` above so the SAME fixture serves both the
+ * chat path and the `listModels()` probe without cross-talk. Sub-modes:
+ *   model-hang        never exits (probe timeout test)
+ *   model-error       exit 1 with no reply
+ *   model-malformed   non-JSON stdout
+ *   model-empty       valid JSON reply with no "Available:" clause
+ *   (anything else)   the real `/model` reply observed from `claude` 2.1.220
  */
 
 const mode = process.env.FAKE_CLAUDE_MODE || "success";
@@ -24,6 +33,31 @@ const SID = "sess-fake-abc123";
 
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+if (process.argv[2] === "-p" && process.argv[3] === "/model") {
+  if (mode === "model-hang") {
+    setInterval(() => {}, 1000);
+  } else if (mode === "model-error") {
+    process.exit(1);
+  } else if (mode === "model-malformed") {
+    process.stdout.write("not json\n");
+    process.exit(0);
+  } else if (mode === "model-empty") {
+    emit({ type: "result", subtype: "success", is_error: false, result: "Current model: X\nNo usage line here." });
+    process.exit(0);
+  } else {
+    emit({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      total_cost_usd: 0,
+      result:
+        "Current model: Opus 5 (1M context) (effort: xhigh)\n" +
+        "Usage: /model <name>. Available: sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full model ID.",
+    });
+    process.exit(0);
+  }
 }
 function init() {
   emit({

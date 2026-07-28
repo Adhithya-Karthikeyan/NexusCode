@@ -48,11 +48,16 @@ final class DiagnosticClassifierTests: XCTestCase {
 
     func testEffortUnsupportedByProviderStaysAWarning() {
         // The exact stderr line `applyEffort` writes when the resolved
-        // provider cannot honor `--effort` (`packages/cli/src/commands.ts`)
-        // — now reachable from the app since `ConversationController.effort`
-        // actually sends the flag instead of only decorating the preview.
-        // This must stay a warning: it is telling the user their setting had
-        // no effect, not routine plumbing like `[session]`/`[resume]`.
+        // provider cannot honor `--effort` (`packages/cli/src/commands.ts`).
+        // The app itself no longer sends `--effort` (see
+        // `ConversationController.persistentSessionArguments`'s doc — the
+        // owner configures it at the provider level instead), so this exact
+        // line isn't reachable from THIS app's own actions anymore, but the
+        // classifier is a generic stderr-line reader that must still handle
+        // it correctly if it ever arrives (e.g. `--effort` reaching the CLI
+        // by some other path). This must stay a warning either way: it is
+        // telling the user a setting had no effect, not routine plumbing
+        // like `[session]`/`[resume]`.
         let result = DiagnosticClassifier.classify(
             "nexus chat: provider \"claude-code\" does not support reasoning effort — " +
                 "\"--effort high\" is ignored for this request"

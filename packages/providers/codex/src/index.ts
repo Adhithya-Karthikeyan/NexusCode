@@ -37,9 +37,12 @@ import type {
   Usage,
 } from "@nexuscode/shared";
 import { textOf } from "@nexuscode/shared";
+import { createModelListCache, type ModelListCache } from "@nexuscode/shared";
 import {
   createSubprocessAdapter,
   writeDiff,
+  runBoundedCapture,
+  DEFAULT_PROBE_TIMEOUT_MS,
   type CliSpec,
   type StreamState,
   type SubprocessConfig,
@@ -82,7 +85,14 @@ function buildArgs(cfg: CodexConfig, req: ChatRequest, ctx?: CallContext): strin
   const args: string[] = ["exec", "--json"];
 
   const model = resolveModel(cfg, req);
-  if (model) args.push("--model", model);
+  // `"default"` is NexusCode's own sentinel for "let the CLI use its own
+  // configured model" (see `listModels` below) — unlike claude-code's own
+  // `/model`, codex's `-m/--model` takes a free-form string with NO verified
+  // "default" keyword, so passing it through literally as `--model default`
+  // would send codex a model id that isn't real. Omitting `--model` entirely
+  // lets codex fall back to `~/.codex/config.toml`'s own `model`, which is
+  // exactly what picking "default" is supposed to mean.
+  if (model && model !== "default") args.push("--model", model);
   if (cfg.sandbox) args.push("--sandbox", cfg.sandbox);
   if (cfg.approvalMode) args.push("--ask-for-approval", cfg.approvalMode);
   if (cfg.skipGitRepoCheck) args.push("--skip-git-repo-check");
@@ -467,21 +477,6 @@ function buildModelInfos(modelMap: Record<string, string> | undefined): ModelInf
   return infos;
 }
 
-/**
- * The models the `codex` CLI can select via `codex exec --model <id>`.
- * `"default"` maps to the CLI's own configured default. Used by
- * {@link ProviderAdapter.listModels}: a wrapped CLI has no models API, so this
- * curated vendor catalog IS the answer (there is no live endpoint to prefer).
- */
-export const CODEX_MODELS: ModelInfo[] = [
-  { id: "default", aliases: ["(default)"], modalities: ["text"] },
-  { id: "gpt-5-codex", modalities: ["text"] },
-  { id: "o4-mini", modalities: ["text"] },
-  { id: "o3", modalities: ["text"] },
-  { id: "gpt-4.1", modalities: ["text"] },
-  { id: "codex-mini-latest", modalities: ["text"] },
-];
-
 /** Union two catalogs by id, preserving order (`base` first, then new ids). */
 function unionModels(base: ModelInfo[], extra: ModelInfo[]): ModelInfo[] {
   const seen = new Set(base.map((m) => m.id));
@@ -493,6 +488,63 @@ function unionModels(base: ModelInfo[], extra: ModelInfo[]): ModelInfo[] {
     }
   }
   return out;
+}
+
+// ── Real model discovery ─────────────────────────────────────────────────────
+
+/**
+ * `codex` has NO enumerable model list: `-m/--model <MODEL>` takes a
+ * free-form string, and neither `codex models` nor `--list-models` exist
+ * (verified against `codex --help` / `codex exec --help`, codex-cli 0.145.0).
+ * There is nothing here to curate — a plausible-looking id list (the prior
+ * `CODEX_MODELS` array: `gpt-5-codex, o4-mini, o3, gpt-4.1,
+ * codex-mini-latest`) is exactly the fabrication this replaces; it named ids
+ * that do not include what the CLI was actually configured to use.
+ *
+ * The one thing codex WILL tell us, read-only and offline, is what it is
+ * actually configured to run: `codex doctor --json` resolves
+ * `~/.codex/config.toml` (plus any `-c`/profile overrides) and reports the
+ * result at `checks["config.load"].details.model`. Verified live: it runs in
+ * well under a second, needs no `--skip-git-repo-check` (unlike `codex exec`,
+ * it is NOT gated on running inside a trusted git directory — confirmed by
+ * running it from a plain non-git tmp dir), and touches no model API (it is a
+ * diagnostic report, not an agent turn).
+ */
+export const DEFAULT_MODEL_ID = "default";
+
+interface CodexDoctorReport {
+  checks?: Record<string, { details?: Record<string, unknown> }>;
+}
+
+/**
+ * Read codex's OWN resolved model out of `codex doctor --json` — never a
+ * guess. Returns `undefined` on any failure (spawn error, timeout, bad JSON,
+ * missing field): the caller then offers ONLY `"default"` rather than
+ * fabricating a model id, so "we could not determine the configured model"
+ * stays distinguishable from "codex reported no models" (there is never a
+ * bare empty catalog here — `"default"` is always a legitimate `--model`
+ * omission, see `buildArgs` above). Bounded by `cfg.listModelsTimeoutMs`
+ * (default {@link DEFAULT_PROBE_TIMEOUT_MS}) so a hung `codex` can never hang
+ * `nexus models`.
+ */
+async function probeCodexConfiguredModel(cfg: CodexConfig): Promise<string | undefined> {
+  const bin = cfg.bin ?? codexSpec.defaultBin;
+  const probe = await runBoundedCapture({
+    bin,
+    args: ["doctor", "--json"],
+    ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}),
+    ...(cfg.resolveEnv ? { resolveEnv: cfg.resolveEnv } : {}),
+    ...(cfg.spawn ? { spawn: cfg.spawn } : {}),
+    timeoutMs: cfg.listModelsTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  });
+  if (probe.spawnError || probe.timedOut || probe.exitCode !== 0) return undefined;
+  try {
+    const report = JSON.parse(probe.stdout) as CodexDoctorReport;
+    const model = report.checks?.["config.load"]?.details?.model;
+    return typeof model === "string" && model.length > 0 ? model : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const codexSpec: CliSpec<CodexConfig> = {
@@ -516,8 +568,6 @@ const codexSpec: CliSpec<CodexConfig> = {
     mcp: true,
     cancel: "process-kill",
   }),
-  // Curated vendor catalog unioned with any config-driven modelMap entries.
-  listModels: (cfg): ModelInfo[] => unionModels(CODEX_MODELS, buildModelInfos(cfg.modelMap)),
   resolveModel,
   buildArgs,
   handleEvent,
@@ -528,9 +578,34 @@ const codexSpec: CliSpec<CodexConfig> = {
  * Create the Codex {@link ProviderAdapter}. Auth is delegated to the Codex CLI's
  * own login (`OPENAI_API_KEY` or its OAuth) unless `cfg.resolveEnv` injects a
  * key. Pass `cfg.spawn` / `cfg.bin` to point at a deterministic fake CLI.
+ *
+ * `listModels()` is wired here (not on the shared `codexSpec` object) so each
+ * adapter instance gets its OWN short-TTL cache ({@link createModelListCache},
+ * 60s default) — a module-level cache would incorrectly share results across
+ * adapters built with different `bin`/`cfg` (e.g. the real CLI vs. a test's
+ * fake one), and the TTL is what keeps a fast-refreshing picker from spawning
+ * `codex doctor` on every open.
+ *
+ * The result is always `["default", …configured model if resolvable…]` unioned
+ * with any config-driven `modelMap` entries — never the deleted fabricated
+ * catalog, and never a bare `[]` that could read as "codex verified it has no
+ * models" when the truth is just "we couldn't ask".
  */
 export function createCodexAdapter(cfg: CodexConfig = {}): ProviderAdapter {
-  return createSubprocessAdapter(cfg, codexSpec);
+  const modelCache: ModelListCache = createModelListCache();
+  const spec: CliSpec<CodexConfig> = {
+    ...codexSpec,
+    listModels: (c) =>
+      modelCache.get(async () => {
+        const configured = await probeCodexConfiguredModel(c);
+        const probed: ModelInfo[] = [{ id: DEFAULT_MODEL_ID, modalities: ["text"] }];
+        if (configured && configured !== DEFAULT_MODEL_ID) {
+          probed.push({ id: configured, modalities: ["text"] });
+        }
+        return unionModels(probed, buildModelInfos(c.modelMap));
+      }),
+  };
+  return createSubprocessAdapter(cfg, spec);
 }
 
 export type { CallContext, ChatResult, HealthStatus, ProviderAdapter };

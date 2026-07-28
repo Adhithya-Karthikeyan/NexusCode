@@ -31,7 +31,9 @@ enum Radius {
     static let control: CGFloat = 6
     /// Cards, panels.
     static let card: CGFloat = 10
-    /// Sheets, popovers.
+    /// Sheets, popovers, and `CanvasPanel` — the one large framing element per
+    /// screen, so it reads as a single deliberate sheet rather than a bigger
+    /// card.
     static let panel: CGFloat = 14
     static let pill: CGFloat = 999
 }
@@ -685,6 +687,63 @@ struct PageScaffold<Header: View, Content: View>: View {
 extension PageScaffold where Header == EmptyView {
     init(@ViewBuilder content: () -> Content) {
         self.init(header: { EmptyView() }, content: content)
+    }
+}
+
+/// The instrument frame every screen renders inside — level-1 surface, a
+/// hairline border on all four sides, inset from the window's own chrome.
+///
+/// See `DESIGN.md`'s "surface ladder": before this, every screen (chat,
+/// agents, sessions, settings…) rendered its content directly on the
+/// window's level-0 floor colour, with no edge of its own — which is exactly
+/// why wide windows read as text floating in a black void rather than a
+/// panel inside an instrument. `RootView` wraps its whole content region in
+/// this ONE place, so every screen gets the frame for free without each
+/// screen's own view needing to know about it.
+///
+/// `content` is expected to already fill available space (every screen here
+/// does, via its own `.frame(maxWidth: .infinity, maxHeight: .infinity)` /
+/// `PageScaffold`) — this view supplies the bounded, finite proposal for it
+/// to fill, in place of the window's own unbounded column. `PageScaffold`'s
+/// header/content split still lives INSIDE this panel; the panel is the
+/// frame, not a second layout region competing with it.
+///
+/// Modifier order matters and mirrors `HeroEmptyState`'s documented rule:
+/// background/border/clip wrap `content` FIRST (sized to whatever `content`
+/// fills), `.padding` adds the margin next, and `.frame(maxWidth: .infinity,
+/// maxHeight: .infinity)` is OUTERMOST so it claims the full column from
+/// `RootView` and hands `content` a reduced-but-still-finite proposal — the
+/// same "padding before the flexible frame" shape as `ErrorState`, never
+/// padding piled on top of an already-infinite frame.
+struct CanvasPanel<Content: View>: View {
+    @Environment(\.nexusTheme) private var theme
+    @ViewBuilder var content: Content
+
+    private var step: ElevationStep { theme.elevation.step(1) }
+
+    var body: some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
+                    .fill(step.surfaceColor)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
+                    .strokeBorder(step.borderColor, lineWidth: 1)
+            }
+            .shadow(color: shadow.color, radius: shadow.radius, y: shadow.y)
+            .padding(Space.lg)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Same guarded convention as `Card`'s shadow: zero at `shadowOpacity ==
+    /// 0` rather than trusted to degrade gracefully — depth here comes from
+    /// the surface ladder and the hairline border, not a shadow, for every
+    /// theme except the two (Cinder, Nightfall) that opted into one on purpose.
+    private var shadow: (color: Color, radius: CGFloat, y: CGFloat) {
+        guard step.shadowOpacity > 0 else { return (.clear, 0, 0) }
+        return (.black.opacity(step.shadowOpacity), step.shadowRadius, step.shadowRadius * 0.3)
     }
 }
 

@@ -189,36 +189,55 @@ describe("probeLocalServerReachability", () => {
     expect(result).toEqual({ lmstudio: false });
   });
 
-  it("reports null (never false) for a candidate whose health check never settles within the bound", async () => {
-    const registry = await registryWith(
-      fakeAdapter("lmstudio", () => new Promise<HealthStatus>(() => {})), // never resolves — the "black hole" case
+  /**
+   * A real adapter's `health()` is a fetch/SDK call that honors
+   * `ctx.signal` internally — that is what actually tears down a stalled
+   * request when `probeOne`'s own timer fires `controller.abort()` (this is
+   * the SAME "outer bound, adapter honors the signal" contract
+   * `listModelsForProvider`, `packages/cli/src/runtime.ts`, already relies
+   * on). A fake that just returns a promise which never settles, ignoring
+   * `ctx.signal` entirely, is not a faithful stand-in for that — it would
+   * hang the TEST itself, not exercise `probeOne`'s timeout path. This
+   * rejects once ITS signal fires, exactly like a real aborted fetch would.
+   */
+  function neverRespondingAdapter(id: string): ProviderAdapter {
+    return fakeAdapter(
+      id,
+      (ctx) =>
+        new Promise<HealthStatus>((_resolve, reject) => {
+          ctx.signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
     );
+  }
+
+  it("reports null (never false) for a candidate whose health check never settles within the bound", async () => {
+    const registry = await registryWith(neverRespondingAdapter("lmstudio"));
     const start = Date.now();
     const result = await probeLocalServerReachability(registry, { timeoutMs: 50 });
     const elapsed = Date.now() - start;
     expect(result).toEqual({ lmstudio: null });
-    // Bounded — must not wait anywhere near as long as the adapter's own
-    // (never-resolving) promise would imply.
+    // Bounded — must not wait anywhere near as long as a real black-holed
+    // connection's own OS-level timeout would take.
     expect(elapsed).toBeLessThan(1000);
   });
 
-  it("reports null, not false, when health() throws synchronously", async () => {
+  it("reports false, not null, when health() throws synchronously (a fast, confirmed failure)", async () => {
     const registry = await registryWith(
       fakeAdapter("lmstudio", async () => {
         throw new Error("boom");
       }),
     );
-    // A thrown error that settles fast is a REAL failure, not a timeout —
-    // `probeOne`'s doc: only a confirmed `ok:false` earns `false`; anything
-    // else this adapter never itself reports as ok/not-ok degrades to null.
+    // `probeOne`'s doc: `null` means "we gave up waiting" — a fast throw is
+    // the OPPOSITE of that, a real answer that just happened to be an
+    // exception rather than `{ok:false}`. Only a TIMEOUT earns `null`.
     const result = await probeLocalServerReachability(registry, { timeoutMs: 50 });
-    expect(result).toEqual({ lmstudio: null });
+    expect(result).toEqual({ lmstudio: false });
   });
 
   it("runs every candidate CONCURRENTLY — N candidates cost ~1 timeout period, not N", async () => {
     const registry = await registryWith(
-      fakeAdapter("lmstudio", () => new Promise<HealthStatus>(() => {})),
-      fakeAdapter("vllm", () => new Promise<HealthStatus>(() => {})),
+      neverRespondingAdapter("lmstudio"),
+      neverRespondingAdapter("vllm"),
     );
     const start = Date.now();
     const result = await probeLocalServerReachability(registry, { timeoutMs: 100 });

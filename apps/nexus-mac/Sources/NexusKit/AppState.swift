@@ -116,9 +116,18 @@ public enum RunMode: String, CaseIterable, Identifiable, Sendable {
 
 /// The `--effort` flag's vocabulary — identical to the CLI's own
 /// (`EffortLevel` in `packages/cli/src/commands.ts`) and to the TUI's
-/// `/effort` picker, so a value picked here round-trips through the CLI's own
-/// validation (`resolveEffortFlag`) rather than risking a UI-side vocabulary
-/// that silently drifts from what the CLI actually accepts.
+/// `/effort` picker.
+///
+/// No longer driven by a control on `ConversationController`: the app used
+/// to expose an `effort` property and append `--effort` from it, but the
+/// owner configures reasoning effort at the PROVIDER level (e.g. codex's
+/// `model_reasoning_effort`), so an app-side value could only duplicate or
+/// silently override that — see `ConversationController.persistentSessionArguments`'s
+/// doc. This type survives as the shared vocabulary `ReasoningCapability`'s
+/// decode and derived reads (`Providers.swift`: `NexusProvider
+/// .reasoningLabel(for:)`, `.isUnsupported(_:reasoning:)`,
+/// `.effortAfterProviderSwitch(from:to:)`) are expressed in, correct and
+/// tested, for whoever next needs to surface per-provider effort in the UI.
 public enum EffortLevel: String, CaseIterable, Identifiable, Sendable {
     case off, low, medium, high
 
@@ -213,20 +222,6 @@ public final class ConversationController {
     /// validates it with a clear error; duplicating it here would be exactly
     /// the kind of stale copy that already bit the model picker.
     public var role: String?
-
-    /// Reasoning effort for the next turn — `--effort off|low|medium|high`.
-    ///
-    /// Appended by BOTH argv builders below (`persistentSessionArguments` and
-    /// `oneShotArguments`), never spliced into the preview separately: a
-    /// second, view-side splice is exactly how this flag showed up in
-    /// `commandPreview` while never reaching the actual spawn (fixed here by
-    /// giving it a real home instead of patching the symptom again). The CLI
-    /// decides, per resolved provider, whether the value can actually be
-    /// honored — it prints a stderr warning and omits the parameter rather
-    /// than silently accepting-and-ignoring it (`applyEffort` in
-    /// `packages/cli/src/commands.ts`); that warning surfaces through the
-    /// normal diagnostics pipeline.
-    public var effort: EffortLevel = .off
 
     /// Pending tool approvals for this conversation.
     public let approvals = ApprovalsController()
@@ -331,10 +326,14 @@ public final class ConversationController {
         // a decision. Without `--ask` the gate would auto-allow, which is the
         // behaviour this whole path exists to remove.
         if approvalsEnabled { args += ["-t", "--ask"] }
-        // `chat` parses `--effort` exactly like `ask`/`agent` do (see
-        // `resolveEffortFlag`'s call sites in commands.ts); the CLI is what
-        // decides whether the resolved provider can honor it.
-        if effort != .off { args += ["--effort", effort.rawValue] }
+        // No `--effort` here, deliberately: the app used to append it from a
+        // picker on the control strip, but the owner configures reasoning
+        // effort at the PROVIDER level (e.g. codex's `model_reasoning_effort`
+        // in `~/.codex/config.toml`), so sending `--effort` from here would
+        // silently override a value they deliberately set. `EffortLevel` and
+        // `ReasoningCapability` (`Providers.swift`) still describe that
+        // capability correctly for whoever next needs to surface it — this
+        // argv builder just stops competing over it.
         return args
     }
 
@@ -358,13 +357,9 @@ public final class ConversationController {
             if let provider { args += ["-p", provider] }
             if let model { args += ["-m", model] }
         }
-        // `--effort` applies uniformly across every one-shot subcommand built
-        // above — `ask`, `agent` (role or not), `compare`, and `race` all
-        // parse it (`applyEffort`'s call sites in commands.ts cover every one
-        // of them) — so it belongs once here rather than duplicated per branch,
-        // and it must land before the role early-return below since a role
-        // run needs it too.
-        if effort != .off { args += ["--effort", effort.rawValue] }
+        // No `--effort` here either — see `persistentSessionArguments`'s doc;
+        // the same reasoning applies uniformly across every one-shot
+        // subcommand built above.
         // `nexus agent --role` DOES honor `--resume` — `runAgentOoda` threads
         // it through the same `resolveResumeTarget` resolver `chat
         // --persistent` uses (see `packages/cli/src/commands.ts`, and the

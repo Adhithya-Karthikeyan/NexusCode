@@ -481,6 +481,62 @@ describe("nexus providers list (native cloud models: gemini / bedrock / vertex)"
   }, 20_000);
 });
 
+describe("nexus providers status -o json (local-server reachability — lmstudio/vllm)", () => {
+  // The "available: true does NOT mean usable" gap: lmstudio/vllm register
+  // offline with no health probe (no credential to check), so before
+  // `probeLocalServerReachability` (`packages/runtime/src/index.ts`) existed,
+  // `available`/`needsKey` alone could not tell "a server is listening" apart
+  // from "nothing is running at localhost:1234" — confirmed live with a real
+  // black-holed TCP listener and a real running fake server during
+  // development; these assertions cover the INTEGRATION through the actual
+  // built CLI in a sandbox where nothing is listening on 1234/8000 (true for
+  // any normal dev machine or CI runner), where a refused connection returns
+  // near-instantly — never the multi-second flake a real bound-related test
+  // would risk.
+
+  it("reports localServerReachable false for lmstudio/vllm, and the key is entirely absent for every other kind of provider", async () => {
+    const r = await runCli(["providers", "status", "-o", "json"]);
+    expect(r.code).toBe(0);
+    const body = JSON.parse(r.stdout.trim()) as {
+      providers: { id: string; localServerReachable?: boolean | null }[];
+    };
+    const byId = new Map(body.providers.map((s) => [s.id, s]));
+    expect(byId.get("lmstudio")?.localServerReachable).toBe(false);
+    expect(byId.get("vllm")?.localServerReachable).toBe(false);
+    // Not `null`, not `false` — ABSENT: this axis does not apply to a cloud
+    // provider, a subprocess CLI, or the offline mock family at all.
+    for (const id of ["anthropic", "groq", "mock", "claude-code"]) {
+      expect(byId.get(id), `expected a "${id}" row`).toBeDefined();
+      expect(byId.get(id)).not.toHaveProperty("localServerReachable");
+    }
+  }, 20_000);
+
+  it("never probes on `providers list -o json` — the field is entirely absent there, even for lmstudio/vllm", async () => {
+    const r = await runCli(["providers", "list", "-o", "json"]);
+    expect(r.code).toBe(0);
+    const statuses = JSON.parse(r.stdout.trim()) as Record<string, unknown>[];
+    expect(statuses.some((s) => "localServerReachable" in s)).toBe(false);
+  }, 20_000);
+
+  it("text mode marks an unreachable local-server provider 'down' with a plain-language reason", async () => {
+    const r = await runCli(["providers", "status"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/down\s+lmstudio \(openai-compat\).*not reachable/);
+    expect(r.stdout).toMatch(/down\s+vllm \(openai-compat\).*not reachable/);
+  }, 20_000);
+
+  it("stays fast — bounded + concurrent probing, not a multi-second hang, even with nothing listening locally", async () => {
+    const start = Date.now();
+    const r = await runCli(["providers", "status", "-o", "json"]);
+    const elapsed = Date.now() - start;
+    expect(r.code).toBe(0);
+    // A generous ceiling, not a tight timing assertion (avoids CI
+    // flakiness) — this only needs to catch a regression back to "hangs for
+    // the full probe timeout" on a machine where nothing is listening.
+    expect(elapsed).toBeLessThan(5_000);
+  }, 20_000);
+});
+
 describe("nexus providers list/status — default 'anthropic' entry (BUG: was entirely absent from the picker)", () => {
   // Regression: `cmdProviders`/`cmdModels` built the runtime with plain
   // `buildRuntime(config)` instead of `buildAuthedRuntime(config)`, so
