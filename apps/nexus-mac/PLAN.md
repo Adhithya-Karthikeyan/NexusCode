@@ -1173,3 +1173,71 @@ isolation and clean on a full re-run. Not a regression; worth hardening.
   server stays visible.
 - An auto-commit Stop hook (`auto-push.sh`) is committing work automatically,
   bundling concurrent agents' edits into single commits.
+
+---
+
+## Session log — 2026-07-29 (overnight, round 3)
+
+### Gates, all re-run independently rather than taken on an agent's report
+`swift build` clean · `swift test` **402/402** · `npm run typecheck` **0** ·
+`npm run build` **0** · `npx vitest run` **2296/2296** (228 files) ·
+integration harness **7/7**.
+
+`No such module 'NexusKit'` errors from SourceKit during this run were stale
+index noise from ~30 agents sharing one `.build` directory — a real build in a
+private `--scratch-path` was clean. **Build in a private scratch path** when
+the fleet is running; a shared `.build` also produced one genuinely corrupt
+result earlier ("wrong nexus binary").
+
+### ✅ Model switching PROVEN live on a real provider (the owner's bug report)
+Not mock — real `anthropic` OAuth, `claude-haiku-4-5-20251001` →
+`claude-sonnet-5` over `chat --persistent`. The emitted event:
+`accepted:true`, `blockers:[]`, transcript + project context + system
+constraints all listed as `preserved`, and the turn AFTER the switch is
+stamped with the new model. Harness: `<scratchpad>/switch-live.mjs`.
+
+### 🔴 FOUND: a malformed control line is silently sent to the LLM as a prompt
+`parseSwitchDecision` / `parseApprovalDecision` are two-valued — `undefined`
+means "not a control line", and both stdin loops treat that as "ordinary
+prompt". So a line that is OBVIOUSLY meant as a control line but malformed —
+verified live with `{"type":"switch","model":"claude-sonnet-5"}`, which is
+rejected because `provider` is required — gets submitted to the model as chat
+text. The user pays for a turn in which the model tries to answer a JSON blob,
+and receives **no feedback that the switch was rejected or why**. That is
+indistinguishable from "switching models is not working".
+
+Fix in flight: make both parsers three-valued (not-a-control-line / valid /
+malformed), reusing the existing `t:"switch"`, `accepted:false` rejection
+event rather than opening a second error channel. Both loops must be fixed —
+the plain one and the approval-broker one are separate code paths.
+
+### 🔴 FOUND: curated model lists are presented as if verified
+`DEFAULT_GEMINI_MODELS` (`providers/gemini/src/index.ts:57`) and the anthropic
+equivalent are hand-written fallbacks used when the live probe cannot run.
+`nexus auth status` confirms this user has credentials for **only** anthropic,
+claude-code and codex — so for every other provider the probe can never run and
+the picker shows a **built-in guess rendered identically to a verified list**.
+Gemini's is also stale (2.5/2.0). This is the same class of error the owner
+already caught once; the rule is that an unverifiable list must not look
+verified. Fix in flight: model-list provenance on the wire + in the picker.
+
+### Open
+1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
+   `IntegrationsView`/`GitView`/`ApprovalSheet`), plus a before/after
+   screenshot pass at 1440×900 and 900pt.
+2. `AppTheme.cardShadow` — a focus-only, black-only, `shadowOpacity > 0`-guarded
+   shadow on the composer. Accepted as a **documented exception** to "elevation
+   is surfaces and hairlines, never drop shadows"; DESIGN.md must state the
+   exception and its reason or someone will correctly delete the code later.
+   Verify it on the LIGHT themes, where `shadowOpacity` is actually non-zero.
+3. Reinstall to `/Applications` once 1–2 land — one verified build, not three.
+
+### Hygiene learned this round
+- **Two sub-agents editing `DesignSystem.swift` and `ConversationView.swift`
+  concurrently left a half-applied edit and a red build.** Second time for that
+  exact pair. Give each sub-agent a disjoint file set before fanning out.
+- **A failing integration check is not automatically a product bug.** The live
+  switch test failed first because MY harness omitted the required `provider`
+  field. Read the parser's actual contract before reporting a regression — but
+  note the wrong test still surfaced a real defect (above), so investigate the
+  failure rather than just correcting the harness.
