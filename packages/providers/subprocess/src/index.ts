@@ -5,6 +5,10 @@
 
 export {
   createSubprocessAdapter,
+  // Exported for its own tests: a redactor that eats diagnostics turns a
+  // recoverable error into an unrecoverable one, so its false-positive
+  // behaviour needs pinning as tightly as its masking behaviour.
+  redactDiagnostic,
   type SubprocessConfig,
   type CliSpec,
   type StreamState,

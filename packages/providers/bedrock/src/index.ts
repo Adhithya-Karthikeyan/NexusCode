@@ -208,6 +208,25 @@ export function toBedrockRequest(
     const toolChoice = mapToolChoice(req.toolChoice);
     input.toolConfig = { tools, ...(toolChoice ? { toolChoice } : {}) };
   }
+  // Extended thinking (`req.reasoning`) is Anthropic's own request shape,
+  // carried through Bedrock's model-agnostic Converse API via
+  // `additionalModelRequestFields` — the same `{ type: "enabled", budget_tokens
+  // }` object the direct Anthropic adapter attaches unconditionally (see its
+  // `toNativeRequest`). Gated to Claude model ids ONLY: this adapter also fronts
+  // non-Anthropic Bedrock models (Amazon Nova, Meta, Mistral, …, see
+  // `buildModelInfos`/the default `bedrock-nova` mapping), and those reject an
+  // unrecognized `thinking` field outright. Without this gate, `capabilities.
+  // reasoning: true` + `transport: "http-sdk"` made `reasoningSupportedFor`
+  // report this provider as honoring `--effort`/the TUI `/effort` picker while
+  // the request builder silently dropped it for EVERY model behind it — the
+  // exact "shown but not real" class that check exists to catch, just missed
+  // here because the input was never actually wired.
+  if (req.reasoning?.enabled && modelId.includes("claude")) {
+    input.additionalModelRequestFields = {
+      ...(input.additionalModelRequestFields as Record<string, unknown> | undefined),
+      thinking: { type: "enabled", budget_tokens: req.reasoning.budgetTokens ?? 8000 },
+    };
+  }
   if (req.providerExtensions) {
     Object.assign(input, req.providerExtensions);
   }

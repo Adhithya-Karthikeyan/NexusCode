@@ -178,10 +178,34 @@ async function collectDiagnostic(stream: Readable | null, cap = 16_384): Promise
   return redactDiagnostic(out.trim());
 }
 
-/** Error diagnostics can echo credentials; only a redacted form reaches UI/logs. */
-function redactDiagnostic(message: string): string {
+/**
+ * Error diagnostics can echo credentials; only a redacted form reaches UI/logs.
+ *
+ * The vendor-prefix rules below REQUIRE the delimiter that every real key
+ * actually carries (`sk-`, `xai-`, `gsk_`, …). An earlier version made it
+ * optional — `/\b(sk|xai|gsk|nvapi|or|AIza)-?[A-Za-z0-9_-]{6,}\b/` — which
+ * silently destroyed ordinary prose and, worse, the actionable part of real
+ * error messages:
+ *
+ *   "…and --skip-git-repo-check was not specified."  ->  "…and --*** was not specified."
+ *   "the organization could not be found"            ->  "the *** could not be found"
+ *   "originally created by the orchestrator"         ->  "*** created by the ***"
+ *
+ * `sk` + any six word characters matches `skip…`, and the bare `or` alternative
+ * matched every word beginning "or". A user hitting codex's trusted-directory
+ * error was shown the flag that would fix it, with the flag's NAME masked.
+ *
+ * Redaction that eats diagnostics is not a safe default — it converts a
+ * recoverable error into an unrecoverable one. Keys are distinguishable by
+ * their delimiter; English is not. `or` is dropped entirely: OpenRouter keys
+ * are `sk-or-v1-…`, already covered by the `sk-` rule.
+ */
+export function redactDiagnostic(message: string): string {
   return message
-    .replace(/\b(sk|xai|gsk|nvapi|or|AIza)-?[A-Za-z0-9_-]{6,}\b/gi, "***")
+    .replace(/\b(?:sk|xai|nvapi)-[A-Za-z0-9_-]{8,}\b/gi, "***")
+    .replace(/\bgsk_[A-Za-z0-9_-]{8,}\b/gi, "***")
+    // Google keys carry no delimiter, so they need length to stay distinctive.
+    .replace(/\bAIza[A-Za-z0-9_-]{20,}\b/g, "***")
     .replace(/\b(AKIA|ASIA)[A-Z0-9]{8,}\b/g, "***")
     .replace(/Bearer\s+\S+/gi, "Bearer ***")
     .replace(/\b(api[_ -]?key|token|secret|password)\s*[=:]\s*\S+/gi, "$1=***");

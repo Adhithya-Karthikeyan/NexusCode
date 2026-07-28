@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createSubprocessAdapter,
+  redactDiagnostic,
   defaultSpawn,
   type CliSpec,
   type SpawnExit,
@@ -293,4 +294,45 @@ describe("subprocess base — health() probe reaping and timeout", () => {
     expect(spawnedChild).toBeDefined();
     expect(observedExit).toBeDefined();
   }, 10_000);
+});
+
+describe("redactDiagnostic — masks credentials without eating the message", () => {
+  // Regression: the vendor-prefix rule once made its delimiter OPTIONAL
+  // (`/\b(sk|xai|gsk|nvapi|or|AIza)-?[A-Za-z0-9_-]{6,}\b/`), so `sk` + six word
+  // characters swallowed `skip…` and a bare `or` swallowed every word starting
+  // "or". A real user hit codex's trusted-directory error and was shown the flag
+  // that would fix it with the flag's NAME masked — a recoverable error turned
+  // unrecoverable by the safety feature meant to protect them.
+  it("keeps flag names and ordinary prose intact", () => {
+    for (const text of [
+      "Not inside a trusted directory and --skip-git-repo-check was not specified.",
+      "the organization could not be found",
+      "originally created by the orchestrator",
+      "run with --skip-permissions to continue",
+      "ordinary sentences are ordinarily fine",
+    ]) {
+      expect(redactDiagnostic(text)).toBe(text);
+    }
+  });
+
+  it("still masks every real credential shape", () => {
+    for (const secret of [
+      "sk-proj-abc123def456ghi789xyz",
+      "xai-abcdef1234567890",
+      "gsk_abcdef1234567890",
+      "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6",
+      "AKIAIOSFODNN7EXAMPLE",
+    ]) {
+      expect(redactDiagnostic(secret)).not.toContain(secret);
+      expect(redactDiagnostic(secret)).toContain("***");
+    }
+    expect(redactDiagnostic("Authorization: Bearer sk-live-9f8e7d6c")).toBe(
+      "Authorization: Bearer ***",
+    );
+  });
+
+  it("masks an OpenRouter key via the sk- rule, which is why bare `or` is not a prefix", () => {
+    const key = "sk-or-v1-0123456789abcdef";
+    expect(redactDiagnostic(key)).not.toContain(key);
+  });
 });

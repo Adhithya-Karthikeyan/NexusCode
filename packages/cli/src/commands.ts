@@ -4656,7 +4656,15 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
       } else {
         io.out(
           `${JSON.stringify({
-            providers: runtime.statuses,
+            // Each row keeps every `list -o json` field plus `reasoning` — the
+            // per-provider effort capability a client needs to label its
+            // Off/Low/Med/High control truthfully instead of showing it for
+            // every provider regardless of whether `--effort` actually reaches
+            // the wire (see `reasoningCapabilityFor`'s doc comment).
+            providers: runtime.statuses.map((s) => ({
+              ...s,
+              reasoning: reasoningCapabilityFor(runtime, s.id),
+            })),
             circuits: circuitStatuses,
             circuitStore: config.providerCircuit.enabled ? providerCircuitPath(config) : null,
             pricing: runtime.registry.ids().map((providerId) => {
