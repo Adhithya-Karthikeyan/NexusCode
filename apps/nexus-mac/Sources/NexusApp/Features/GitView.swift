@@ -44,11 +44,23 @@ struct GitView: View {
             if let client {
                 if let repoState {
                     if !repoState.isRepo {
+                        // With an action, not without: naming the wrong
+                        // directory and leaving the only fix two screens away
+                        // (Settings) is a dead end — the same "wrong
+                        // directory" condition should always offer the fix
+                        // right where it's reported.
                         HeroEmptyState(
                             icon: "exclamationmark.triangle",
                             title: "Not a git repository",
                             message: "\(workspace.projectDirectory.path) isn't a git checkout, so there's nothing to commit, review, explain, or describe."
-                        )
+                        ) {
+                            Button("Choose Project Folder…") {
+                                presentDirectoryPicker(current: workspace.projectDirectory) {
+                                    workspace.projectDirectory = $0
+                                }
+                            }
+                            .buttonStyle(SoftButton(tone: .accent))
+                        }
                     } else {
                         ScrollView {
                             VStack(alignment: .leading, spacing: Space.lg) {

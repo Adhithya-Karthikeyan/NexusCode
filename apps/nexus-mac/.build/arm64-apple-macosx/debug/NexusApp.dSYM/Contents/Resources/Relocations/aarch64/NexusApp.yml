@@ -6101,7 +6101,7 @@ relocations:
   - { offset: 0x1259A9, size: 0x8, addend: 0x0, symName: '_$s8NexusApp14WorkspaceModelCfD', symObjAddr: 0x1210C, symBinAddr: 0x1006ABFAC, symSize: 0x40 }
   - { offset: 0x1259CD, size: 0x8, addend: 0x0, symName: _NexusApp_main, symObjAddr: 0x1214C, symBinAddr: 0x1006ABFEC, symSize: 0x18 }
   - { offset: 0x125C2E, size: 0x8, addend: 0x0, symName: '_$s8NexusApp8RootViewV9workspace33_2167F7CAD97C51229097F630EA31113FLLAA14WorkspaceModelCvg', symObjAddr: 0x0, symBinAddr: 0x1006ADE20, symSize: 0x84 }
-  - { offset: 0x125C52, size: 0x8, addend: 0x0, symName: '_$s8NexusApp18costIncompleteHelp33_2167F7CAD97C51229097F630EA31113FLLSSvp', symObjAddr: 0x207590, symBinAddr: 0x100B2E740, symSize: 0x0 }
+  - { offset: 0x125C52, size: 0x8, addend: 0x0, symName: '_$s8NexusApp18costIncompleteHelp33_2167F7CAD97C51229097F630EA31113FLLSSvp', symObjAddr: 0x207580, symBinAddr: 0x100B2E740, symSize: 0x0 }
   - { offset: 0x125D46, size: 0x8, addend: 0x0, symName: '_$s8NexusApp8RootViewV10_workspace33_2167F7CAD97C51229097F630EA31113FLL7SwiftUI11EnvironmentVyAA14WorkspaceModelCGvpfi', symObjAddr: 0x174, symBinAddr: 0x1006ADEA4, symSize: 0x38 }
   - { offset: 0x125D5E, size: 0x8, addend: 0x0, symName: '_$s8NexusApp8RootViewV6_theme33_2167F7CAD97C51229097F630EA31113FLL7SwiftUI11EnvironmentVy0A3Kit0B5ThemeVGvpfi', symObjAddr: 0x3154, symBinAddr: 0x1006AE028, symSize: 0x68 }
   - { offset: 0x125D76, size: 0x8, addend: 0x0, symName: '_$s8NexusApp8RootViewVWOc', symObjAddr: 0x538C, symBinAddr: 0x1006AE758, symSize: 0x11A4 }
@@ -6148,7 +6148,7 @@ relocations:
   - { offset: 0x126D40, size: 0x8, addend: 0x0, symName: '_$s8NexusApp9StatusBarVWOc', symObjAddr: 0x29E08, symBinAddr: 0x1006CDCA8, symSize: 0x11A4 }
   - { offset: 0x126D54, size: 0x8, addend: 0x0, symName: '_$s8NexusApp9StatusBarVWOh', symObjAddr: 0x2AFAC, symBinAddr: 0x1006CEE4C, symSize: 0xB5C }
   - { offset: 0x126D68, size: 0x8, addend: 0x0, symName: '_$s8NexusApp12runningCount33_2167F7CAD97C51229097F630EA31113FLLySiAA14WorkspaceModelCF', symObjAddr: 0x2BC94, symBinAddr: 0x1006CFB34, symSize: 0x288 }
-  - { offset: 0x126DAC, size: 0x8, addend: 0x0, symName: '_$s8NexusApp22presentDirectoryPicker33_2167F7CAD97C51229097F630EA31113FLL7current6onPicky10Foundation3URLV_yAHXEtF', symObjAddr: 0x2BF1C, symBinAddr: 0x1006CFDBC, symSize: 0x4F4 }
+  - { offset: 0x126DAC, size: 0x8, addend: 0x0, symName: '_$s8NexusApp22presentDirectoryPicker7current6onPicky10Foundation3URLV_yAGXEtF', symObjAddr: 0x2BF1C, symBinAddr: 0x1006CFDBC, symSize: 0x4F4 }
   - { offset: 0x126E17, size: 0x8, addend: 0x0, symName: '_$s8NexusApp13statusBarCost33_2167F7CAD97C51229097F630EA31113FLLySSSg0A3Kit11UsageTotalsVF', symObjAddr: 0x2C43C, symBinAddr: 0x1006D02DC, symSize: 0x338 }
   - { offset: 0x126E5D, size: 0x8, addend: 0x0, symName: '_$s8NexusApp18costIncompleteHelp33_2167F7CAD97C51229097F630EA31113FLL_WZ', symObjAddr: 0x2C7B4, symBinAddr: 0x1006D0614, symSize: 0x40 }
   - { offset: 0x126E77, size: 0x8, addend: 0x0, symName: '_$s8NexusApp18costIncompleteHelp33_2167F7CAD97C51229097F630EA31113FLLSSvau', symObjAddr: 0x2C7F4, symBinAddr: 0x1006D0654, symSize: 0x50 }

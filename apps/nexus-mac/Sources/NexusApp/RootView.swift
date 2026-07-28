@@ -115,10 +115,12 @@ private func runningCount(_ workspace: WorkspaceModel) -> Int {
 }
 
 /// Opens a native folder picker and hands back the chosen directory. Shared by
-/// the sidebar's project switcher and the Settings project card so there is
-/// exactly one "change project" code path.
+/// the sidebar's project switcher, the Settings project card, and `GitView`'s
+/// "not a git repository" empty state, so there is exactly one "change
+/// project" code path — not `private`, since that third call site lives in a
+/// different file.
 @MainActor
-private func presentDirectoryPicker(current: URL, onPick: (URL) -> Void) {
+func presentDirectoryPicker(current: URL, onPick: (URL) -> Void) {
     let panel = NSOpenPanel()
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
