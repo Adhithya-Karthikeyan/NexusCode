@@ -456,22 +456,28 @@ struct StatusBar: View {
                 Metric(label: "model", value: session.model, emphasis: true)
             }
 
+            // `secondary: true` below: DESIGN.md names the status bar as
+            // `accentSecondary`'s other legitimate home, alongside the
+            // primary accent's running-state dot, specifically for live
+            // cost/token counters — these three readouts (turn cost, session
+            // cost, context %) are exactly that, and nothing else in the tree
+            // consumed the parameter before this.
             if let totals = workspace.conversation?.view.totals, let cost = statusBarCost(totals) {
                 if totals.costIncomplete {
-                    Metric(label: "cost", value: cost)
+                    Metric(label: "cost", value: cost, secondary: true)
                         .help(costIncompleteHelp)
                 } else {
-                    Metric(label: "cost", value: cost)
+                    Metric(label: "cost", value: cost, secondary: true)
                 }
             }
 
             if let hud = workspace.omc?.snapshot.hud {
                 StatusDivider()
                 if let percent = hud.contextUsedPercentage {
-                    StatusMetric(label: "ctx", value: "\(percent)%", tone: percent > 80 ? .warning : .neutral)
+                    StatusMetric(label: "ctx", value: "\(percent)%", tone: percent > 80 ? .warning : .accent)
                 }
                 if let cost = hud.totalCostUsd {
-                    Metric(label: "session", value: String(format: "$%.2f", cost))
+                    Metric(label: "session", value: String(format: "$%.2f", cost), secondary: true)
                 }
             }
 
@@ -512,19 +518,25 @@ private struct StatusDivider: View {
     }
 }
 
-/// Like the shared `Metric`, but with a third, more urgent tone — context
-/// pressure needs to visibly escalate past 80% and `Metric` only distinguishes
-/// muted vs accent.
+/// Like the shared `Metric`, but with a fourth, more urgent tone — context
+/// pressure needs to visibly escalate past 80%, past what `Metric`'s
+/// muted/primary-accent/secondary-accent tones alone express.
 private struct StatusMetric: View {
     @Environment(\.nexusTheme) private var theme
     let label: String
     let value: String
     var tone: Tone = .neutral
 
-    enum Tone { case neutral, warning }
+    enum Tone { case neutral, accent, warning }
 
     private var valueColor: Color {
-        tone == .warning ? theme.color(\.warningFg) : theme.color(\.textSecondary)
+        switch tone {
+        case .neutral: return theme.color(\.textSecondary)
+        // Same `accentSecondary` home as `Metric(secondary:)` — context % is
+        // live token data, the other case DESIGN.md names for this tone.
+        case .accent: return theme.accentSecondary
+        case .warning: return theme.color(\.warningFg)
+        }
     }
 
     var body: some View {
