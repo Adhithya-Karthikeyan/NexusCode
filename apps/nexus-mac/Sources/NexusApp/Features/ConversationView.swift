@@ -1342,11 +1342,42 @@ struct TurnView: View {
     var showsReasoning = false
     var isStreaming = false
     var compact = false
+    /// The provider CURRENTLY serving this conversation (`ViewState.session
+    /// ?.provider`) — `nil` for a context (e.g. a compare/race `LaneColumn`)
+    /// that has no single "current provider" concept to compare against.
+    ///
+    /// Only ever used to decide whether `providerBadge` renders, never to
+    /// derive `turn`'s own attribution — `turn.provider`/`.model` already
+    /// carry that, stamped once from folded events (see `Turn.provider`'s
+    /// doc). Reading "what's current" for the COMPARISON is fine; it is
+    /// reading it as the SOURCE of a turn's own attribution that would be
+    /// the bug (a switch changes `session` on turns that started before the
+    /// switch too, which is exactly what `Turn.provider` exists to survive).
+    var currentProvider: String? = nil
     @State private var hoveringAnswer = false
     @State private var copied = false
 
     private var hasAnswerContent: Bool {
         !turn.text.isEmpty || !turn.tools.isEmpty || !turn.diffs.isEmpty || turn.error != nil || isStreaming
+    }
+
+    /// Whether this turn is worth labelling — only when it answered from a
+    /// DIFFERENT provider than the one the conversation is currently on.
+    /// Every turn of an ordinary, single-provider conversation must render
+    /// identically to before this existed: badging every turn regardless
+    /// would bury the one piece of information that is actually new here.
+    private var showsProviderBadge: Bool {
+        guard let turnProvider = turn.provider, let currentProvider else { return false }
+        return turnProvider != currentProvider
+    }
+
+    /// `"provider/model"`, or bare `provider` when no model was recorded —
+    /// same shape as `UiEvent.Switch.Target.label`, so this reads as the
+    /// same vocabulary as the switch receipt just above it in the
+    /// transcript rather than a second, differently-worded convention.
+    private var providerBadgeLabel: String {
+        guard let turnProvider = turn.provider else { return "" }
+        return turn.model.map { "\(turnProvider)/\($0)" } ?? turnProvider
     }
 
     var body: some View {
@@ -1425,9 +1456,29 @@ struct TurnView: View {
         .padding(6)
     }
 
+    /// The "this answer came from somewhere else" tell — quiet, inline,
+    /// deliberately unlike a colored `CountPill`: this is provenance, not a
+    /// status to call attention to. Reuses the same icon
+    /// `SwitchReceiptView.acceptedRow` uses for the switch that likely
+    /// produced this turn, so the two read as one vocabulary.
+    @ViewBuilder
+    private var providerBadge: some View {
+        if showsProviderBadge {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 8))
+                Text(providerBadgeLabel)
+            }
+            .font(Kind.micro)
+            .foregroundStyle(theme.color(\.textMuted))
+        }
+    }
+
     @ViewBuilder
     private var innerContent: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
+            providerBadge
+
             if showsReasoning && !turn.reasoning.isEmpty {
                 Text(turn.reasoning)
                     .font(Kind.caption.italic())

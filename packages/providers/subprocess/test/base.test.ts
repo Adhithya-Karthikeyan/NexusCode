@@ -117,12 +117,14 @@ describe("subprocess base — transport failures", () => {
       translateFailure: (detail, cfg) =>
         detail.includes("NOPE") ? `actionable hint about ${cfg.cwd ?? "(cwd)"}\n\n(raw: ${detail})` : undefined,
     };
-    const adapter = createSubprocessAdapter({ bin: process.execPath, cwd: "/some/dir" }, translatingSpec);
+    // `cfg.cwd` doubles as the child's real spawn cwd, so it must exist.
+    const realDir = process.cwd();
+    const adapter = createSubprocessAdapter({ bin: process.execPath, cwd: realDir }, translatingSpec);
     const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
     const last = chunks.at(-1);
     expect(last?.type === "error" && last.error.code).toBe("cli_exit");
     const message = last?.type === "error" ? last.error.message : "";
-    expect(message).toContain("actionable hint about /some/dir");
+    expect(message).toContain(`actionable hint about ${realDir}`);
     expect(message).toContain("NOPE: precondition failed");
 
     // A DIFFERENT failure the translator's pattern does not match (no "NOPE")

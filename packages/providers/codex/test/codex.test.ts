@@ -110,16 +110,21 @@ describe("codex adapter — stream mapping", () => {
   // an actionable message naming the real directory, while keeping the
   // original codex line recoverable underneath.
   it("translates the untrusted-directory refusal into an actionable message naming the directory", async () => {
+    // `cfg.cwd` doubles as the child's REAL spawn cwd (base.ts passes it
+    // straight to `spawn`), so it must be a directory that actually exists —
+    // unlike `cfg.workdir` below, which is only ever used as a `--cd` argv
+    // value + the translated message text.
+    const realDir = process.cwd();
     const adapter = createCodexAdapter({
       bin: FAKE,
-      cwd: "/some/app/workspace",
+      cwd: realDir,
       resolveEnv: async () => ({ FAKE_CODEX_MODE: "untrusted-dir" }),
     });
     const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
     const last = chunks[chunks.length - 1];
     expect(last?.type === "error" && last.error.code).toBe("cli_exit");
     const message = last?.type === "error" ? last.error.message : "";
-    expect(message).toContain("codex will not run in /some/app/workspace");
+    expect(message).toContain(`codex will not run in ${realDir}`);
     expect(message).toContain("not a git repository");
     expect(message.toLowerCase()).toContain("trust it");
     // The original CLI text is still recoverable, not replaced.
@@ -129,9 +134,10 @@ describe("codex adapter — stream mapping", () => {
   });
 
   it("names cfg.workdir (codex's own --cd target) over cfg.cwd when both are set", async () => {
+    const realDir = process.cwd();
     const adapter = createCodexAdapter({
       bin: FAKE,
-      cwd: "/spawn/cwd",
+      cwd: realDir,
       workdir: "/explicit/workdir",
       resolveEnv: async () => ({ FAKE_CODEX_MODE: "untrusted-dir" }),
     });
@@ -139,7 +145,7 @@ describe("codex adapter — stream mapping", () => {
     const last = chunks[chunks.length - 1];
     const message = last?.type === "error" ? last.error.message : "";
     expect(message).toContain("codex will not run in /explicit/workdir");
-    expect(message).not.toContain("/spawn/cwd");
+    expect(message).not.toContain(realDir);
   });
 
   it("recovers after one malformed line without violating the one-terminal contract", async () => {
