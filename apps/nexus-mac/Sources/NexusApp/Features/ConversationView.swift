@@ -423,16 +423,18 @@ struct ConversationView: View {
                     lineWidth: composerFocused ? 2 : 1
                 )
         }
-        // Neutral elevation, not an accent-tinted glow: accent is rationed to
-        // selection/primary-action/live-state elsewhere in this file, and
-        // "the composer has focus" is none of those three — the border
-        // (`chromeBorderFocus`, its own dedicated token) already carries the
-        // focus signal on its own.
-        .shadow(
-            color: composerFocused ? theme.cardShadow.color : .clear,
-            radius: composerFocused ? theme.cardShadow.radius + 4 : 0,
-            y: composerFocused ? theme.cardShadow.y + 1 : 0
-        )
+        // No shadow here, on purpose — a supplementary focus shadow was
+        // tried and measured (Meridian, focused, at full window size) before
+        // this: the 2px `chromeBorderFocus` border already reads as an
+        // unmissable, unambiguous focus signal entirely on its own, so a
+        // shadow underneath it is a SECOND signal for the same one meaning
+        // — exactly the thing "one signal per meaning" rules out. It also
+        // risks the specific failure this project already reverted once
+        // (`Card`'s at-rest shadow reading as a grey smudge on a near-black
+        // canvas) and is the same register as the bright focus glow the
+        // owner called out as cheap before. The border alone is the
+        // decision; `DESIGN.md`'s "surfaces + hairlines, never drop
+        // shadows" stays unqualified rather than growing an exception here.
         .animation(.easeOut(duration: 0.15), value: composerFocused)
     }
 

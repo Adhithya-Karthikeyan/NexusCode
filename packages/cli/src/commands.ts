@@ -3768,51 +3768,99 @@ class ApprovalBroker {
 
 /**
  * Parse one stdin line as an approval decision for the persistent control
- * channel. Recognizes exactly `{"type":"approval","id":"...","decision":
- * "allow"|"deny"}`; anything else (not JSON, not this exact shape) is
- * `undefined` so the caller dispatches it as an ordinary chat prompt instead —
- * the control channel shares stdin with prompts and must never swallow one.
+ * channel. THREE-VALUED, not two — matching this repo's honesty conventions
+ * for a result that must distinguish "no answer" from "a wrong answer" (see
+ * `GoalVerdict`'s `"indeterminate"`, `ApprovalCause`, `localServerReachable`'s
+ * true/false/null/absent):
+ *  - `{kind:"none"}` — this line was never an approval control line at all
+ *    (not JSON, or JSON without `"type":"approval"`) — the caller dispatches
+ *    it as an ordinary chat prompt, unchanged. The control channel shares
+ *    stdin with prompts and must never swallow a real one.
+ *  - `{kind:"valid",...}` — exactly `{"type":"approval","id":"...",
+ *    "decision":"allow"|"deny"}` — the caller acts on it, unchanged.
+ *  - `{kind:"malformed",reason}` — the line UNAMBIGUOUSLY declared
+ *    `"type":"approval"` (so it was clearly INTENDED as a control line) but
+ *    `id`/`decision` is missing or invalid. This used to collapse into the
+ *    same `undefined` as "none", so a rejected approval decision silently
+ *    fell through to the prompt path — billed to the model as chat text,
+ *    with no feedback that anything was wrong. The caller must reject it
+ *    visibly instead of dispatching it; see `reason` for what to show.
  */
-function parseApprovalDecision(line: string): { id: string; decision: "allow" | "deny" } | undefined {
+export function parseApprovalDecision(
+  line: string,
+):
+  | { kind: "none" }
+  | { kind: "valid"; id: string; decision: "allow" | "deny" }
+  | { kind: "malformed"; reason: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
-    return undefined;
+    return { kind: "none" };
   }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
+  if (typeof parsed !== "object" || parsed === null) return { kind: "none" };
   const o = parsed as Record<string, unknown>;
-  if (o["type"] !== "approval") return undefined;
+  if (o["type"] !== "approval") return { kind: "none" };
   const id = o["id"];
+  if (typeof id !== "string" || id.length === 0) {
+    return { kind: "malformed", reason: 'approval control line missing required "id"' };
+  }
   const decision = o["decision"];
-  if (typeof id !== "string" || id.length === 0) return undefined;
-  if (decision !== "allow" && decision !== "deny") return undefined;
-  return { id, decision };
+  if (decision !== "allow" && decision !== "deny") {
+    return {
+      kind: "malformed",
+      reason: `approval control line has invalid "decision" (expected "allow" or "deny", got ${JSON.stringify(decision)})`,
+    };
+  }
+  return { kind: "valid", id, decision };
 }
 
 /**
  * Parse a `--persistent` control line requesting an in-process provider/model
  * switch: `{"type":"switch","provider":"…","model":"…"}` — `model` is
  * optional (falls back to `resolveSwitchModel`'s pick for the target
- * provider, same as the TUI's `/provider` command). Symmetric with
- * `parseApprovalDecision` above: `undefined` means "not a control line," so
- * the reading loop falls through and treats it as an ordinary prompt.
+ * provider, same as the TUI's `/provider` command). THREE-VALUED, symmetric
+ * with `parseApprovalDecision` above:
+ *  - `{kind:"none"}` — not a switch control line at all — the reading loop
+ *    falls through and treats it as an ordinary prompt, unchanged.
+ *  - `{kind:"valid",...}` — a complete, well-formed switch request — the
+ *    loop acts on it via `performSwitch`, unchanged.
+ *  - `{kind:"malformed",reason}` — the line's `type` is UNAMBIGUOUSLY
+ *    `"switch"` (clearly not meant as chat text) but `provider`/`model` is
+ *    missing or invalid. This used to be indistinguishable from "none" (both
+ *    were bare `undefined`), so a malformed switch request was silently
+ *    submitted to the model as a chat prompt — a billed turn with zero
+ *    feedback that the switch was rejected or why, which reads exactly like
+ *    "switching models doesn't work". The loop must emit a visible rejection
+ *    instead of dispatching it; see `reason` for what to show.
  */
-function parseSwitchDecision(line: string): { provider: string; model?: string } | undefined {
+export function parseSwitchDecision(
+  line: string,
+):
+  | { kind: "none" }
+  | { kind: "valid"; provider: string; model?: string }
+  | { kind: "malformed"; reason: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
-    return undefined;
+    return { kind: "none" };
   }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
+  if (typeof parsed !== "object" || parsed === null) return { kind: "none" };
   const o = parsed as Record<string, unknown>;
-  if (o["type"] !== "switch") return undefined;
+  if (o["type"] !== "switch") return { kind: "none" };
   const provider = o["provider"];
-  if (typeof provider !== "string" || provider.length === 0) return undefined;
+  if (typeof provider !== "string" || provider.length === 0) {
+    return { kind: "malformed", reason: 'switch control line missing required "provider"' };
+  }
   const model = o["model"];
-  if (model !== undefined && (typeof model !== "string" || model.length === 0)) return undefined;
-  return typeof model === "string" ? { provider, model } : { provider };
+  if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
+    return {
+      kind: "malformed",
+      reason: `switch control line has invalid "model" (expected a non-empty string, got ${JSON.stringify(model)})`,
+    };
+  }
+  return typeof model === "string" ? { kind: "valid", provider, model } : { kind: "valid", provider };
 }
 
 /** `ToolRegistry` → `ChatRequest.tools`, mirroring `toolDefsFrom` in `@nexuscode/core`'s orchestrator (not exported from there). */
@@ -4149,6 +4197,47 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   }
 
   /**
+   * Emit the rejection for a MALFORMED `--persistent` switch control line —
+   * the line unambiguously declared itself `{"type":"switch",...}` (see
+   * `parseSwitchDecision`'s `"malformed"` case) but never produced a real
+   * target. Reuses `performSwitch`'s own rejected-switch shape (`t:"switch"`,
+   * `accepted:false`, `blockers`) rather than a second error channel, so a
+   * client already handling a refused switch handles this identically. `to`
+   * stays blank — unlike a real refusal, parsing never got far enough to
+   * name a target provider/model.
+   */
+  function emitMalformedSwitch(reason: string): void {
+    const ev: UiEvent = {
+      t: "switch",
+      lane: "main",
+      from: { providerId, modelId: model },
+      to: { providerId: "", modelId: "" },
+      accepted: false,
+      blockers: [reason],
+      warnings: [],
+      preserved: [],
+      adaptations: [],
+      reason: "malformed switch control line",
+    };
+    renderStreaming(ev, output === "ndjson" ? "ndjson" : "text", io);
+  }
+
+  /**
+   * Emit the rejection for a MALFORMED `--persistent` approval decision line
+   * (see `parseApprovalDecision`'s `"malformed"` case). There is no
+   * rejected-decision shape to reuse the way `performSwitch` has one for
+   * switches — an `approval` UiEvent's `resolution` always pairs with the
+   * ORIGINAL request's `action`/`detail`, which a line that never produced a
+   * valid `id`/`decision` cannot supply — so this reuses the plain `error`
+   * UiEvent already used by `runTurn`'s defensive catch below, not a new
+   * channel.
+   */
+  function emitMalformedApproval(reason: string): void {
+    const ev: UiEvent = { t: "error", lane: "main", code: "malformed_control_line", message: reason, retryable: false };
+    renderStreaming(ev, output === "ndjson" ? "ndjson" : "text", io);
+  }
+
+  /**
    * Dispatch one line as a turn on the shared session and project its events
    * to `io`. Returns `true` when the turn did NOT end in a successful reply,
    * so both stdin modes below can compute the same process exit code.
@@ -4246,8 +4335,12 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
           const line = raw.trim();
           if (line.length === 0) continue;
           const decision = parseSwitchDecision(line);
-          if (decision) {
+          if (decision.kind === "valid") {
             await performSwitch(decision.provider, decision.model);
+            continue;
+          }
+          if (decision.kind === "malformed") {
+            emitMalformedSwitch(decision.reason);
             continue;
           }
           if (await runTurn(line)) failed = true;
@@ -4285,8 +4378,12 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
           const line = raw.trim();
           if (line.length === 0) continue;
           const decision = parseApprovalDecision(line);
-          if (decision) {
+          if (decision.kind === "valid") {
             approvalBroker.decide(decision.id, decision.decision);
+            continue;
+          }
+          if (decision.kind === "malformed") {
+            emitMalformedApproval(decision.reason);
             continue;
           }
           // Same "out of band" treatment as an approval decision, and for the
@@ -4295,8 +4392,12 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
           // waiting for `promptQueue` to drain, and a switch requested WHILE
           // a turn is mid-tool-call-approval should not have to wait behind it.
           const sw = parseSwitchDecision(line);
-          if (sw) {
+          if (sw.kind === "valid") {
             await performSwitch(sw.provider, sw.model);
+            continue;
+          }
+          if (sw.kind === "malformed") {
+            emitMalformedSwitch(sw.reason);
             continue;
           }
           promptQueue.push(line);

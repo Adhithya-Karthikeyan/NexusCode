@@ -1247,3 +1247,82 @@ describe("nexus jobs (terminal integration, §13)", () => {
     });
   }, 20_000);
 });
+
+describe("nexus chat --persistent — malformed control lines are rejected, never dispatched to the model", () => {
+  // The exact reported bug: `parseSwitchDecision`/`parseApprovalDecision` used
+  // to be two-valued (`undefined` meant BOTH "not a control line" and "a
+  // control line that failed to parse"), so a line that unambiguously
+  // declared itself a control line (its `type` matched) but was otherwise
+  // malformed fell through to the SAME path as an ordinary prompt — silently
+  // billed to the model as chat text, with zero feedback that anything was
+  // rejected. That reads exactly like "switching models doesn't work" to
+  // whoever sent the line. These tests prove the fix over the REAL binary:
+  // the malformed line never reaches the model, and a visible rejection is
+  // emitted instead.
+
+  it('a switch line with type:"switch" but no provider is rejected, not sent to the model as a prompt (the simple reading loop, no -t)', async () => {
+    // `provider` is required — this is JSON, has `type:"switch"`, and is
+    // still not a valid switch request.
+    const malformed = JSON.stringify({ type: "switch", model: "claude-sonnet-5" });
+    const r = await runCli(
+      ["chat", "--persistent", "-p", "mock", "-m", "mock-fast", "-o", "ndjson"],
+      `${malformed}\nstill here?\n`,
+    );
+    expect(r.code).toBe(0);
+    const events = r.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+    // A visible rejection — the SAME `t:"switch"`/`accepted:false`/`blockers`
+    // shape a real refused switch uses (`performSwitch`'s early returns),
+    // not a silent drop and not a second, invented error channel.
+    const rejected = events.find((e) => e["t"] === "switch");
+    expect(rejected).toBeDefined();
+    expect(rejected!["accepted"]).toBe(false);
+    const blockers = rejected!["blockers"] as string[];
+    expect(blockers.length).toBeGreaterThan(0);
+    expect(blockers[0]).toMatch(/provider/i);
+
+    // The raw control line itself never reached the model as a prompt: only
+    // ONE turn ran (the genuine "still here?" line), and its echoed text
+    // contains that prompt, never the rejected JSON.
+    expect(events.filter((e) => e["t"] === "session")).toHaveLength(1);
+    const textDeltas = events
+      .filter((e) => e["t"] === "text")
+      .map((e) => e["delta"] as string)
+      .join("");
+    expect(textDeltas).toContain("still here?");
+    expect(textDeltas).not.toContain("claude-sonnet-5");
+    expect(textDeltas).not.toContain('"type":"switch"');
+  }, 30_000);
+
+  it('an approval line with type:"approval" but an invalid decision is rejected, not sent to the model as a prompt (the approval-broker reading loop, -t)', async () => {
+    const malformed = JSON.stringify({ type: "approval", id: "whatever", decision: "maybe" });
+    const r = await runCli(
+      ["chat", "--persistent", "-t", "-p", "mock", "-m", "mock-fast", "-o", "ndjson"],
+      `${malformed}\nstill here?\n`,
+    );
+    expect(r.code).toBe(0);
+    const events = r.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+    // A visible rejection naming what was wrong.
+    const rejected = events.find((e) => e["t"] === "error" && e["code"] === "malformed_control_line");
+    expect(rejected).toBeDefined();
+    expect(rejected!["message"]).toMatch(/decision/i);
+
+    // Same proof as above: only the genuine prompt became a turn.
+    expect(events.filter((e) => e["t"] === "session")).toHaveLength(1);
+    const textDeltas = events
+      .filter((e) => e["t"] === "text")
+      .map((e) => e["delta"] as string)
+      .join("");
+    expect(textDeltas).toContain("still here?");
+    expect(textDeltas).not.toContain('"type":"approval"');
+  }, 30_000);
+});

@@ -116,18 +116,6 @@ extension AppTheme {
         )
     }
 
-    /// Level-1 elevation's own `(color, radius, y)` shadow — the "does THIS
-    /// theme want a card shadow at all" answer, for a caller that wants the
-    /// theme's normal card shadow rather than re-deriving `Card`'s private
-    /// guard. Same convention as `Card`'s own shadow: zero at
-    /// `shadowOpacity == 0` (every theme that rejects shadows for the
-    /// surface ladder instead — see `hairline`'s doc comment), non-zero only
-    /// for the two themes (Cinder, Nightfall) that opted into one on purpose.
-    var cardShadow: (color: Color, radius: CGFloat, y: CGFloat) {
-        let step = elevation.step(1)
-        guard step.shadowOpacity > 0 else { return (.clear, 0, 0) }
-        return (.black.opacity(step.shadowOpacity), step.shadowRadius, step.shadowRadius * 0.3)
-    }
 }
 
 /// Either a flat colour fill or a vibrancy material for `shape` — NEVER both

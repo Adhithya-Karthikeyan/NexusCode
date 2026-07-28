@@ -1221,6 +1221,58 @@ Gemini's is also stale (2.5/2.0). This is the same class of error the owner
 already caught once; the rule is that an unverifiable list must not look
 verified. Fix in flight: model-list provenance on the wire + in the picker.
 
+### ✅ RESOLVED: the "access your Documents folder" prompt
+A fresh app bundle raised a macOS Documents-access prompt when the
+**Integrations** screen was opened. Root cause, confirmed:
+`IntegrationsController.refresh()` runs `nexus mcp tools`, which **starts every
+enabled MCP server** to report their tools — and `~/.claude.json` configures
+`kyp-mem` with `KYP_VAULT=/Users/adhithya/Documents/docs_and_memory/…`. The
+server reads Documents; macOS attributes the prompt to the parent app.
+
+The access is **legitimate and user-configured**, so the fix is not to block
+it — it is that the prompt was bare and unexplained, which reads as the app
+snooping. `NSDocumentsFolderUsageDescription` added to the installer's
+Info.plist naming the real cause (`plutil -lint` OK). Note this only ever
+appears on a bundle id that has not yet been granted, which is why the
+long-installed build never showed it and a fresh install does — **expect it on
+the next reinstall.** `ProjectLocation.swift` already guards the other route in
+(defaulting the project dir into `~` or `~/Documents`); that guard is intact
+and was not the cause here.
+
+### 🔴 FOUND: 2 of the 7 themes are unreachable — an explicit pick is discarded
+`AppTheme.resolved(for:)` (`AppTheme.swift:260`) returns `pairedTheme` whenever
+the chosen theme's `isDark` disagrees with the OS appearance, and
+`NexusApp.swift:71` feeds it the system scheme with **no user override
+anywhere**. This Mac is in Dark mode; `daylight` and `studio` are the only
+themes with `isDark: false`. So clicking either one moves the checkmark and
+changes nothing on screen. A control that visibly does nothing is worse than
+no control, and this is exactly the "feels cheap" class of complaint.
+Fix in flight: an explicit pick pins, with pairing kept as an opt-in "match
+system appearance" toggle. **Screenshot proof required** — the suite stayed
+green at 402/402 the whole time this bug was live.
+
+### UI review findings — read the screenshots, do not trust the report
+Reviewed `redesign/shots/01_chat_empty.png`, `compare_chat_before_after.png`,
+`03_studio_light.png`, `narrow_01_chat.png` directly. The sweep is a real
+improvement (sidebar hierarchy, type contrast, accent rationing, the mono
+command preview under the composer — keep all of it). Still open, in priority
+order, because the first two read as *broken* rather than merely plain:
+1. **The provider pill renders `ant…opic`** — truncated mid-word, in the most
+   prominent control in the app, while the `model` control beside it is nearly
+   twice as wide and empty. Never truncate the provider name; truncate the
+   model id instead.
+2. **The `model` dropdown shows an empty grey placeholder.** Given the owner's
+   "switching models is not working" report, a blank model field is the worst
+   possible thing to leave in that strip. Show the resolved model, marking it
+   when it is the provider default rather than an explicit pick.
+3. Empty state is not optically centred — the top ~40% of the canvas is dead.
+4. Suggestion rows stretch the full ~915pt for 3–5 word labels. Constrain to
+   ~560–640pt or a 2×2 grid.
+5. At 900pt the **sidebar takes 27% of the window** — proportionally larger
+   than at 1440. The narrow case currently looks worse than the wide one.
+6. At 900pt the control strip wraps into a ragged second row (one button left,
+   two right, large gap).
+
 ### Open
 1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
    `IntegrationsView`/`GitView`/`ApprovalSheet`), plus a before/after

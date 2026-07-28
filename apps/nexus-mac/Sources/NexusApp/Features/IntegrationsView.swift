@@ -310,7 +310,10 @@ private struct HookRow: View {
     var body: some View {
         Card(padding: Space.sm) {
             HStack(spacing: Space.sm) {
-                CountPill(text: hook.event, tone: .accent)
+                // Neutral, not accent: the event name is a static label on
+                // every hook row, not a live count or the current selection
+                // — see `DESIGN.md`'s badge rule.
+                CountPill(text: hook.event, tone: .neutral)
                 Text(([hook.command] + hook.args).joined(separator: " "))
                     .font(Kind.monoSmall)
                     .foregroundStyle(theme.color(\.textSecondary))

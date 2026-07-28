@@ -431,10 +431,11 @@ private struct AgentCard: View {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(stateBorderColor, lineWidth: row.isRunning || row.isFailed ? 1.4 : 0)
         }
-        .shadow(
-            color: row.isRunning ? theme.color(\.accentDefault).opacity(0.24) : .clear,
-            radius: row.isRunning ? 12 : 0
-        )
+        // No accent glow here any more — the border above already reads as
+        // "this one is alive" on its own; a shadow-glow underneath it for
+        // the same running state is a second signal for one meaning, and
+        // the composer's own focus shadow was measured and dropped for
+        // exactly this reason (see `DESIGN.md`'s surface-ladder section).
     }
 }
 

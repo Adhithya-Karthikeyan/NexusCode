@@ -89,10 +89,18 @@ into "an instrument with a screen."
 
 Elevation is **surfaces + 1px hairlines, never drop shadows** — unchanged,
 non-negotiable, already the house rule (`DesignSystem.swift`'s `hairline` doc
-comment). Shadows over a near-black canvas read as grey smudge; two themes
-(Cinder, Nightfall) are allowed a soft shadow specifically because they render
-real material over it, per the existing carve-out — every other theme stays at
-`shadowOpacity: 0`.
+comment). Shadows over a near-black canvas read as grey smudge; Cinder and
+Nightfall are allowed a soft shadow at rest specifically because they render
+real material over it, per the existing carve-out.
+
+This was tested against, not just assumed, for one more candidate this pass:
+a supplementary shadow under the composer on focus, alongside its existing
+2px `chromeBorderFocus` border. Measured on Meridian at full window size, the
+border alone already reads as an unmissable focus signal; the shadow added
+only a barely-perceptible edge on top of it — a second signal for the one
+meaning "this has focus," and the exact register (a glow under the composer)
+the owner already called out as cheap once. Rejected — the border is the
+whole signal, no exception, the rule stays unqualified.
 
 ## Type scale
 
@@ -111,9 +119,10 @@ screen in this pass:
   (metadata, timestamps, hints) — `textMuted` is not a way to make ordinary
   content quieter, it's a semantic demotion.
 - `Kind.mono`/`.monoSmall` are reserved for literal machine output — the
-  `nexus` command line, raw JSON, diffs, model IDs. Using monospace for UI
-  labels (as the current top-strip effort pills do) is exactly the "terminal
-  wearing a window" problem HIG's materials note warns about — stop.
+  `nexus` command line, raw JSON, diffs, model IDs, provider/model/role picker
+  values. Plain English control copy (a button label, a toggle's name) is
+  never mono, even sitting right next to a mono value — that's the "terminal
+  wearing a window" problem HIG's materials note warns about.
 
 ## Colour system
 
@@ -126,10 +135,21 @@ Accent is allowed on exactly three things, because these are the only three
 places "this is live / this is yours to act on" is a real signal:
 1. **Current selection / navigation position** — the active sidebar row, the
    active tab.
-2. **The one primary action on screen** — Send, the focused CTA in an empty
-   state, never more than one per screen.
+2. **The one primary action per independent section** — Send, the focused CTA
+   in an empty state, one `RunButton` per self-contained card on a screen
+   built from several independent tool cards (Git's Explain/Review/Commit/PR
+   each run a genuinely different command — this is Linear's own rule, cited
+   above, "one primary CTA per section," not "per screen"; a single-flow
+   screen like Chat still gets exactly one, because it has exactly one
+   section). Never two competing accent CTAs answering the SAME decision.
 3. **Live/running state** — `StatusDot` while a run is active, streaming text
-   cursor.
+   cursor, an active-count badge.
+
+Also never a shadow standing in for the same live/running signal a border or
+dot already carries on the same element — measured and rejected twice this
+pass (the composer's focus shadow, `AgentCard`'s running-state glow): one
+signal per meaning, and elevation is surfaces + hairlines regardless of what
+that signal is.
 
 Accent is NOT allowed on: decorative icon tints, placeholder copy, static
 segmented-control tracks that aren't mid-interaction, dropdown chevrons, or
@@ -184,12 +204,11 @@ because nothing moves that doesn't have to.
   demoted to `textSecondary` unless actively open.
 - **Canvas**: level-1 bounded panel per "surface ladder" above — this is the
   fix for "text floating in a void."
-  **Note:** `ConversationView.swift` has one small in-flight change (an effort
-  picker is being removed from the strip) — re-read it before editing so this
-  work doesn't collide.
 - **Composer**: level-0 sunken field inside the level-1 canvas panel — it
   should read as recessed relative to its container, which is what "sunken"
-  is for and what currently isn't happening.
+  is for and what currently isn't happening. Focus is the border alone
+  (`chromeBorderFocus`, 2px) — no supplementary shadow; see "surface ladder"
+  above for why that was tried and rejected.
 - **Transcript**: max content width per "density and rhythm," `Kind.mono` only
   for literal machine output.
 - **Empty states**: `HeroEmptyState` keeps its hero glyph/gradient (the one
