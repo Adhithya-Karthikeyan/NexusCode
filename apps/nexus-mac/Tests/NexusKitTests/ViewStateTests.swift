@@ -365,6 +365,90 @@ final class ViewStateTests: XCTestCase {
         XCTAssertEqual(switchTarget("groq", "llama-3.1-70b").label, "groq/llama-3.1-70b")
     }
 
+    // MARK: - Turn attribution (`Turn.provider`/`.model`)
+    //
+    // A turn must remember who ACTUALLY answered it, captured once from
+    // `session` when the turn started — never re-derived from wherever
+    // `session` currently points, which moves forward on a later switch.
+
+    func testTurnCapturesTheProviderModelActiveWhenItStarted() throws {
+        var state = ViewState()
+        state.reduce(.session(.init(id: "run1", sessionId: "s1", provider: "mock", model: "mock-fast", ts: 0)), ts: 0)
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "hi")), ts: 1)
+        state.reduce(.text(.init(lane: "main", delta: "hello")), ts: 2)
+
+        let turn = try XCTUnwrap(state.lanes["main"]?.live)
+        XCTAssertEqual(turn.provider, "mock")
+        XCTAssertEqual(turn.model, "mock-fast")
+    }
+
+    /// The core guarantee: an EARLIER turn keeps pointing at the provider
+    /// that actually produced it even after a LATER accepted switch moves
+    /// `session` on to a different target — otherwise a transcript mixing
+    /// providers would relabel its own history the moment a switch happened.
+    func testTurnAttributionSurvivesALaterAcceptedSwitchOnEarlierTurns() throws {
+        var state = ViewState()
+        state.reduce(.session(.init(id: "run1", sessionId: "s1", provider: "mock", model: "mock-fast", ts: 0)), ts: 0)
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "first")), ts: 1)
+        state.reduce(.text(.init(lane: "main", delta: "first answer")), ts: 2)
+        state.reduce(.done(.init(lane: "main", finishReason: "stop")), ts: 3)
+
+        state.reduce(
+            .switch(.init(
+                lane: "main",
+                from: switchTarget("mock", "mock-fast"),
+                to: switchTarget("codex", "gpt-5"),
+                accepted: true, blockers: [], warnings: [], preserved: [], adaptations: [],
+                reason: "explicit switch requested by client"
+            )),
+            ts: 4
+        )
+        state.reduce(.prompt(.init(lane: "main", id: "p1", text: "second")), ts: 5)
+        state.reduce(.text(.init(lane: "main", delta: "second answer")), ts: 6)
+
+        let first = try XCTUnwrap(state.lanes["main"]?.finalized.first)
+        XCTAssertEqual(first.provider, "mock", "the turn that actually ran on mock must keep saying mock")
+        XCTAssertEqual(first.model, "mock-fast")
+
+        let second = try XCTUnwrap(state.lanes["main"]?.live)
+        XCTAssertEqual(second.provider, "codex", "a turn started AFTER the switch belongs to the new target")
+        XCTAssertEqual(second.model, "gpt-5")
+
+        // And `session` itself (what a status bar/picker would read) has
+        // moved on — the two turns are provably not reading the same value.
+        XCTAssertEqual(state.session?.provider, "codex")
+    }
+
+    func testTurnAttributionIsNilWhenNoSessionEventHasLandedYet() throws {
+        var state = ViewState()
+        state.reduce(.prompt(.init(lane: "main", id: "p0", text: "hi")), ts: 0)
+        let turn = try XCTUnwrap(state.lanes["main"]?.live)
+        XCTAssertNil(turn.provider)
+        XCTAssertNil(turn.model)
+    }
+
+    /// Determinism: folding the identical log twice must attribute every
+    /// turn identically, the same guarantee `testFoldIsDeterministic`
+    /// already asserts for the fold as a whole — this pins it specifically
+    /// to the new fields, which are populated from `self.session` at fold
+    /// time rather than a value threaded explicitly through the event.
+    func testTurnAttributionReplaysIdenticallyAcrossASwitch() {
+        let events: [UiEvent] = [
+            .session(.init(id: "run1", sessionId: "s1", provider: "mock", model: "mock-fast", ts: 0)),
+            .prompt(.init(lane: "main", id: "p0", text: "first")),
+            .text(.init(lane: "main", delta: "a")),
+            .done(.init(lane: "main", finishReason: "stop")),
+            .switch(.init(
+                lane: "main", from: switchTarget("mock", "mock-fast"), to: switchTarget("codex", "gpt-5"),
+                accepted: true, blockers: [], warnings: [], preserved: [], adaptations: [],
+                reason: "explicit switch requested by client"
+            )),
+            .prompt(.init(lane: "main", id: "p1", text: "second")),
+            .text(.init(lane: "main", delta: "b")),
+        ]
+        XCTAssertEqual(ViewState.reduce(events: events), ViewState.reduce(events: events))
+    }
+
     // MARK: - Transcript timeline (turns + switches merged)
     //
     // `ConversationView` renders one lane's history as turns and switches

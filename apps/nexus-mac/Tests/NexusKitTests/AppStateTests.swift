@@ -413,8 +413,21 @@ final class AppStateTests: XCTestCase {
     }
 
     // MARK: - Provider switching (regression)
+    //
+    // History: this used to assert a provider/model change on a live session
+    // RELAUNCHES the backend (tear down, respawn, `--resume`) — the fix, at
+    // the time, for the picker claiming one provider while a stale process
+    // kept answering from another. That relaunch is now itself superseded:
+    // `nexus chat --persistent` accepts an in-process `{"type":"switch",…}`
+    // control line, so the SAME live process can retarget without ever being
+    // torn down. `testProviderChangeOnALiveSessionSendsASwitchControlLineRatherThanTearingDownTheSession`
+    // below is the current regression guard for the underlying defect (a
+    // picker that lies about what's serving); relaunching is now reserved
+    // for the cases a control line genuinely cannot cover — see
+    // `testSwitchingRoleRelaunchesTheBackend` and
+    // `testNoLiveSessionYetStillLaunchesDirectlyWithTheCurrentSelection`.
 
-    func testSwitchingProviderRelaunchesTheBackend() async throws {
+    func testProviderChangeOnALiveSessionSendsASwitchControlLineRatherThanTearingDownTheSession() {
         let c = controller()
         c.mode = .ask
         c.provider = "alpha"
@@ -435,12 +448,157 @@ final class AppStateTests: XCTestCase {
         c.model = "beta-1"
         c.submit("second")
 
-        // REGRESSION GUARD. The original implementation only spawned when
-        // `session == nil`, so a switch left the ORIGINAL process running: the
-        // picker said Codex while Claude kept answering. The backend must now
-        // be relaunched against the new selection.
+        // REGRESSION GUARD (current). Unlike the old relaunch behavior, a
+        // provider/model change on an already-live persistent session must
+        // NOT tear the process down: `submit()` only calls `stopLiveSession`
+        // for a ROLE change now (see the MARK comment above). If this had
+        // relaunched, `activeBackendProvider`/`activeBackendModel` would
+        // already read "beta"/"beta-1" — `submitToPersistentSession`
+        // assigns `launchedWith` SYNCHRONOUSLY, before any await, the moment
+        // it spawns a fresh process (see `testSwitchingProviderRelaunchesTheBackend`'s
+        // prior version, which asserted exactly that transition). Reading
+        // "alpha"/"alpha-1" here instead proves no relaunch occurred — the
+        // real backend is still the one from "first", now waiting on a
+        // `switch` control line to actually retarget it (verified end to
+        // end, including the retarget itself, in `SwitchWiringTests`).
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+        XCTAssertEqual(c.activeBackendModel, "alpha-1")
+    }
+
+    /// A role change is a different kind of change than provider/model: it
+    /// moves the run onto `nexus agent --role`, which has no `--persistent`
+    /// mode at all (see `usesPersistentSession`) — no control line could ever
+    /// cover it, so it must keep relaunching even when a provider/model
+    /// change rides along with it in the same picker update.
+    func testRoleChangeStillRelaunchesEvenAlongsideAProviderChange() {
+        let c = controller()
+        c.mode = .agent
+        c.provider = "alpha"
+        c.model = "alpha-1"
+        // role == nil here: identical to `.ask`, runs the persistent session.
+        c.submit("first")
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+
+        c.cancel()
+        c.provider = "beta"
+        c.model = "beta-1"
+        c.role = "coder"
+        c.submit("second")
+
+        // A role change moved this off the persistent session entirely —
+        // must never look like a live in-process switch.
+        XCTAssertNil(c.activeBackendProvider)
+    }
+
+    /// The other explicit carve-out: with no live session yet, there is
+    /// nothing to switch IN — the very first launch just bakes the current
+    /// selection into argv, same as always.
+    func testNoLiveSessionYetStillLaunchesDirectlyWithTheCurrentSelection() {
+        let c = controller()
+        c.mode = .ask
+        c.provider = "alpha"
+        c.model = "alpha-1"
+
+        c.submit("first")
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+        XCTAssertEqual(c.activeBackendModel, "alpha-1")
+    }
+
+    // MARK: - Switch control line
+
+    func testSwitchControlLineMatchesTheCLIsWireFormat() {
+        // Exact shape `parseSwitchDecision` requires (`packages/cli/src/commands.ts`):
+        // `{"type":"switch","provider":"…"}`, with `model` present only when set.
+        let withModel = SwitchRequest(provider: "codex", model: "gpt-5")
+        XCTAssertEqual(withModel.controlLine, "{\"type\":\"switch\",\"provider\":\"codex\",\"model\":\"gpt-5\"}")
+
+        let withoutModel = SwitchRequest(provider: "codex", model: nil)
+        XCTAssertEqual(withoutModel.controlLine, "{\"type\":\"switch\",\"provider\":\"codex\"}")
+    }
+
+    func testSwitchControlLineEscapesQuotesAndBackslashes() {
+        let request = SwitchRequest(provider: "weird\"provider\\", model: nil)
+        XCTAssertEqual(request.controlLine, "{\"type\":\"switch\",\"provider\":\"weird\\\"provider\\\\\"}")
+    }
+
+    // MARK: - Switch reconciliation (`absorb`'s `.switch` handling)
+    //
+    // `absorb` is the seam that actually reacts to a real `switch` UiEvent —
+    // exercised here directly (it is non-`private` for exactly this reason,
+    // same as `persistentSessionArguments()`) so these stay fast, synchronous
+    // unit tests rather than needing a real spawned backend. `SwitchWiringTests`
+    // covers the same behavior end to end against the real CLI.
+
+    private func switchEvent(
+        from: (String, String) = ("alpha", "alpha-1"),
+        to: (String, String),
+        accepted: Bool,
+        blockers: [String] = []
+    ) -> UiEvent {
+        .switch(.init(
+            lane: "main",
+            from: .init(providerId: from.0, modelId: from.1),
+            to: .init(providerId: to.0, modelId: to.1),
+            accepted: accepted,
+            blockers: blockers,
+            warnings: [],
+            preserved: accepted ? ["conversation transcript"] : [],
+            adaptations: [],
+            reason: "explicit switch requested by client"
+        ))
+    }
+
+    func testAcceptedSwitchEventUpdatesLaunchedWithAndThePickerToTheResolvedTarget() {
+        let c = controller()
+        c.mode = .ask
+        c.provider = "alpha"
+        c.model = "alpha-1"
+        c.submit("first")
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+
+        // The picker moved on to a target the CLI resolved to a DIFFERENT
+        // model than requested (e.g. `model` was left nil for the CLI's own
+        // default) — the picker must land on what actually happened, not
+        // what was merely asked for.
+        c.provider = "beta"
+        c.model = nil
+        c.absorb(.event(switchEvent(to: ("beta", "beta-resolved"), accepted: true)))
+
         XCTAssertEqual(c.activeBackendProvider, "beta")
-        XCTAssertEqual(c.activeBackendModel, "beta-1")
+        XCTAssertEqual(c.activeBackendModel, "beta-resolved")
+        XCTAssertEqual(c.provider, "beta")
+        XCTAssertEqual(c.model, "beta-resolved")
+    }
+
+    func testRefusedSwitchEventRevertsThePickerButLeavesTheLiveBackendAlone() {
+        let c = controller()
+        c.mode = .ask
+        c.provider = "alpha"
+        c.model = "alpha-1"
+        c.submit("first")
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+
+        // The user picked an unusable target — mirrors the real dropdown,
+        // which clears `model` the instant `provider` changes.
+        c.provider = "definitely-not-a-provider"
+        c.model = nil
+        c.absorb(.event(switchEvent(
+            to: ("definitely-not-a-provider", ""),
+            accepted: false,
+            blockers: ["\"definitely-not-a-provider\" is not available (no usable credential)"]
+        )))
+
+        // REGRESSION GUARD. The live backend never moved — `launchedWith`
+        // was never touched for this path (no relaunch happened) — so the
+        // PICKER must revert to match it. Leaving `provider`/`model` on the
+        // refused target is exactly the "picker claims a provider that
+        // isn't serving" bug this whole feature exists to close, just
+        // reached through the switch path instead of the original relaunch
+        // path.
+        XCTAssertEqual(c.provider, "alpha")
+        XCTAssertEqual(c.model, "alpha-1")
+        XCTAssertEqual(c.activeBackendProvider, "alpha")
+        XCTAssertEqual(c.activeBackendModel, "alpha-1")
     }
 
     func testSameProviderDoesNotRelaunchTheBackend() {
