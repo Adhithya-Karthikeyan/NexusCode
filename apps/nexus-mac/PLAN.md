@@ -1409,13 +1409,30 @@ fix didn't land" when the fix was in the source all along. Launch your own
 bundle id, bring it frontmost by ITS pid, then capture. `verify-shot.sh` in
 the scratchpad does this.
 
-All four regressions confirmed fixed in a first-hand capture: suggestion icons
-back inside their cards (`LazyVGrid` was placing every icon at the top-trailing
-corner of the WRONG cell — replaced with plain `VStack`/`HStack`; four fixed
-items never needed a lazy grid), provider control given a real 150pt ceiling
-rather than unbounded, command preview `.tail` instead of `.middle` (eliding
-the middle of a real command reads as corruption, not brevity), no stray
-composer icon.
+Two of the four "regressions" were REAL and are fixed: the provider control
+got a real 150pt ceiling instead of unbounded (`maxWidth: nil` let it grow to
+fill the strip), and the command preview uses `.tail` instead of `.middle`
+(eliding the middle of a real command reads as corruption, not brevity).
+
+### 🔴 The other two were NOT code bugs — a stale bundle id faked them
+The orphaned suggestion icons and the stray composer icon were a
+**WindowServer/surface-reuse artifact** from relaunching ONE bundle id dozens
+of times in a session, not anything in the view code. Isolated by elimination:
+swapping `LazyVGrid` for plain `VStack`/`HStack` changed nothing, forcing a
+full relayout by resizing changed nothing, capturing by `CGWindowID` instead
+of screen region changed nothing — then a brand-new bundle id rendered
+perfectly on first launch. Independently corroborated: this session's own
+`verify-shot.sh` used a fresh bundle id (`…mac.leadverify`) and the icons were
+inline on its first capture too.
+
+**An earlier note here credited the `LazyVGrid` swap with fixing it. That was
+wrong** — the icons were never broken in code. The swap was kept anyway
+(simpler for a fixed 4-item layout) but it fixed nothing.
+
+**Rule: use a FRESH bundle id per verification round.** A stale one can
+manufacture a convincing, reproducible, entirely fictional UI bug — and this
+one survived three separate disproof attempts before being caught. Add it to
+the same list as "a green suite is not evidence the feature works."
 
 ### Open
 1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
