@@ -160,7 +160,8 @@ public struct NexusBinary: Sendable {
         explicit: URL? = nil,
         repoRoot: URL? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        fileExists: @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+        fileExists: @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
+        canLaunch: @Sendable (String) -> Bool = { defaultCanLaunch($0, environment: ProcessInfo.processInfo.environment) }
     ) -> NexusBinary? {
         if let explicit, fileExists(explicit.path) { return NexusBinary(url: explicit) }
 
@@ -170,6 +171,16 @@ public struct NexusBinary: Sendable {
         // e.g. from an unquoted shell substitution) falls through to the
         // normal candidates below instead of being treated as an explicit
         // override that then predictably fails to resolve.
+        //
+        // Neither `explicit` nor `NEXUS_BIN` is run through `canLaunch`
+        // below: both are a deliberate user override, not a best-effort
+        // guess, and `explainMissing` promises a very specific message for
+        // "NEXUS_BIN is set but nothing executable exists there" — a
+        // launchability rejection here would make that message wrong (it DID
+        // find something) in exactly the way this whole mechanism exists to
+        // avoid. A `NEXUS_BIN` that exists but can't actually run still
+        // surfaces honestly — just later, as a launch-time error with the
+        // real stderr, not as a misleading "not found."
         if let override = environment["NEXUS_BIN"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !override.isEmpty {
             return fileExists(override) ? NexusBinary(url: URL(fileURLWithPath: override)) : nil
@@ -188,7 +199,14 @@ public struct NexusBinary: Sendable {
         for path in environment["PATH"]?.split(separator: ":") ?? [] {
             candidates.append("\(path)/nexus")
         }
-        return candidates.first(where: fileExists).map { NexusBinary(url: URL(fileURLWithPath: $0)) }
+        // `fileExists` alone is a false positive for a script whose shebang
+        // interpreter can't be found anywhere — it passes `isExecutableFile`
+        // and then fails the moment it's actually run. Filtering with
+        // `canLaunch` too means a candidate like that is skipped in favor of
+        // a LATER one that would actually work, instead of `discover`
+        // confidently handing back something dead.
+        return candidates.first(where: { fileExists($0) && canLaunch($0) })
+            .map { NexusBinary(url: URL(fileURLWithPath: $0)) }
     }
 
     /// Explains why `discover` returned `nil` — the ONE place that knows how
