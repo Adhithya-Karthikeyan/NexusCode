@@ -4,7 +4,7 @@
  * the assumed `codex exec --json` JSONL events (see provider ASSUMPTIONS), keyed
  * by FAKE_CODEX_MODE. Never touches the network; not the real codex binary.
  *
- * Modes: success | error | malformed | hang | version
+ * Modes: success | error | malformed | hang | version | untrusted-dir
  */
 
 const mode = process.env.FAKE_CODEX_MODE || "success";
@@ -17,6 +17,16 @@ function emit(obj) {
 if (mode === "version") {
   process.stdout.write("codex 0.9.0 (fake)\n");
   process.exit(0);
+}
+
+// Reproduces the real `codex exec --json` refusal observed outside a git
+// repo: no NDJSON on stdout at all, the trusted-directory line on stderr, exit
+// 1. See packages/providers/subprocess/src/base.ts CliSpec.translateFailure.
+if (mode === "untrusted-dir") {
+  process.stderr.write(
+    "Reading prompt from stdin...\nNot inside a trusted directory and --skip-git-repo-check was not specified.\n",
+  );
+  process.exit(1);
 }
 
 // Newer codex-rs schema: thread/turn/item envelopes (bare events, no `msg`).

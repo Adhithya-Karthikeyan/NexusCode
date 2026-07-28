@@ -123,8 +123,8 @@ public struct Turn: Sendable, Hashable, Identifiable {
     /// picker currently shows" — so replaying the same log twice produces
     /// byte-identical attribution. `nil` only when no `session` event has
     /// landed yet (practically never in a real run).
-    public let provider: String? = nil
-    public let model: String? = nil
+    public let provider: String?
+    public let model: String?
 
     /// Whether this turn came from the agent loop at all.
     public var isAgentRun: Bool { !agentSteps.isEmpty }

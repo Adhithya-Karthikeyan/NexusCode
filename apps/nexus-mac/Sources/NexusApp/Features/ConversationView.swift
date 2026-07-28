@@ -167,8 +167,11 @@ struct ConversationView: View {
                             ForEach(controller.view.timeline(forLane: laneId)) { entry in
                                 switch entry {
                                 case .turn(let turn, let isLive):
-                                    TurnView(turn: turn, showsReasoning: showsReasoning, isStreaming: isLive)
-                                        .id(turn.id)
+                                    TurnView(
+                                        turn: turn, showsReasoning: showsReasoning, isStreaming: isLive,
+                                        currentProvider: controller.view.session?.provider
+                                    )
+                                    .id(turn.id)
                                 case .providerSwitch(let receipt):
                                     SwitchReceiptView(receipt: receipt)
                                         .id(receipt.id)

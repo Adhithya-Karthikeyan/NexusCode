@@ -134,6 +134,37 @@ public enum EffortLevel: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// One provider/model switch request, ready to become the persistent stdin
+/// control line `nexus chat --persistent` documents (`parseSwitchDecision`,
+/// `packages/cli/src/commands.ts`): `{"type":"switch","provider":"…"}`, with
+/// `model` present only when set.
+///
+/// Mirrors `ApprovalDecision.controlLine` (`Approvals.swift`) exactly — same
+/// one-line, no-trailing-newline JSON-on-stdin shape (the caller appends
+/// `\n`; see `PersistentSession.send`), just a different `type` and no `id`
+/// to round-trip. This is the ESTABLISHED pattern for a persistent-session
+/// control line in this app; nothing here invents a second mechanism.
+struct SwitchRequest: Sendable, Hashable {
+    let provider: String
+    /// `nil` — never an empty string — when the caller wants the CLI to pick
+    /// a default for `provider` itself (`resolveSwitchModel`). Omitting the
+    /// key entirely is what signals that; sending `"model":""` would not.
+    let model: String?
+
+    var controlLine: String {
+        var json = "{\"type\":\"switch\",\"provider\":\"\(Self.escaped(provider))\""
+        if let model { json += ",\"model\":\"\(Self.escaped(model))\"" }
+        json += "}"
+        return json
+    }
+
+    private static func escaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+}
+
 /// Drives one conversation: builds the command, streams it, folds the events.
 ///
 /// All the interpretation lives in `ViewState`; this type owns only the
@@ -376,17 +407,42 @@ public final class ConversationController {
         diagnostics = []
 
         // A provider/model/role change means the LIVE backend (if any) no
-        // longer matches what should be running — including a role switch,
-        // which moves the run onto the one-shot path entirely. Tear the stale
-        // process down before dispatching, or it keeps running invisibly
-        // while a second, correctly-configured process also starts.
-        if let launched = launchedWith,
-           launched.provider != provider || launched.model != model || launched.role != role {
-            stopLiveSession()
+        // longer matches what should be running. Two structurally different
+        // fixes, not one:
+        //
+        // - A ROLE change crosses a process shape boundary a control line
+        //   cannot represent: `nexus agent --role` has no `--persistent`
+        //   mode (see `usesPersistentSession`), so moving into or out of a
+        //   role always needs a different process. Tear the stale one down.
+        // - A provider/model change on an otherwise-live persistent session
+        //   instead rides the SAME process, via the `{"type":"switch",…}`
+        //   control line `submitToPersistentSession` writes below —
+        //   `stopLiveSession` is deliberately NOT called here. The old
+        //   tear-down-and-`--resume` path silently orphaned the live
+        //   conversation the instant the picker moved on (a new process,
+        //   same transcript via `--resume`, but a full relaunch for what the
+        //   CLI can now do in-process) — this is the fix for that.
+        //
+        // A provider/model change with nothing live to switch IN (no
+        // persistent session ever started, or this dispatch isn't even
+        // persistent-session-shaped — e.g. compare/race) falls through to
+        // the same relaunch-on-next-dispatch behavior as before; there is no
+        // live process to preserve.
+        var pendingSwitch: SwitchRequest?
+        if let launched = launchedWith {
+            if launched.role != role {
+                stopLiveSession()
+            } else if launched.provider != provider || launched.model != model {
+                if usesPersistentSession, session != nil, let targetProvider = provider {
+                    pendingSwitch = SwitchRequest(provider: targetProvider, model: model)
+                } else {
+                    stopLiveSession()
+                }
+            }
         }
 
         if usesPersistentSession {
-            submitToPersistentSession(text)
+            submitToPersistentSession(text, switchRequest: pendingSwitch)
         } else {
             dispatchOneShot(plannedCommand(for: text))
         }
@@ -406,9 +462,20 @@ public final class ConversationController {
     }
 
     /// Single-lane: write the prompt to the conversation that is already open,
-    /// starting it on first use. Any stale process from a provider/model/role
-    /// change has already been stopped by `submit()` before this runs.
-    private func submitToPersistentSession(_ text: String) {
+    /// starting it on first use. Any stale process from a ROLE change has
+    /// already been stopped by `submit()` before this runs; a provider/model
+    /// change on an otherwise-live session instead arrives here as
+    /// `switchRequest`, non-nil.
+    ///
+    /// - Parameter switchRequest: when set, its control line is written to
+    ///   stdin BEFORE `text` — in the SAME `Task`, not two separate ones, so
+    ///   the two writes cannot reorder relative to each other no matter how
+    ///   the scheduler interleaves concurrent `Task`s. The CLI processes a
+    ///   `{"type":"switch",…}` control line to completion (emitting its
+    ///   `switch` event) before reading the next stdin line, accepted or
+    ///   refused either way (`performSwitch`, `packages/cli/src/commands.ts`)
+    ///   — so `text` always dispatches against whichever target actually won.
+    private func submitToPersistentSession(_ text: String, switchRequest: SwitchRequest? = nil) {
         if session == nil {
             let started = PersistentSession(
                 binary: binary,
@@ -430,7 +497,10 @@ public final class ConversationController {
                 self.isRunning = false
             }
         }
-        Task { [session] in await session?.send(text) }
+        Task { [session] in
+            if let switchRequest { await session?.send(switchRequest.controlLine) }
+            await session?.send(text)
+        }
     }
 
     /// Stop and discard the currently live persistent backend, if any. Called
@@ -454,7 +524,14 @@ public final class ConversationController {
         Task { [session] in await session?.send(decision.controlLine) }
     }
 
-    private func absorb(_ item: NexusStreamItem) {
+    /// Not `private`: `@testable import` needs to reach it directly to drive
+    /// `reconcile(switchEvent:)` with a synthetic `.switch` `UiEvent` — the
+    /// same reasoning `persistentSessionArguments()` documents for its own
+    /// visibility. `ingest(_:)` below is the public replay entry point and
+    /// deliberately does NOT run through here (see its doc): replaying a
+    /// past log must not re-trigger live-session side effects like
+    /// `reconcile`, only refold the transcript.
+    func absorb(_ item: NexusStreamItem) {
         switch item {
         case .event(let event):
             view.reduce(event, ts: nextTick())
@@ -464,6 +541,10 @@ public final class ConversationController {
             if case .session(let session) = event, let id = session.sessionId, sessionId == nil {
                 sessionId = id
             }
+            // The CLI's real answer to a switch control line this app sent —
+            // reconcile `launchedWith`/the picker with what actually happened
+            // rather than trusting the request was honored.
+            if case .switch(let e) = event { reconcile(switchEvent: e) }
             // A tool call is blocked waiting on the user; surface it.
             approvals.ingest(event)
             // A settled turn frees the composer; the process stays alive.
@@ -476,6 +557,42 @@ public final class ConversationController {
                 diagnostics.append("failed to launch nexus: \(message)")
             }
             isRunning = false
+        }
+    }
+
+    /// Reconcile `launchedWith` and the provider/model PICKER with a real
+    /// `switch` outcome — never trust the request that was sent, only the
+    /// CLI's answer to it.
+    ///
+    /// Accepted: the live backend genuinely IS `e.to` now — no relaunch
+    /// happened (`submit()` never called `stopLiveSession` for this path), so
+    /// `launchedWith` needs to catch up to match, and the picker lands on
+    /// whatever the CLI actually resolved (`e.to.modelId` can differ from
+    /// what was requested when `model` was left for `resolveSwitchModel` to
+    /// pick — see `SwitchRequest.model`'s doc).
+    ///
+    /// Refused: the live backend never moved off `e.from` — `launchedWith`
+    /// is already untouched (same reason), so the PICKER is what needs to
+    /// revert. Without this the UI keeps showing the rejected target while a
+    /// different provider silently keeps answering underneath — the exact
+    /// "picker claims a provider that isn't serving" defect this whole path
+    /// exists to close, just reached from a different direction than the
+    /// original bug report.
+    ///
+    /// Guarded on `launchedWith` being non-nil: a `.switch` event only ever
+    /// arrives in response to a control line THIS controller wrote onto an
+    /// already-live session (see `submit()`), so `launchedWith` is always set
+    /// by the time one lands; the guard is defensive, not load-bearing.
+    private func reconcile(switchEvent e: UiEvent.Switch) {
+        guard let launched = launchedWith else { return }
+        if e.accepted {
+            let resolvedModel = e.to.modelId.isEmpty ? nil : e.to.modelId
+            launchedWith = (e.to.providerId, resolvedModel, launched.role)
+            provider = e.to.providerId
+            model = resolvedModel
+        } else {
+            provider = launched.provider
+            model = launched.model
         }
     }
 

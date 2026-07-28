@@ -107,6 +107,41 @@ describe("subprocess base — transport failures", () => {
     expect(last?.type === "error" && last.error.message).toContain("resets at 2am");
   });
 
+  it("CliSpec.translateFailure enriches the message but never the classified code, and is opt-in per spec", async () => {
+    // A spec that recognizes a made-up "NOPE" precondition and translates it,
+    // keeping the raw text recoverable underneath — mirrors how the codex spec
+    // handles its real trusted-directory refusal one layer up.
+    const translatingSpec: CliSpec<SubprocessConfig> = {
+      ...noopSpec,
+      buildArgs: () => ["-e", "process.stderr.write('NOPE: precondition failed\\n'); process.exit(1)"],
+      translateFailure: (detail, cfg) =>
+        detail.includes("NOPE") ? `actionable hint about ${cfg.cwd ?? "(cwd)"}\n\n(raw: ${detail})` : undefined,
+    };
+    const adapter = createSubprocessAdapter({ bin: process.execPath, cwd: "/some/dir" }, translatingSpec);
+    const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
+    const last = chunks.at(-1);
+    expect(last?.type === "error" && last.error.code).toBe("cli_exit");
+    const message = last?.type === "error" ? last.error.message : "";
+    expect(message).toContain("actionable hint about /some/dir");
+    expect(message).toContain("NOPE: precondition failed");
+
+    // A DIFFERENT failure the translator's pattern does not match (no "NOPE")
+    // passes through completely untouched — the opt-in hook must not swallow
+    // unrelated failures.
+    const untranslatedSpec: CliSpec<SubprocessConfig> = {
+      ...translatingSpec,
+      buildArgs: () => ["-e", "process.stderr.write('totally unrelated failure\\n'); process.exit(1)"],
+    };
+    const adapter2 = createSubprocessAdapter({ bin: process.execPath }, untranslatedSpec);
+    const chunks2 = await collect(adapter2.stream(req(), ctx(new AbortController().signal)));
+    const last2 = chunks2.at(-1);
+    expect(last2?.type === "error" && last2.error.message).toBe("totally unrelated failure");
+
+    // A spec that omits translateFailure entirely (the default — e.g.
+    // claude-code) leaves every diagnostic exactly as reported.
+    expect(noopSpec.translateFailure).toBeUndefined();
+  });
+
   it("drains large stderr without deadlocking and caps the surfaced diagnostic", async () => {
     const noisySpec: CliSpec<SubprocessConfig> = {
       ...noopSpec,

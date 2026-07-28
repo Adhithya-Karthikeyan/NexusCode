@@ -205,6 +205,10 @@ describe("claude-code adapter — completion / error rules", () => {
     const last = chunks[chunks.length - 1];
     expect(last?.type === "error" && last.error.code).toBe("cli_exit");
     expect(last?.type === "error" && last.error.opts.exitCode).toBe(3);
+    // Regression: claude-code has no CliSpec.translateFailure (verified it has
+    // no codex-style directory precondition — a headless `-p` run works fine
+    // outside a git repo). The raw diagnostic must pass through unenriched.
+    expect(last?.type === "error" && last.error.message).toBe("exit 3");
   });
 });
 

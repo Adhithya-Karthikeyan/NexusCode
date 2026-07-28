@@ -92,7 +92,54 @@ describe("codex adapter — stream mapping", () => {
     const chunks = await collect(adapterFor("error").stream(req(), ctx(new AbortController().signal)));
     const last = chunks[chunks.length - 1];
     expect(last?.type === "error" && last.error.code).toBe("cli_exit");
-    expect(last?.type === "error" && last.error.message).toContain("overloaded");
+    expect(last?.type === "error" && last.error.message).toBe("model overloaded");
+    // Regression guard for the trusted-directory translator below: an
+    // unrelated codex failure must NOT pick up any of its wording — an
+    // over-broad matcher here would silently misclassify this failure under
+    // the trusted-directory translation, the same bug class the shared
+    // redactor's doc comment warns about one layer down.
+    expect(last?.type === "error" && last.error.message).not.toContain("trusted");
+    expect(last?.type === "error" && last.error.message).not.toContain("git repository");
+  });
+
+  // Regression: codex refuses to run outside a git repo unless
+  // `--skip-git-repo-check` is passed, and reports this ONLY on stderr with
+  // no NDJSON at all — exit 1, empty stdout. The raw text ("Not inside a
+  // trusted directory...") assumes the reader knows what codex is; the base's
+  // CliSpec.translateFailure hook (wired up in this package) must turn it into
+  // an actionable message naming the real directory, while keeping the
+  // original codex line recoverable underneath.
+  it("translates the untrusted-directory refusal into an actionable message naming the directory", async () => {
+    const adapter = createCodexAdapter({
+      bin: FAKE,
+      cwd: "/some/app/workspace",
+      resolveEnv: async () => ({ FAKE_CODEX_MODE: "untrusted-dir" }),
+    });
+    const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
+    const last = chunks[chunks.length - 1];
+    expect(last?.type === "error" && last.error.code).toBe("cli_exit");
+    const message = last?.type === "error" ? last.error.message : "";
+    expect(message).toContain("codex will not run in /some/app/workspace");
+    expect(message).toContain("not a git repository");
+    expect(message.toLowerCase()).toContain("trust it");
+    // The original CLI text is still recoverable, not replaced.
+    expect(message).toContain(
+      "Not inside a trusted directory and --skip-git-repo-check was not specified.",
+    );
+  });
+
+  it("names cfg.workdir (codex's own --cd target) over cfg.cwd when both are set", async () => {
+    const adapter = createCodexAdapter({
+      bin: FAKE,
+      cwd: "/spawn/cwd",
+      workdir: "/explicit/workdir",
+      resolveEnv: async () => ({ FAKE_CODEX_MODE: "untrusted-dir" }),
+    });
+    const chunks = await collect(adapter.stream(req(), ctx(new AbortController().signal)));
+    const last = chunks[chunks.length - 1];
+    const message = last?.type === "error" ? last.error.message : "";
+    expect(message).toContain("codex will not run in /explicit/workdir");
+    expect(message).not.toContain("/spawn/cwd");
   });
 
   it("recovers after one malformed line without violating the one-terminal contract", async () => {
