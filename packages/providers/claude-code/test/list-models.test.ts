@@ -140,3 +140,47 @@ describe("claude-code — listModels (live-probed via the real `/model` command)
     expect(capturedArgs).toEqual(["-p", "/model", "--output-format", "json"]);
   });
 });
+
+describe("claude-code — listModelsWithSource (provenance)", () => {
+  it("tags a genuine probe success \"provider\"", async () => {
+    const adapter = adapterFor("success");
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("provider");
+    expect(result.models.map((m) => m.id)).toContain("opus");
+  });
+
+  it("tags a timed-out probe \"fallback\" — never presented as confirmed", async () => {
+    const adapter = adapterFor("model-hang", { modelMap: { custom: "claude-custom-9" } });
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+    expect(result.models.map((m) => m.id)).toEqual(["claude-custom-9"]);
+  });
+
+  it("tags a non-zero CLI exit \"fallback\"", async () => {
+    const adapter = adapterFor("model-error");
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+  });
+
+  it("tags a binary-not-on-PATH degrade \"fallback\"", async () => {
+    const adapter = createClaudeCodeAdapter({ bin: "definitely-not-a-real-claude-binary-xyz" });
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+  });
+
+  it("listModels() and listModelsWithSource() share one cache — the CLI is only actually spawned once", async () => {
+    let spawnCount = 0;
+    const spawn: SpawnFn = (bin, args, opts) => {
+      spawnCount++;
+      return defaultSpawn(bin, args, opts) as SpawnedChild;
+    };
+    const adapter = createClaudeCodeAdapter({
+      bin: FAKE,
+      resolveEnv: async () => ({ FAKE_CLAUDE_MODE: "success" }),
+      spawn,
+    });
+    await adapter.listModels!();
+    await adapter.listModelsWithSource!();
+    expect(spawnCount).toBe(1);
+  });
+});

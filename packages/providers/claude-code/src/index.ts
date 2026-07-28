@@ -34,6 +34,7 @@ import type {
   ChatRequest,
   ContentBlock,
   ModelInfo,
+  ModelListResult,
   StreamChunk,
   Usage,
 } from "@nexuscode/shared";
@@ -472,19 +473,22 @@ const claudeCodeSpec: CliSpec<ClaudeCodeConfig> = {
  * wrapper catches that and degrades to the config-driven `modelMap` entries
  * only (never the deleted hardcoded catalog) — so a failed probe reads as
  * "we could not ask" rather than a fabricated or falsely-empty catalog.
+ * Tagged `source: "provider"` on a genuine probe success, `"fallback"` on
+ * degrade (see `ModelListSource`, `@nexuscode/shared`) — surfaced through
+ * `listModelsWithSource` (`@nexuscode/core`'s `ProviderAdapter`).
  */
 export function createClaudeCodeAdapter(cfg: ClaudeCodeConfig = {}): ProviderAdapter {
   const modelCache: ModelListCache = createModelListCache();
   const spec: CliSpec<ClaudeCodeConfig> = {
     ...claudeCodeSpec,
-    listModels: (c) =>
+    listModels: (c): Promise<ModelListResult> =>
       modelCache.get(async () => {
         try {
           const ids = await probeClaudeCodeModels(c);
           const probed: ModelInfo[] = ids.map((id) => ({ id, modalities: ["text", "image"] }));
-          return unionModels(probed, buildModelInfos(c.modelMap));
+          return { models: unionModels(probed, buildModelInfos(c.modelMap)), source: "provider" };
         } catch {
-          return buildModelInfos(c.modelMap);
+          return { models: buildModelInfos(c.modelMap), source: "fallback" };
         }
       }),
   };

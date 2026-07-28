@@ -54,6 +54,15 @@ struct NexusMacApp: App {
 /// that theme simply doesn't follow the OS, which is the correct behaviour
 /// for a theme that was never designed with a light/dark counterpart.
 ///
+/// `workspace.matchSystemAppearance` gates that following via `AppTheme
+/// .displayed(for:matchSystemAppearance:)` rather than calling `resolved(for:)`
+/// unconditionally — the fix for a real bug: with no such gate, Daylight and
+/// Studio (the only two `isDark == false` hand-designed themes) were simply
+/// unreachable on a Mac in Dark Mode. Picking either one moved the Settings
+/// checkmark but `resolved(for:)` swapped the ACTUAL theme straight back to
+/// its dark pair every time, silently — see `SettingsView`'s swatch action
+/// for how an explicit pick now turns following off instead of losing.
+///
 /// `@Environment(\.colorScheme)` read here is the OS's own truth: nothing
 /// above this view calls `.preferredColorScheme`, so SwiftUI hasn't been told
 /// to override it yet. The resolved theme's `isDark` is what gets asserted
@@ -68,7 +77,7 @@ private struct ThemedRoot: View {
     @Environment(\.colorScheme) private var systemScheme
 
     private var resolvedTheme: AppTheme {
-        workspace.activeTheme.resolved(for: systemScheme)
+        workspace.activeTheme.displayed(for: systemScheme, matchSystemAppearance: workspace.matchSystemAppearance)
     }
 
     var body: some View {
@@ -93,6 +102,17 @@ final class WorkspaceModel {
         didSet { defaults.set(themeId, forKey: Keys.theme) }
     }
 
+    /// Whether a paired theme should follow the OS's own light/dark setting
+    /// (`AppTheme.resolved(for:)`) rather than rendering exactly as picked.
+    /// Defaults on, so nothing changes for anyone who never touches this —
+    /// but an explicit pick that disagrees with the current OS scheme turns
+    /// this off automatically (see `SettingsView`'s swatch action), because
+    /// the pick is the one thing that must always win. See `AppTheme
+    /// .displayed(for:matchSystemAppearance:)` for the full history.
+    var matchSystemAppearance: Bool = true {
+        didSet { defaults.set(matchSystemAppearance, forKey: Keys.matchSystem) }
+    }
+
     private(set) var conversation: ConversationController?
     private(set) var omc: OMCController?
     private(set) var binaryPath: String?
@@ -115,6 +135,7 @@ final class WorkspaceModel {
     private enum Keys {
         static let project = "nexus.projectDirectory"
         static let theme = "nexus.themeId"
+        static let matchSystem = "nexus.matchSystemAppearance"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -130,6 +151,13 @@ final class WorkspaceModel {
         if let saved = defaults.string(forKey: Keys.theme),
            AppTheme.named(saved) != nil || NexusTheme.named(saved) != nil {
             themeId = saved
+        }
+        // `bool(forKey:)` answers `false` for a key that was never set, which
+        // would silently flip the "defaults on" contract above for every
+        // user who has never touched this — `object(forKey:) != nil` is the
+        // only way to tell "saved false" apart from "never saved."
+        if defaults.object(forKey: Keys.matchSystem) != nil {
+            matchSystemAppearance = defaults.bool(forKey: Keys.matchSystem)
         }
         attach()
     }

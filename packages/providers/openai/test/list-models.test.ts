@@ -125,3 +125,69 @@ describe("openai-compat — listModels", () => {
     expect(models.some((m) => m.id === "gpt-4o")).toBe(true);
   });
 });
+
+describe("openai-compat — listModelsWithSource (provenance)", () => {
+  it("tags a genuine live /models result \"provider\", even when curated metadata enriches it", async () => {
+    const curated: ModelInfo[] = [{ id: "gpt-x", contextWindow: 4242, modalities: ["text", "image"] }];
+    const adapter = createOpenAICompatAdapter({
+      id: "test-compat",
+      apiKey: "sk-test",
+      models: curated,
+      createClient: () => fakeClientWith([{ id: "gpt-x" }, { id: "gpt-y" }]),
+    });
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("provider");
+    expect(result.models.map((m) => m.id)).toEqual(["gpt-x", "gpt-y"]);
+  });
+
+  it("tags the curated fallback \"fallback\" when the endpoint errors", async () => {
+    const curated: ModelInfo[] = [{ id: "fallback-1", modalities: ["text"] }];
+    const adapter = createOpenAICompatAdapter({
+      id: "test-compat",
+      apiKey: "sk-test",
+      models: curated,
+      createClient: () => throwingClient(),
+    });
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+    expect(result.models).toEqual(curated);
+  });
+
+  it("tags an empty-but-successful live response \"fallback\" too — success alone isn't enough", async () => {
+    const curated: ModelInfo[] = [{ id: "only", modalities: ["text"] }];
+    const adapter = createOpenAICompatAdapter({
+      id: "test-compat",
+      apiKey: "sk-test",
+      models: curated,
+      createClient: () => fakeClientWith([]),
+    });
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+  });
+
+  it("tags the no-credential fallback \"fallback\"", async () => {
+    const adapter = createOpenAICompatAdapter({ id: "test-compat", models: DEFAULT_OPENAI_MODELS });
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+  });
+
+  it("listModels() and listModelsWithSource() share one cache — /models is only actually hit once", async () => {
+    let calls = 0;
+    const adapter = createOpenAICompatAdapter({
+      id: "test-compat",
+      apiKey: "sk-test",
+      models: [],
+      createClient: () => ({
+        models: {
+          list: async () => {
+            calls++;
+            return { data: [{ id: "m1" }] };
+          },
+        },
+      }) as unknown as OpenAI,
+    });
+    await adapter.listModels!();
+    await adapter.listModelsWithSource!();
+    expect(calls).toBe(1);
+  });
+});

@@ -263,6 +263,26 @@ public extension AppTheme {
         return pairedTheme ?? self
     }
 
+    /// What actually gets rendered — `resolved(for:)` when the user wants OS
+    /// appearance-following, or this EXACT theme, unchanged, when they don't.
+    ///
+    /// Before this existed, `ThemedRoot` (`NexusApp.swift`) called
+    /// `resolved(for:)` unconditionally, with no way to opt out — which made
+    /// two of the seven hand-designed themes (Daylight, Studio; both `isDark
+    /// == false`) permanently unreachable on a Mac in Dark Mode: picking
+    /// either one in Settings moved the checkmark but `resolved(for:)` swapped
+    /// the ACTUAL theme straight back to its dark pair every time, silently.
+    /// A control that visibly does nothing when clicked is worse than no
+    /// control at all — this is that fix. `matchSystemAppearance` is a real,
+    /// user-visible, opt-in toggle (Settings), defaulting on so existing
+    /// pairing behaviour is unchanged for anyone who wants it; the moment a
+    /// user's explicit pick disagrees with the OS scheme, the app turns the
+    /// toggle off FOR them (see `WorkspaceModel`), because an explicit pick
+    /// is the one thing that must always win.
+    func displayed(for scheme: ColorScheme, matchSystemAppearance: Bool) -> AppTheme {
+        matchSystemAppearance ? resolved(for: scheme) : self
+    }
+
     func surface(_ level: Int) -> Color { elevation.step(level).surfaceColor }
     func border(_ level: Int) -> Color { elevation.step(level).borderColor }
 

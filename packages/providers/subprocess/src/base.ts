@@ -32,6 +32,7 @@ import type {
   FinishReason,
   Message,
   ModelInfo,
+  ModelListResult,
   StreamChunk,
   Usage,
 } from "@nexuscode/shared";
@@ -149,13 +150,16 @@ export interface CliSpec<Cfg extends SubprocessConfig> {
   readonly versionArgs?: string[];
   capabilities(cfg: Cfg): Capabilities;
   /**
-   * Optional real model discovery. A wrapped coding CLI has no models API, so
-   * this returns the vendor CLI's curated selectable models (plus any
-   * config-driven aliases). The base wraps it so `listModels` never throws —
-   * any failure degrades to `capabilities(cfg).models`. Omit to leave the
-   * adapter without a `listModels` method.
+   * Optional real model discovery, WITH provenance: a wrapped coding CLI has
+   * no models API, so this probes the vendor CLI itself (e.g. `claude -p
+   * "/model"`, `codex doctor --json`) and returns `source: "provider"` when
+   * that probe genuinely confirmed something, or the config-driven
+   * `modelMap` aliases tagged `source: "fallback"` when it could not. The
+   * base wraps it so the adapter's `listModels`/`listModelsWithSource` never
+   * throw — any failure degrades to `capabilities(cfg).models` tagged
+   * `"fallback"`. Omit to leave the adapter without either method.
    */
-  listModels?(cfg: Cfg): ModelInfo[] | Promise<ModelInfo[]>;
+  listModels?(cfg: Cfg): ModelListResult | Promise<ModelListResult>;
   /** Resolve the native model id for this request. */
   resolveModel(cfg: Cfg, req: ChatRequest): string;
   /** Build the child's argv from config + request + durable provider session slot. */
@@ -656,18 +660,27 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
   const capabilities = async (): Promise<Capabilities> => spec.capabilities(cfg);
 
   /**
-   * Model discovery for a wrapped CLI: the spec's curated selectable models.
-   * Present only when the spec supplies `listModels`. Never throws — any failure
-   * degrades to the declared `capabilities().models`.
+   * Model discovery for a wrapped CLI, WITH provenance — present only when
+   * the spec supplies `listModels`. Never throws: any failure degrades to
+   * the declared `capabilities().models`, tagged `source: "fallback"` (this
+   * is a SECOND, base-level fallback on top of whatever the spec's own
+   * closure already does internally — e.g. claude-code's probe already
+   * catches its own failure and degrades to config aliases; this only fires
+   * if the spec's closure itself somehow throws).
    */
-  const listModels = spec.listModels
-    ? async (): Promise<ModelInfo[]> => {
+  const listModelsWithSource = spec.listModels
+    ? async (): Promise<ModelListResult> => {
         try {
           return await spec.listModels!(cfg);
         } catch {
-          return spec.capabilities(cfg).models;
+          return { models: spec.capabilities(cfg).models, source: "fallback" };
         }
       }
+    : undefined;
+
+  /** Back-compat surface — same result as {@link listModelsWithSource}, models only. */
+  const listModels = listModelsWithSource
+    ? async (): Promise<ModelInfo[]> => (await listModelsWithSource()).models
     : undefined;
 
   /**
@@ -743,5 +756,6 @@ export function createSubprocessAdapter<Cfg extends SubprocessConfig>(
     dispose,
   };
   if (listModels) adapter.listModels = listModels;
+  if (listModelsWithSource) adapter.listModelsWithSource = listModelsWithSource;
   return adapter;
 }

@@ -33,6 +33,7 @@ import type {
   ChatRequest,
   ContentBlock,
   ModelInfo,
+  ModelListResult,
   StreamChunk,
   Usage,
 } from "@nexuscode/shared";

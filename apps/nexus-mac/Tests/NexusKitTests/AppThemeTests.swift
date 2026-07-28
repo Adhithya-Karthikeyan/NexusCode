@@ -137,6 +137,41 @@ final class AppThemeTests: XCTestCase {
         }
     }
 
+    /// The regression this project actually shipped: `resolved(for:)` alone
+    /// made every paired theme whose `isDark` disagreed with the current OS
+    /// scheme unreachable — Daylight/Studio picked on a Mac in Dark Mode
+    /// silently rendered as their dark pair instead, with no way to override
+    /// it. `displayed(for:matchSystemAppearance:)` is the fix: an explicit
+    /// pick is not silently replaced by its pair once appearance-following
+    /// is off.
+    func testAnExplicitPickIsNotSilentlyReplacedByItsPairWhenMatchSystemAppearanceIsOff() throws {
+        for theme in AppTheme.all where theme.pairId != nil {
+            let paired = try XCTUnwrap(theme.pairedTheme)
+            let contradictingScheme: ColorScheme = paired.isDark ? .dark : .light
+
+            // The bug: unconditional `resolved(for:)` swaps to the pair.
+            XCTAssertEqual(theme.resolved(for: contradictingScheme).id, paired.id)
+
+            // The fix: with appearance-following off, the explicit pick
+            // stands regardless of what the OS scheme is.
+            XCTAssertEqual(
+                theme.displayed(for: contradictingScheme, matchSystemAppearance: false).id, theme.id,
+                "\(theme.id) must render as itself when matchSystemAppearance is off, even in \(contradictingScheme)"
+            )
+        }
+    }
+
+    func testDisplayedMatchesResolvedWhenMatchSystemAppearanceIsOn() {
+        for theme in AppTheme.all {
+            for scheme: ColorScheme in [.light, .dark] {
+                XCTAssertEqual(
+                    theme.displayed(for: scheme, matchSystemAppearance: true).id,
+                    theme.resolved(for: scheme).id
+                )
+            }
+        }
+    }
+
     // MARK: - Bridge from NexusTheme (backward compatibility)
 
     func testEveryGeneratedThemeStillBridgesToAWorkingAppTheme() {

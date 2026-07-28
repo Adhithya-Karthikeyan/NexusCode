@@ -562,8 +562,24 @@ private struct StatusMetric: View {
 struct SettingsView: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
+    @Environment(\.colorScheme) private var systemScheme
 
     private let columns = [GridItem(.adaptive(minimum: 168, maximum: 220), spacing: Space.md)]
+
+    /// Picking a theme is an explicit statement of intent and must always
+    /// win — see `AppTheme.displayed(for:matchSystemAppearance:)`'s doc for
+    /// the bug this fixes. If the pick disagrees with the OS's current
+    /// scheme, appearance-following is turned off FOR the user rather than
+    /// leaving it on to silently swap the pick back to its pair the instant
+    /// this returns; if it agrees, following (if already on) keeps working
+    /// exactly as before untouched.
+    private func selectTheme(_ candidate: AppTheme) {
+        workspace.themeId = candidate.id
+        let systemWantsDark = systemScheme == .dark
+        if candidate.isDark != systemWantsDark {
+            workspace.matchSystemAppearance = false
+        }
+    }
 
     var body: some View {
         // Header pinned, body fills-or-scrolls — see `PageScaffold`'s doc
@@ -587,12 +603,14 @@ struct SettingsView: View {
         } content: {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
+                    matchSystemAppearanceRow
+
                     LazyVGrid(columns: columns, spacing: Space.md) {
                         ForEach(AppTheme.all) { candidate in
                             ThemeSwatchButton(
                                 theme: candidate,
                                 isSelected: candidate.id == workspace.themeId,
-                                action: { workspace.themeId = candidate.id }
+                                action: { selectTheme(candidate) }
                             )
                         }
                     }
@@ -610,7 +628,7 @@ struct SettingsView: View {
                             ThemeSwatchButton(
                                 theme: candidate.appTheme,
                                 isSelected: candidate.id == workspace.themeId,
-                                action: { workspace.themeId = candidate.id }
+                                action: { selectTheme(candidate.appTheme) }
                             )
                         }
                     }
@@ -645,6 +663,28 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    /// The escape hatch for `AppTheme.displayed(for:matchSystemAppearance:)`
+    /// — visible, adjustable, on by default. Turning it back on after an
+    /// explicit pick auto-disabled it (see `selectTheme`) resumes normal
+    /// pairing; turning it off deliberately pins whatever is picked next
+    /// regardless of the OS scheme.
+    private var matchSystemAppearanceRow: some View {
+        Toggle(isOn: Binding(
+            get: { workspace.matchSystemAppearance },
+            set: { workspace.matchSystemAppearance = $0 }
+        )) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Match system appearance")
+                    .font(Kind.bodyEmphasis)
+                    .foregroundStyle(theme.color(\.textPrimary))
+                Text("A paired theme (e.g. Meridian ↔ Studio) follows Light/Dark Mode. Off pins exactly the theme picked below.")
+                    .font(Kind.caption)
+                    .foregroundStyle(theme.color(\.textMuted))
+            }
+        }
+        .toggleStyle(.switch)
     }
 }
 
@@ -830,6 +870,17 @@ struct ChatTab: View {
             let loaded = await providers.models(for: providerId)
             models = loaded.map { PickerOption(id: $0.id, detail: $0.hint) }
             loadingModels = false
+            // Preselect the first model, same reasoning as the provider
+            // preselect above: an empty "model" placeholder reads as broken
+            // chrome, not as "nothing to configure here," and it's the exact
+            // control the owner has twice reported as "not working." Guarded
+            // on the provider still matching at completion — if the user
+            // switched providers again while this load was in flight, that
+            // NEWER call's own completion is what should win here, not this
+            // now-stale one.
+            if controller.provider == providerId, controller.model == nil, let first = loaded.first {
+                controller.model = first.id
+            }
         }
     }
 }
