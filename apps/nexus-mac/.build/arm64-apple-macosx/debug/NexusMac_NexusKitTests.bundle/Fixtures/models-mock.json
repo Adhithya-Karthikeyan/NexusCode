@@ -3,8 +3,8 @@
   "kind": "mock",
   "available": true,
   "models": [
-    { "id": "mock-fast", "hint": "32k ctx" },
-    { "id": "mock-smart", "hint": "128k ctx" },
+    { "id": "mock-fast", "source": "fallback", "hint": "32k ctx" },
+    { "id": "mock-smart", "source": "fallback", "hint": "128k ctx" },
     { "id": "mock-tools" },
     { "hint": "row with no id must be dropped" }
   ]

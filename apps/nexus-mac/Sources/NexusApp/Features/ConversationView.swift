@@ -552,14 +552,24 @@ struct ControlStrip: View {
         }
     }
 
+    /// `approvalControl` moved onto ROW ONE with `runConfigGroup` here — it
+    /// is the third of the three run-configuration categories this file's
+    /// own doc comment already names (what the run IS / what answers it /
+    /// what it's allowed to do), so it belongs beside the other two, not
+    /// alone on row two. Before this, row two was `approvalControl` pinned
+    /// leading, a `Spacer`, then `utilityTray` pinned trailing — one small
+    /// control on the left, two on the right, a long empty gap between:
+    /// coherent controls split across the full width for no reason. Row two
+    /// is now `utilityTray` alone, reading as its own row rather than half
+    /// of a broken one.
     private var twoRowStack: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            runConfigGroup
             HStack(spacing: Space.md) {
+                runConfigGroup
+                GroupDivider()
                 approvalControl
-                Spacer(minLength: Space.lg)
-                utilityTray
             }
+            utilityTray
         }
     }
 
