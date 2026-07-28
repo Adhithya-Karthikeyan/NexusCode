@@ -306,9 +306,13 @@ private struct TaskRow: View {
                 }
 
                 HStack(spacing: Space.xs) {
+                    // All neutral: these are several equally-valid transitions
+                    // for the user to pick among, not one privileged action —
+                    // singling out "Done" in accent was exactly the kind of
+                    // arbitrary colour DESIGN.md's rationing rule rules out.
                     ForEach(availableTransitions, id: \.self) { status in
                         Button(actionLabel(for: status)) { onSetStatus(status) }
-                            .buttonStyle(SoftButton(tone: status == .done ? .accent : .neutral, size: .compact))
+                            .buttonStyle(SoftButton(tone: .neutral, size: .compact))
                     }
                     Spacer(minLength: 0)
                     Button {

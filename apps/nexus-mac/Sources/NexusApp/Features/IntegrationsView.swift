@@ -369,7 +369,10 @@ private struct McpServerRow: View {
                     if !server.enabled {
                         CountPill(text: "disabled", tone: .neutral)
                     } else if server.connected {
-                        CountPill(text: "\(server.toolCount) tools", tone: .accent)
+                        // Neutral: a connected server's tool count is a
+                        // static fact about it, not a live/running signal —
+                        // `StatusDot` above already carries "connected."
+                        CountPill(text: "\(server.toolCount) tools", tone: .neutral)
                     } else {
                         CountPill(text: "failed", tone: .danger)
                     }
