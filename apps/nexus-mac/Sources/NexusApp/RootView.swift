@@ -29,27 +29,38 @@ struct RootView: View {
             // `ignoresSafeArea`, `unifiedCompact`) each failed to move it. Owning
             // the split directly removes the whole interaction: both columns are now
             // ordinary views inside one content area with one safe area.
-            HStack(spacing: 0) {
-                Sidebar()
-                    .frame(width: 248)
+            // `GeometryReader` here answers exactly one question — is the
+            // WINDOW narrow — so `Sidebar` can collapse to icons-only below
+            // the app's own documented minimum width (900pt). Before this,
+            // the sidebar held a fixed 248pt at every window size, which
+            // made it a LARGER proportion of the window the narrower the
+            // window got — at 900pt it was eating close to 30% of the frame,
+            // exactly backwards from every competitor, which narrows or
+            // collapses the rail as the window does.
+            GeometryReader { geometry in
+                let isCompact = geometry.size.width < 1000
+                HStack(spacing: 0) {
+                    Sidebar(isCompact: isCompact)
+                        .frame(width: isCompact ? 64 : 248)
 
-                Rectangle()
-                    .fill(theme.hairline)
-                    .frame(width: 1)
+                    Rectangle()
+                        .fill(theme.hairline)
+                        .frame(width: 1)
 
-                VStack(spacing: 0) {
-                    if let problem = workspace.setupProblem {
-                        SetupBanner(message: problem)
+                    VStack(spacing: 0) {
+                        if let problem = workspace.setupProblem {
+                            SetupBanner(message: problem)
+                        }
+                        // `CanvasPanel`, not a bare `.frame`: every screen gets a
+                        // bounded, bordered instrument frame instead of rendering
+                        // straight onto the window's floor colour. See
+                        // `DESIGN.md` and that view's doc comment.
+                        CanvasPanel {
+                            content
+                        }
                     }
-                    // `CanvasPanel`, not a bare `.frame`: every screen gets a
-                    // bounded, bordered instrument frame instead of rendering
-                    // straight onto the window's floor colour. See
-                    // `DESIGN.md` and that view's doc comment.
-                    CanvasPanel {
-                        content
-                    }
+                    .background(theme.color(\.surfaceBase))
                 }
-                .background(theme.color(\.surfaceBase))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -150,6 +161,12 @@ private let costIncompleteHelp = "Partial total — pricing is unknown for at le
 private struct Sidebar: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
+    /// Below the app's own 900pt documented minimum width, the sidebar drops
+    /// text and collapses to icons — see `RootView`'s `GeometryReader` for
+    /// the breakpoint. Every row keeps its name as a hover tooltip and its
+    /// existing `accessibilityLabel`, so nothing here is discoverable only
+    /// by trial and error.
+    let isCompact: Bool
 
     var body: some View {
         // A `List` rather than a bare `VStack`. Only a List's scroll view
@@ -160,19 +177,25 @@ private struct Sidebar: View {
         // and row chrome preserves the fully custom look.
         List {
             Group {
-                BrandHeader()
+                BrandHeader(isCompact: isCompact)
                     .padding(.bottom, Space.md)
 
-                ProjectSwitcherRow()
+                ProjectSwitcherRow(isCompact: isCompact)
                     .padding(.bottom, Space.lg)
 
                 // Grouped, not one flat list of eight. Ungrouped peers read as
                 // equal, which is wrong: Settings is configured once, Chat is
-                // used every session.
+                // used every session. Group LABELS drop when compact — there
+                // is no room for an 11pt tracked heading beside a 24pt icon
+                // column, and a truncated one would look worse than none.
                 ForEach(WorkspaceTab.Group.allCases) { group in
-                    SectionHeader(group.title)
-                        .padding(.top, group == .work ? 0 : Space.lg)
-                        .padding(.bottom, Space.xs)
+                    if !isCompact {
+                        SectionHeader(group.title)
+                            .padding(.top, group == .work ? 0 : Space.lg)
+                            .padding(.bottom, Space.xs)
+                    } else if group != .work {
+                        Color.clear.frame(height: Space.lg)
+                    }
 
                     VStack(spacing: 2) {
                         ForEach(WorkspaceTab.tabs(in: group)) { tab in
@@ -180,13 +203,14 @@ private struct Sidebar: View {
                                 tab: tab,
                                 isSelected: workspace.tab == tab,
                                 badge: badge(for: tab),
+                                isCompact: isCompact,
                                 action: { workspace.tab = tab }
                             )
                         }
                     }
                 }
             }
-            .listRowInsets(EdgeInsets(top: 0, leading: Space.md, bottom: 0, trailing: Space.md))
+            .listRowInsets(EdgeInsets(top: 0, leading: isCompact ? Space.xs : Space.md, bottom: 0, trailing: isCompact ? Space.xs : Space.md))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
         }
@@ -228,9 +252,11 @@ private struct Sidebar: View {
 /// status bar without duplicating the layout.
 private struct BrandHeader: View {
     @Environment(\.nexusTheme) private var theme
+    let isCompact: Bool
 
     var body: some View {
         HStack(spacing: Space.sm) {
+            if isCompact { Spacer(minLength: 0) }
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(theme.color(\.accentMuted))
@@ -239,10 +265,35 @@ private struct BrandHeader: View {
                     .font(.system(size: 14))
                     .foregroundStyle(theme.color(\.accentDefault))
             }
-            Text("NexusCode")
-                .font(Kind.title)
-                .foregroundStyle(theme.color(\.textPrimary))
+            if !isCompact {
+                Text("NexusCode")
+                    .font(Kind.title)
+                    .foregroundStyle(theme.color(\.textPrimary))
+            }
             Spacer(minLength: 0)
+        }
+        // Only touched in compact mode: the icon-only mark otherwise has no
+        // text of its own for VoiceOver to read. Untouched when the "NexusCode"
+        // text is present — that Text already reads correctly on its own.
+        .modifier(CompactAccessibilityLabel(isCompact: isCompact, label: "NexusCode"))
+    }
+}
+
+/// Applies a single accessibility label ONLY when `isCompact`, leaving the
+/// view's default (per-child) accessibility behaviour completely alone
+/// otherwise. Shared by `BrandHeader` and `ProjectSwitcherRow` — both drop a
+/// child `Text` in compact mode and need its name to survive somewhere.
+private struct CompactAccessibilityLabel: ViewModifier {
+    let isCompact: Bool
+    let label: String
+
+    func body(content: Content) -> some View {
+        if isCompact {
+            content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+        } else {
+            content
         }
     }
 }
@@ -253,6 +304,7 @@ private struct BrandHeader: View {
 private struct ProjectSwitcherRow: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
+    let isCompact: Bool
     @State private var hovering = false
 
     var body: some View {
@@ -262,20 +314,25 @@ private struct ProjectSwitcherRow: View {
             }
         } label: {
             HStack(spacing: Space.sm) {
+                if isCompact { Spacer(minLength: 0) }
                 Image(systemName: "folder.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(theme.color(\.textMuted))
                     .accessibilityHidden(true)
-                Text(workspace.projectDirectory.lastPathComponent)
-                    .font(Kind.bodyEmphasis)
-                    .foregroundStyle(theme.color(\.textPrimary))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if !isCompact {
+                    Text(workspace.projectDirectory.lastPathComponent)
+                        .font(Kind.bodyEmphasis)
+                        .foregroundStyle(theme.color(\.textPrimary))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(theme.color(\.textMuted))
-                    .accessibilityHidden(true)
+                if !isCompact {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.color(\.textMuted))
+                        .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, Space.sm)
             .padding(.vertical, 7)
@@ -314,6 +371,10 @@ private struct SidebarNavRow: View {
     let tab: WorkspaceTab
     let isSelected: Bool
     let badge: Int
+    /// Icon-only, centred, no label — the name survives as a hover tooltip
+    /// (`.help`) and the explicit `accessibilityLabel` below, same as every
+    /// other compact-mode row in this sidebar.
+    let isCompact: Bool
     let action: () -> Void
 
     @State private var hovering = false
@@ -329,6 +390,7 @@ private struct SidebarNavRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.sm) {
+                if isCompact { Spacer(minLength: 0) }
                 Image(systemName: tab.systemImage)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
@@ -338,12 +400,24 @@ private struct SidebarNavRow: View {
                     // `AXButton` in VoiceOver — hiding it lets the row's own
                     // `accessibilityLabel` win instead of competing with it.
                     .accessibilityHidden(true)
-                Text(tab.title)
-                    .font(Kind.bodyEmphasis)
+                if !isCompact {
+                    Text(tab.title)
+                        .font(Kind.bodyEmphasis)
+                }
                 Spacer(minLength: 0)
                 if badge > 0 {
-                    CountPill(text: "\(badge)", tone: isSelected ? .neutral : .accent)
-                        .accessibilityHidden(true)
+                    // A plain dot when compact — a full `CountPill` needs
+                    // more width than a 64pt icon column has to spare, and a
+                    // pill number with no adjacent label reads as noise.
+                    if isCompact {
+                        Circle()
+                            .fill(theme.color(\.accentDefault))
+                            .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                    } else {
+                        CountPill(text: "\(badge)", tone: isSelected ? .neutral : .accent)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .foregroundStyle(isSelected ? selectedForeground : theme.color(\.textSecondary))
@@ -370,6 +444,7 @@ private struct SidebarNavRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
+        .help(isCompact ? tab.title : "")
         // Set explicitly rather than relying on the label + icon + badge
         // combining on their own: this is the exact control the accessibility
         // tree audit found reading as an unnamed button (see the file's

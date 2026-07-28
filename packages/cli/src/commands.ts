@@ -4815,12 +4815,23 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
             })),
             circuits: circuitStatuses,
             circuitStore: config.providerCircuit.enabled ? providerCircuitPath(config) : null,
+            // `capabilitiesOf(...).models` is the STATIC/config-driven catalog
+            // (`buildModelInfos(modelMap)` or similar) — this command never
+            // calls a provider's live `listModelsWithSource`/`listModels`
+            // (that would mean probing every registered provider just to
+            // answer `providers status`, exactly the "don't probe on a hot
+            // path unasked" cost `probeLocalServerReachability` was scoped
+            // away from too). So every row here is honestly, unconditionally
+            // `source: "fallback"` — never confirmed live BY THIS COMMAND.
+            // `nexus models <provider>` is where a genuinely verified catalog
+            // (`source: "provider"`) can appear.
             pricing: runtime.registry.ids().map((providerId) => {
               const models = runtime.registry.capabilitiesOf(providerId).models;
               return {
                 providerId,
                 models: models.map((model) => ({
                   modelId: model.id,
+                  source: "fallback",
                   pricing: runtime.pricing[model.id] ?? null,
                 })),
               };
@@ -4956,11 +4967,20 @@ export async function cmdProviders(args: ParsedArgs, io: Io = defaultIo): Promis
  * `-p/--provider`, else `config.defaultProvider` (the ACTIVE provider). The list
  * comes from the SAME live-scoped runtime helper the picker uses
  * ({@link listModelsForProvider}) — the provider's REAL model endpoint via
- * `adapter.listModels()` when reachable, degrading gracefully to its curated
- * `capabilities().models` (no key / offline / no list endpoint). This is NOT the
- * old global cross-provider dump: it never leaks another provider's models. A
- * subprocess coding CLI whose model catalog is delegated to the vendor session
- * advertises no static models — reported honestly rather than invented.
+ * `adapter.listModelsWithSource()`/`listModels()` when reachable, degrading
+ * gracefully to its curated `capabilities().models` (no key / offline / no
+ * list endpoint). This is NOT the old global cross-provider dump: it never
+ * leaks another provider's models. A subprocess coding CLI whose model
+ * catalog is delegated to the vendor session advertises no static models —
+ * reported honestly rather than invented.
+ *
+ * Every row carries `source` (`ModelListSource` — `"provider"` confirmed
+ * live this run, `"fallback"` the CLI's own built-in/config guess): a
+ * provider with no credential to probe with (gemini, openai, every
+ * `openai-compat` backend without a key) can NEVER run its live probe, so
+ * without this field its curated snapshot rendered identically to a
+ * verified catalog — the exact "presenting an unverified list as fact" bug
+ * this exists to close. Text mode marks each unverified row `(unverified)`.
  * `-o json` for scripting.
  */
 export async function cmdModels(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
@@ -5010,7 +5030,7 @@ export async function cmdModels(args: ParsedArgs, io: Io = defaultIo): Promise<n
         provider: target,
         kind,
         available,
-        models: rows.map((r) => ({ id: r.model, ...(r.hint ? { hint: r.hint } : {}) })),
+        models: rows.map((r) => ({ id: r.model, source: r.source, ...(r.hint ? { hint: r.hint } : {}) })),
       })}\n`,
     );
     return 0;
@@ -5022,7 +5042,10 @@ export async function cmdModels(args: ParsedArgs, io: Io = defaultIo): Promise<n
     return 0;
   }
   io.out(`${target} (${kind})${tag}\n`);
-  for (const r of rows) io.out(`  ${r.model}${r.hint ? `  (${r.hint})` : ""}\n`);
+  for (const r of rows) {
+    const provenance = r.source === "fallback" ? " — unverified (built-in default)" : "";
+    io.out(`  ${r.model}${r.hint ? `  (${r.hint})` : ""}${provenance}\n`);
+  }
   return 0;
 }
 

@@ -133,3 +133,138 @@ describe("listModelsForProvider — provider-scoped model discovery (offline)", 
     expect(rows.every((r) => r.provider === "fake-boom")).toBe(true);
   });
 });
+
+/**
+ * `source` (`ModelListSource`) — the provenance signal this function exists
+ * to attach: a client must be able to tell "this run actually asked the
+ * provider and got this list back" apart from "the CLI's own built-in
+ * guess/curated snapshot" instead of the two rendering identically (the bug
+ * `nexus models -p gemini` had before this field existed).
+ */
+describe("listModelsForProvider — source provenance", () => {
+  it("tags mock's curated catalog \"fallback\" (mock has no listModelsWithSource)", async () => {
+    const runtime = await offlineRuntime();
+    const rows = await listModelsForProvider(runtime, "mock");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.source === "fallback")).toBe(true);
+  });
+
+  it("tags an unknown provider's (empty) result with no rows to mistag — still just []", async () => {
+    const runtime = await offlineRuntime();
+    await expect(listModelsForProvider(runtime, "totally-unknown")).resolves.toEqual([]);
+  });
+
+  it("tags a bare listModels() (no listModelsWithSource) \"fallback\" even when it wins over curated — no benefit of the doubt for unverified provenance", async () => {
+    const runtime = await offlineRuntime();
+    const live: ProviderAdapter = {
+      id: "fake-live-no-provenance",
+      label: "Fake Live (no provenance)",
+      transport: "http-sdk",
+      capabilities: async () => ({
+        models: [{ id: "curated-only" }],
+        streaming: true,
+        tools: false,
+        parallelToolCalls: false,
+        vision: false,
+        structuredOutput: false,
+        reasoning: false,
+        systemPrompt: true,
+        fileEdit: false,
+        shellExec: false,
+        git: false,
+        approvalGate: false,
+        mcp: false,
+        cancel: "abort-signal",
+      }),
+      chat: async () => {
+        throw new Error("unused");
+      },
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        throw new Error("unused");
+      },
+      listModels: async (): Promise<ModelInfo[]> => [{ id: "live-a" }],
+    };
+    await runtime.registry.register(live, { skipHealth: true });
+
+    const rows = await listModelsForProvider(runtime, "fake-live-no-provenance");
+    expect(rows.map((r) => r.model)).toEqual(["live-a"]);
+    expect(rows.every((r) => r.source === "fallback")).toBe(true);
+  });
+
+  it("tags a listModelsWithSource() \"provider\" result \"provider\"", async () => {
+    const runtime = await offlineRuntime();
+    const live: ProviderAdapter = {
+      id: "fake-live-provenance",
+      label: "Fake Live (provenance)",
+      transport: "http-sdk",
+      capabilities: async () => ({
+        models: [],
+        streaming: true,
+        tools: false,
+        parallelToolCalls: false,
+        vision: false,
+        structuredOutput: false,
+        reasoning: false,
+        systemPrompt: true,
+        fileEdit: false,
+        shellExec: false,
+        git: false,
+        approvalGate: false,
+        mcp: false,
+        cancel: "abort-signal",
+      }),
+      chat: async () => {
+        throw new Error("unused");
+      },
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        throw new Error("unused");
+      },
+      listModelsWithSource: async () => ({ models: [{ id: "verified-a" }], source: "provider" }),
+    };
+    await runtime.registry.register(live, { skipHealth: true });
+
+    const rows = await listModelsForProvider(runtime, "fake-live-provenance");
+    expect(rows.map((r) => r.model)).toEqual(["verified-a"]);
+    expect(rows.every((r) => r.source === "provider")).toBe(true);
+  });
+
+  it("tags a listModelsWithSource() \"fallback\" result \"fallback\", and falls back to curated only if it's empty", async () => {
+    const runtime = await offlineRuntime();
+    const degraded: ProviderAdapter = {
+      id: "fake-degraded",
+      label: "Fake Degraded",
+      transport: "http-sdk",
+      capabilities: async () => ({
+        models: [{ id: "curated-fallback" }],
+        streaming: true,
+        tools: false,
+        parallelToolCalls: false,
+        vision: false,
+        structuredOutput: false,
+        reasoning: false,
+        systemPrompt: true,
+        fileEdit: false,
+        shellExec: false,
+        git: false,
+        approvalGate: false,
+        mcp: false,
+        cancel: "abort-signal",
+      }),
+      chat: async () => {
+        throw new Error("unused");
+      },
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        throw new Error("unused");
+      },
+      listModelsWithSource: async () => ({ models: [{ id: "degraded-alias" }], source: "fallback" }),
+    };
+    await runtime.registry.register(degraded, { skipHealth: true });
+
+    const rows = await listModelsForProvider(runtime, "fake-degraded");
+    expect(rows.map((r) => r.model)).toEqual(["degraded-alias"]);
+    expect(rows.every((r) => r.source === "fallback")).toBe(true);
+  });
+});

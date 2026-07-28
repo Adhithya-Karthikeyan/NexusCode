@@ -7,7 +7,7 @@
  * explicit `-p`) provider path.
  */
 
-import type { CallContext } from "@nexuscode/core";
+import type { CallContext, ModelListSource } from "@nexuscode/core";
 import type { NexusConfig } from "@nexuscode/config";
 import { buildRuntime, type Runtime } from "@nexuscode/runtime";
 import { buildAuthRegistry, resolveAuthSecrets } from "./auth.js";
@@ -63,9 +63,20 @@ export interface ProviderModelChoice {
    * the user actually picked instead of guessing from the curated snapshot.
    */
   contextWindow?: number;
+  /**
+   * Where this row actually came from — see `ModelListSource`
+   * (`@nexuscode/shared`). `"provider"` only when THIS run's own live
+   * discovery confirmed it (`adapter.listModelsWithSource`); `"fallback"`
+   * for everything else, including an adapter that never implemented
+   * provenance at all (bare `listModels`/`capabilities().models`) — the
+   * conservative default is "unverified," never an assumed "provider" for a
+   * source we have no explicit confirmation from. See this function's doc
+   * for exactly which branch produces which value.
+   */
+  source: ModelListSource;
 }
 
-/** How long a live `listModels()` probe may run before we fall back to curated. */
+/** How long a live `listModels()`/`listModelsWithSource()` probe may run before we fall back to curated. */
 const LIST_MODELS_TIMEOUT_MS = 4000;
 
 /** Drop duplicate / empty model ids, preserving first-seen order. */
@@ -82,11 +93,23 @@ function dedupeById<T extends { id: string }>(models: readonly T[]): T[] {
 
 /**
  * Resolve the model list for ONE provider — the models the `/model` picker must
- * scope to. Prefers the adapter's REAL model discovery (`adapter.listModels()`,
- * which hits the provider's own models endpoint), and falls back to the curated
- * static `capabilities().models` whenever the provider can't be listed (no key,
- * offline, or no list endpoint). Never throws: an unknown provider yields `[]`
- * and any discovery failure degrades to the curated catalog.
+ * scope to, WITH provenance (`ModelListSource`, `@nexuscode/shared`) so a
+ * client never has to guess, or worse silently trust, whether a list is a
+ * confirmed live catalog or the CLI's own built-in guess — the exact bug
+ * this function exists to close (`nexus models -p gemini` used to print a
+ * hand-curated, occasionally stale array identically to a verified one, for
+ * every provider whose live probe could never run because there was no key
+ * to try it with — see `DEFAULT_GEMINI_MODELS`'s history).
+ *
+ * Prefers `adapter.listModelsWithSource()` (tags `"provider"` on a genuine
+ * live confirmation, `"fallback"` on its own internal degrade — see each
+ * provider's implementation for what counts as which), then the legacy bare
+ * `adapter.listModels()` (ALWAYS tagged `"fallback"` here — a provider that
+ * hasn't opted into provenance gets no benefit of the doubt), then the
+ * static `capabilities().models` catalog (also always `"fallback"`) when the
+ * provider can't be listed at all (no key, offline, no list endpoint, or no
+ * live method whatsoever). Never throws: an unknown provider yields `[]` and
+ * any discovery failure degrades to the curated catalog.
  *
  * This is the runtime helper the TUI's `/model` optionsProvider calls, so the
  * picker shows only the ACTIVE provider's models instead of the global
@@ -98,23 +121,25 @@ export async function listModelsForProvider(
 ): Promise<ProviderModelChoice[]> {
   if (!runtime.registry.has(providerId)) return [];
 
-  const toChoice = (m: { id: string; contextWindow?: number }): ProviderModelChoice => ({
+  const toChoice = (
+    m: { id: string; contextWindow?: number },
+    source: ModelListSource,
+  ): ProviderModelChoice => ({
     provider: providerId,
     model: m.id,
+    source,
     ...(m.contextWindow ? { hint: `${Math.round(m.contextWindow / 1000)}k ctx` } : {}),
     ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}),
   });
   const curated = (): ProviderModelChoice[] => {
     try {
-      return dedupeById(runtime.registry.capabilitiesOf(providerId).models).map(toChoice);
+      return dedupeById(runtime.registry.capabilitiesOf(providerId).models).map((m) => toChoice(m, "fallback"));
     } catch {
       return [];
     }
   };
 
   const adapter = runtime.registry.get(providerId);
-  if (typeof adapter.listModels !== "function") return curated();
-
   // Bound the live probe so a hung endpoint never stalls the picker.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LIST_MODELS_TIMEOUT_MS);
@@ -125,8 +150,14 @@ export async function listModelsForProvider(
     runId: `listModels:${providerId}`,
   };
   try {
+    if (typeof adapter.listModelsWithSource === "function") {
+      const { models: live, source } = await adapter.listModelsWithSource(ctx);
+      const rows = dedupeById(live).map((m) => toChoice(m, source));
+      return rows.length > 0 ? rows : curated();
+    }
+    if (typeof adapter.listModels !== "function") return curated();
     const live = await adapter.listModels(ctx);
-    const rows = dedupeById(live).map(toChoice);
+    const rows = dedupeById(live).map((m) => toChoice(m, "fallback"));
     return rows.length > 0 ? rows : curated();
   } catch {
     return curated();

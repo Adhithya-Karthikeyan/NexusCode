@@ -131,19 +131,17 @@ struct ConversationView: View {
     @ViewBuilder
     private var transcript: some View {
         if visibleLaneIds.isEmpty {
-            // Bottom-anchored, not centered: `.fixedSize` collapses the
-            // empty state to its own intrinsic height, and bottom-alignment
-            // then settles it just above the composer, reading as one
-            // column instead of two objects floating at opposite ends of
-            // the window. That relationship is deliberately kept here — see
-            // `emptyState`'s doc comment for how the void ABOVE it (the
-            // remaining problem once this was fixed) gets addressed: by
-            // giving this region a genuinely larger, more purposeful
-            // composition rather than by moving it back toward centre.
+            // Optically centred in the available canvas. Bottom-anchoring
+            // this was an earlier attempt at the same problem (a large,
+            // unexplained void above a small huddle of controls) — measured
+            // on screen, it just moved the void to the TOP ~40% of the
+            // canvas instead of removing it, which reads as "hanging in the
+            // lower half," not "considered." Centring plus the now-larger,
+            // more substantial composition below (`emptyState`'s doc
+            // comment) is what actually closes the gap.
             emptyState
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, Space.xxl)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else if controller.mode.isMultiLane && laneOrder.count > 1 {
             // Fan-out: one column per lane, so answers are compared, not scrolled.
             ScrollView(.horizontal) {
@@ -231,40 +229,38 @@ struct ConversationView: View {
     /// Deliberately more substantial than a lone glyph in a void.
     ///
     /// This used to be a generic icon-in-a-glow-circle — the single most
-    /// template-looking element in the app, and (see `transcript`'s doc
-    /// comment) too small a composition to keep the region above it from
-    /// reading as a large, unexplained empty band. `ChatHeroMark` replaces
-    /// the glow with something specific to THIS product: a live echo of the
-    /// exact `nexus <mode>` invocation the control strip above is currently
-    /// configured to run, in the same monospace/caret language the
-    /// composer's command preview and the transcript's streaming cursor
-    /// already use — so it reads as "this app always shows you the real
-    /// command" rather than "generic AI chat icon."
+    /// template-looking element in the app. `ChatHeroMark` replaced the glow
+    /// with something specific to THIS product — a live echo of the exact
+    /// `nexus <mode>` invocation the control strip above is configured to
+    /// run — but as a boxed, bordered element floating above the headline it
+    /// read as a second, unexplained UI control (a debug readout), not part
+    /// of the same statement as `heroTitle` below it. It's a KICKER now —
+    /// plain text, tight against the headline it introduces, the same
+    /// editorial relationship a small label above a big headline always has
+    /// — so the "this app always shows you the real command" identity
+    /// survives without a floating box to carry it.
     ///
-    /// The suggestions below grow from a single row of small capsules into a
-    /// labelled, full-width LIST rather than a compact grid — measured
-    /// against the actual window (see the doc comment on `transcript`), a
-    /// 2x2 grid of small cards still left roughly half the transcript
-    /// region a bare void above a small huddle of controls. A one-per-row
-    /// list at the reading-column measure is real, legible content (each
-    /// suggestion gets room to breathe, not a filler decoration) that
-    /// genuinely occupies the space instead of merely gesturing at
-    /// occupying it.
+    /// The suggestions are a 2-column grid, not a full-width list: at this
+    /// column's own 660pt measure, a single-column list put a long empty
+    /// tail after every 3-5 word label — the label was never going to be
+    /// long enough to fill a 660pt row, so the row was never the right unit.
+    /// Two ~320pt columns give each suggestion a cell close to its own
+    /// content width instead.
     private var emptyState: some View {
-        VStack(spacing: Space.xxl) {
-            ChatHeroMark(mode: controller.mode)
-
-            VStack(spacing: Space.sm) {
+        VStack(spacing: Space.xl) {
+            VStack(spacing: Space.xs) {
+                ChatHeroMark(mode: controller.mode)
                 Text(heroTitle)
                     .font(Kind.hero)
                     .foregroundStyle(theme.color(\.textPrimary))
-                Text(heroMessage)
-                    .font(Kind.body)
-                    .foregroundStyle(theme.color(\.textMuted))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 430)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            Text(heroMessage)
+                .font(Kind.body)
+                .foregroundStyle(theme.color(\.textMuted))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 430)
+                .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: Space.sm) {
                 Text("TRY ASKING")
@@ -272,7 +268,7 @@ struct ConversationView: View {
                     .tracking(0.7)
                     .foregroundStyle(theme.color(\.textMuted))
 
-                VStack(spacing: Space.sm) {
+                LazyVGrid(columns: suggestionColumns, spacing: Space.sm) {
                     suggestionCard(0)
                     suggestionCard(1)
                     suggestionCard(2)
@@ -280,16 +276,15 @@ struct ConversationView: View {
                 }
             }
             .frame(maxWidth: readingColumnWidth)
-
-            HStack(spacing: Space.lg) {
-                KeyHint(keys: "⌘N", label: "new")
-                KeyHint(keys: "⌘.", label: "stop")
-                KeyHint(keys: "⏎", label: "send")
-            }
         }
         .padding(Space.xxl)
         .frame(maxWidth: .infinity)
     }
+
+    private let suggestionColumns = [
+        GridItem(.flexible(), spacing: Space.sm),
+        GridItem(.flexible()),
+    ]
 
     private func suggestionCard(_ index: Int) -> some View {
         let suggestion = Self.suggestions[index]
@@ -329,6 +324,17 @@ struct ConversationView: View {
                 if controller.mode.isMultiLane && controller.backends.count < 2 {
                     Text("add at least 2 backends")
                         .foregroundStyle(theme.color(\.warningFg))
+                } else {
+                    // Moved here from the empty state: these are the
+                    // composer's OWN shortcuts (new/stop/send), so they
+                    // belong on the row that describes what the composer is
+                    // about to do, not floating alone mid-canvas disconnected
+                    // from the control they describe.
+                    HStack(spacing: Space.md) {
+                        KeyHint(keys: "⌘N", label: "new")
+                        KeyHint(keys: "⌘.", label: "stop")
+                        KeyHint(keys: "⏎", label: "send")
+                    }
                 }
             }
             .font(Kind.monoSmall)
@@ -1184,24 +1190,26 @@ private struct ModePicker: View {
     }
 }
 
-/// The empty state's hero visual: a live echo of the exact `nexus <mode>`
-/// invocation the control strip is currently configured to run, in the same
-/// monospace-plus-caret language the composer's command preview and the
-/// transcript's own streaming cursor use elsewhere in this file. Reusing
-/// `StreamingCaret` here (not a new blinking-cursor implementation) is
-/// deliberate: it is the one piece of motion in this app that already means
-/// "live," so it says "ready" here as literally as it says "streaming" in
-/// `TurnView`, rather than inventing a second cue for the same idea.
+/// The empty state's KICKER, sitting directly above `heroTitle` — a live
+/// echo of the exact `nexus <mode>` invocation the control strip is
+/// currently configured to run, in the same monospace-plus-caret language
+/// the composer's command preview and the transcript's own streaming cursor
+/// use elsewhere in this file. Reusing `StreamingCaret` here (not a new
+/// blinking-cursor implementation) is deliberate: it is the one piece of
+/// motion in this app that already means "live," so it says "ready" here as
+/// literally as it says "streaming" in `TurnView`.
 ///
-/// Replaces what used to be a generic icon centred in a soft radial glow —
-/// the most template-looking element in the app, and true of nearly any
-/// chat product rather than this one specifically.
+/// Plain text, not a bordered card — a boxed, separately-elevated element
+/// floating above the headline read as a second UI control (a debug
+/// readout) rather than part of the same statement as the headline below
+/// it. A kicker is a small label directly above a big one; tight spacing to
+/// `heroTitle` (see `emptyState`) is what makes that relationship read.
 private struct ChatHeroMark: View {
     @Environment(\.nexusTheme) private var theme
     let mode: RunMode
 
     var body: some View {
-        HStack(spacing: Space.sm) {
+        HStack(spacing: 4) {
             Text("nexus")
                 .foregroundStyle(theme.color(\.textMuted))
             Text(mode.rawValue)
@@ -1210,18 +1218,10 @@ private struct ChatHeroMark: View {
                 // copy naming the current mode, not a selection, the primary
                 // action, or live state — the three things accent is
                 // rationed to (see `DESIGN.md`).
-                .foregroundStyle(theme.color(\.textPrimary))
+                .foregroundStyle(theme.color(\.textSecondary))
             StreamingCaret()
         }
-        .font(.system(size: 19, weight: .medium, design: .monospaced))
-        .padding(.horizontal, Space.xl)
-        .padding(.vertical, Space.lg)
-        .background(theme.color(\.surfaceRaised))
-        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
-        }
+        .font(.system(size: 13, design: .monospaced))
         .animation(.easeOut(duration: 0.15), value: mode)
     }
 }
@@ -1242,6 +1242,13 @@ private struct SuggestionCard: View {
             HStack(spacing: Space.md) {
                 Image(systemName: icon)
                     .font(.system(size: 13))
+                    // `.monochrome` forced explicitly: SF Symbols with a
+                    // designed multicolor palette (`ladybug` is one) render
+                    // in their own built-in colours by default and silently
+                    // IGNORE `.foregroundStyle` otherwise — which is exactly
+                    // why the fourth suggestion's icon still looked like a
+                    // stray emoji next to three neutral ones.
+                    .symbolRenderingMode(.monochrome)
                     // Neutral, not accent — a decorative per-row icon tint is
                     // exactly the pattern `DESIGN.md`'s colour system rules out.
                     .foregroundStyle(theme.color(\.textSecondary))

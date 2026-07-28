@@ -9,7 +9,7 @@ import {
   createOpenAICompatAdapter,
   type OpenAICompatConfig,
 } from "@nexuscode/provider-openai";
-import { createModelListCache } from "@nexuscode/shared";
+import { createModelListCache, type ModelListResult } from "@nexuscode/shared";
 import type { CallContext, ModelInfo, ProviderAdapter } from "@nexuscode/core";
 
 export const OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1";
@@ -82,10 +82,16 @@ async function listOllamaModels(
   baseURL: string,
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
-): Promise<ModelInfo[]> {
+): Promise<ModelListResult> {
   try {
     const res = await fetchImpl(ollamaTagsUrl(baseURL), signal ? { signal } : {});
-    if (!res.ok) return [];
+    // A non-OK response means the daemon did not answer with a list, so the
+    // empty array below is OURS, not Ollama's — `fallback`. An OK response
+    // that happens to contain no models is genuinely the daemon saying
+    // "nothing pulled yet", which is real provider data and stays `provider`.
+    // Ollama has no curated fallback list to fall back TO (unlike gemini or
+    // anthropic), so `fallback` here always means "we never got an answer".
+    if (!res.ok) return { models: [], source: "fallback" };
     const body = (await res.json()) as { models?: Array<{ name?: unknown; model?: unknown }> };
     const seen = new Set<string>();
     const out: ModelInfo[] = [];
@@ -95,10 +101,11 @@ async function listOllamaModels(
       seen.add(name);
       out.push({ id: name, modalities: ["text"] });
     }
-    return out;
+    return { models: out, source: "provider" };
   } catch {
-    // Daemon down / offline / unreachable: no models, no crash.
-    return [];
+    // Daemon down / offline / unreachable: no models, no crash. Never
+    // `provider` — we did not reach one.
+    return { models: [], source: "fallback" };
   }
 }
 
@@ -116,7 +123,12 @@ export function createOllamaAdapter(cfg: OllamaConfig = {}): ProviderAdapter {
   // Attach the Ollama-specific `/api/tags` discovery onto the compat adapter
   // instance (which carries its transport methods on its prototype — a spread
   // copy would drop those), overriding the generic `/v1/models` path.
-  base.listModels = (ctx?: CallContext): Promise<ModelInfo[]> =>
+  base.listModelsWithSource = (ctx?: CallContext): Promise<ModelListResult> =>
     cache.get(() => listOllamaModels(baseURL, fetchImpl, ctx?.signal));
+  // Back-compat surface for callers that only want the bare list — same
+  // cache, so this never triggers a second probe when `listModelsWithSource`
+  // already primed it (or vice versa). Mirrors the gemini/anthropic shape.
+  base.listModels = (ctx?: CallContext): Promise<ModelInfo[]> =>
+    base.listModelsWithSource!(ctx).then((r) => r.models);
   return base;
 }

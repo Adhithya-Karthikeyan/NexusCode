@@ -452,6 +452,25 @@ public struct SelectableProvider: Sendable, Hashable, Identifiable {
     }
 }
 
+/// Where a `NexusModel` row actually came from — mirrors the CLI's
+/// `ModelListSource` (`packages/shared/src/model-cache.ts`) exactly, straight
+/// off `nexus models <provider> -o json`'s `source` field.
+///
+/// A CLOSED two-value type, not a `Bool` — matching this repo's convention
+/// for anything a client must react to differently rather than render
+/// identically (`AgentVerdict`'s three-valued outcome,
+/// `NexusProvider.localServerReachable`'s reachability triple): `.fallback`
+/// is not a degraded or partial `.provider` result, it is a DIFFERENT KIND
+/// of answer — the CLI's own built-in guess, not a confirmed fact. This is
+/// the fix for the exact bug the owner reported: `nexus models -p gemini`
+/// printed a hand-curated, occasionally stale array (`DEFAULT_GEMINI_MODELS`)
+/// rendered IDENTICALLY to a verified live catalog, for every provider whose
+/// live probe could never run because there was no key to try it with.
+public enum ModelListSource: String, Sendable, Hashable {
+    case provider
+    case fallback
+}
+
 /// One entry of `nexus models <provider> -o json`'s `models` array.
 public struct NexusModel: Sendable, Hashable, Identifiable {
     public let id: String
@@ -466,12 +485,27 @@ public struct NexusModel: Sendable, Hashable, Identifiable {
     /// in a live run of this build) or the provider/model isn't in the table
     /// at all.
     public let pricing: JSONValue?
+    /// `nil` only for an older CLI that predates this field — see
+    /// `isVerified` for how that degrades. Every current CLI build always
+    /// sends an explicit `source` on every row (never omits it).
+    public let source: ModelListSource?
+
+    /// Whether this row is a CONFIRMED live result — `false` for both
+    /// `.fallback` and `nil` (an older CLI / a malformed value): an unknown
+    /// provenance must never read as verified, the same "unknown is not a
+    /// confirmed positive" rule `NexusProvider.localServerReachable` and
+    /// `ReasoningCapability` already apply. This is the ONE property a
+    /// picker should read to decide display treatment — see this type's doc
+    /// for why it must never render a `.fallback`/unknown row identically to
+    /// a verified one.
+    public var isVerified: Bool { source == .provider }
 
     /// Plain memberwise construction — for previews and tests.
-    public init(id: String, hint: String? = nil, pricing: JSONValue? = nil) {
+    public init(id: String, hint: String? = nil, pricing: JSONValue? = nil, source: ModelListSource? = nil) {
         self.id = id
         self.hint = hint
         self.pricing = pricing
+        self.source = source
     }
 
     /// `nil` only when the row has no `id`. `pricing` is never set from this
@@ -482,6 +516,7 @@ public struct NexusModel: Sendable, Hashable, Identifiable {
         self.id = id
         self.hint = json["hint"]?.stringValue
         self.pricing = nil
+        self.source = json["source"]?.stringValue.flatMap(ModelListSource.init(rawValue:))
     }
 
     /// Best-effort parse of `hint`'s `"NNk ctx"` shorthand into a token count.
@@ -496,7 +531,7 @@ public struct NexusModel: Sendable, Hashable, Identifiable {
     /// A copy with `pricing` looked up from a provider's modelId→pricing
     /// table (built by `ProvidersController` from `providers status`).
     func merging(pricing table: [String: JSONValue]) -> NexusModel {
-        NexusModel(id: id, hint: hint, pricing: table[id])
+        NexusModel(id: id, hint: hint, pricing: table[id], source: source)
     }
 }
 

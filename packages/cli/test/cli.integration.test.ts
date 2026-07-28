@@ -537,6 +537,51 @@ describe("nexus providers status -o json (local-server reachability — lmstudio
   }, 20_000);
 });
 
+describe("nexus models -o json (model list provenance)", () => {
+  // The owner's literal complaint: `nexus models -p gemini` printed a
+  // hand-curated, occasionally stale array IDENTICALLY to a verified live
+  // catalog. With no credential configured (true in this isolated test env,
+  // and true for any real user who hasn't set GEMINI_API_KEY), the live
+  // probe can never even run — so every row must come back tagged
+  // `source: "fallback"`, never silently indistinguishable from a confirmed
+  // one. See `listGeminiModels`/`ModelListSource` (`@nexuscode/shared`,
+  // `packages/providers/gemini/src/index.ts`).
+  const NO_GEMINI = { GEMINI_API_KEY: "", GOOGLE_API_KEY: "" };
+
+  it("tags gemini's fallback catalog \"fallback\" (no credential configured — the live probe never ran)", async () => {
+    const r = await runCli(["models", "gemini", "-o", "json"], "", NO_GEMINI);
+    expect(r.code).toBe(0);
+    const body = JSON.parse(r.stdout.trim()) as { models: { id: string; source: string }[] };
+    expect(body.models.length).toBeGreaterThan(0);
+    expect(body.models.every((m) => m.source === "fallback")).toBe(true);
+  }, 20_000);
+
+  it("text mode marks every unverified gemini model row \"unverified\"", async () => {
+    const r = await runCli(["models", "gemini"], "", NO_GEMINI);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/gemini-2\.5-pro.*unverified/);
+  }, 20_000);
+
+  it("tags mock's models \"fallback\" too — mock has no listModelsWithSource, so no benefit of the doubt", async () => {
+    const r = await runCli(["models", "mock", "-o", "json"]);
+    expect(r.code).toBe(0);
+    const body = JSON.parse(r.stdout.trim()) as { models: { id: string; source: string }[] };
+    expect(body.models.length).toBeGreaterThan(0);
+    expect(body.models.every((m) => m.source === "fallback")).toBe(true);
+  }, 20_000);
+
+  it("`providers status -o json`'s pricing catalog tags every model \"fallback\" (never live-probed by this command)", async () => {
+    const r = await runCli(["providers", "status", "-o", "json"]);
+    expect(r.code).toBe(0);
+    const body = JSON.parse(r.stdout.trim()) as {
+      pricing: { providerId: string; models: { modelId: string; source: string }[] }[];
+    };
+    const allModels = body.pricing.flatMap((p) => p.models);
+    expect(allModels.length).toBeGreaterThan(0);
+    expect(allModels.every((m) => m.source === "fallback")).toBe(true);
+  }, 20_000);
+});
+
 describe("nexus providers list/status — default 'anthropic' entry (BUG: was entirely absent from the picker)", () => {
   // Regression: `cmdProviders`/`cmdModels` built the runtime with plain
   // `buildRuntime(config)` instead of `buildAuthedRuntime(config)`, so

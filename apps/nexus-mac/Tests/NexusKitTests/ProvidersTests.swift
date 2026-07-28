@@ -653,6 +653,54 @@ final class ProvidersTests: XCTestCase {
         XCTAssertNil(fast.pricing)
     }
 
+    // MARK: - NexusModel.source / isVerified (model list provenance)
+    //
+    // The fix for the owner's literal complaint: `nexus models -p gemini`
+    // used to print a hand-curated, occasionally stale array identically to
+    // a verified live catalog. `source` is real bytes from a live
+    // `nexus models mock -o json` run (mock has no live listModelsWithSource,
+    // so every row is honestly "fallback" — see `models-mock.json`).
+
+    func testSourceDecodesAsFallbackAndIsNotVerified() throws {
+        let fast = try XCTUnwrap(try decodedModels().first { $0.id == "mock-fast" })
+        XCTAssertEqual(fast.source, .fallback)
+        XCTAssertFalse(fast.isVerified)
+    }
+
+    func testSourceDefaultsToNilWhenAbsentAndDegradesToNotVerified() throws {
+        // `mock-tools`' fixture row has no `source` key at all (an older CLI
+        // that predates this field) — must decode as `nil`, and `isVerified`
+        // must still read `false`, never a confident "yes" for an unknown
+        // provenance.
+        let tools = try XCTUnwrap(try decodedModels().first { $0.id == "mock-tools" })
+        XCTAssertNil(tools.source)
+        XCTAssertFalse(tools.isVerified)
+    }
+
+    func testSourceDecodesAsProviderAndIsVerified() throws {
+        let json = JSONValue.object(["id": .string("live-a"), "source": .string("provider")])
+        let model = try XCTUnwrap(NexusModel(json: json))
+        XCTAssertEqual(model.source, .provider)
+        XCTAssertTrue(model.isVerified)
+    }
+
+    func testUnrecognizedSourceStringDegradesToNilRatherThanCrashing() throws {
+        let json = JSONValue.object(["id": .string("x"), "source": .string("some-future-value")])
+        let model = try XCTUnwrap(NexusModel(json: json))
+        XCTAssertNil(model.source)
+        XCTAssertFalse(model.isVerified)
+    }
+
+    func testMergingPricingPreservesSource() throws {
+        // `merging(pricing:)` must carry `source` through unchanged — it is
+        // a copy for ONE purpose (attaching pricing), not a chance to drop
+        // provenance.
+        let verified = NexusModel(id: "live-a", source: .provider)
+        let merged = verified.merging(pricing: ["live-a": .number(5)])
+        XCTAssertEqual(merged.source, .provider)
+        XCTAssertTrue(merged.isVerified)
+    }
+
     // MARK: - Command factories
 
     func testProvidersListBuildsAJsonCommand() {
