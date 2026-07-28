@@ -44,3 +44,26 @@ describe("vertex — listModels", () => {
     expect(ids).toEqual(["gemini-2.0-flash", "gemini-2.5-pro"].sort());
   });
 });
+
+describe("vertex — listModelsWithSource (provenance)", () => {
+  it("tags a genuine live result \"provider\"", async () => {
+    const adapter = createVertexAdapter({
+      modelMap,
+      createClient: () => fakeClient(["models/gemini-2.5-pro", "models/gemini-1.5-pro"]),
+    });
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("provider");
+    expect(result.models.map((m) => m.id)).toEqual(["gemini-2.5-pro", "gemini-1.5-pro"]);
+  });
+
+  it("tags the config-driven fallback \"fallback\" when the client cannot list", async () => {
+    const adapter = createVertexAdapter({
+      modelMap,
+      createClient: () =>
+        ({ models: { generateContentStream: (async () => (async function* () {})()) as never } }) as GeminiClientLike,
+    });
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+    expect(result.models.map((m) => m.id).sort()).toEqual(["gemini-2.0-flash", "gemini-2.5-pro"].sort());
+  });
+});

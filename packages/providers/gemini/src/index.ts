@@ -38,6 +38,7 @@ import type {
   FinishReason,
   Message,
   ModelInfo,
+  ModelListResult,
   StreamChunk,
   ToolDef,
   Usage,
@@ -50,15 +51,34 @@ const PROVIDER_ID = "gemini";
 export const GEMINI_API_KEY_ENV = "GEMINI_API_KEY";
 
 /**
- * A curated snapshot of current selectable Gemini models — the graceful fallback
- * for {@link ProviderAdapter.listModels} when `models.list` cannot be reached
- * (no key, offline, error). Ids only; pricing/context stay config-driven.
+ * A curated snapshot of current selectable Gemini models — the graceful
+ * fallback for {@link listModels}/{@link listModelsWithSource} when
+ * `models.list` cannot be reached (no key, offline, error) — used ONLY when
+ * that live probe didn't happen or didn't work; see
+ * {@link listGeminiModels}. Ids only; pricing/context stay config-driven.
+ *
+ * VERIFIED, not written from memory (2026-07-29, cross-checked across THREE
+ * independent fetches — `ai.google.dev/gemini-api/docs/models`,
+ * `ai.google.dev/gemini-api/docs/pricing`, and a web search — all agreeing):
+ *  - `gemini-2.0-flash` / `gemini-2.0-flash-lite` (the previous entries here)
+ *    are CONFIRMED DEPRECATED, shut down 2026-06-01 — the exact "stale
+ *    fallback presented as fact" bug this whole feature exists to stop
+ *    hiding. Dropped.
+ *  - `gemini-2.5-pro` remains the only GA "pro"-tier model as of this
+ *    check — Gemini 3.x's pro tier (`gemini-3.1-pro-preview`) is confirmed
+ *    preview-only, not GA, so 2.5-pro is kept rather than guessed forward.
+ *  - `gemini-2.5-flash` remains GA (documented stable through 2026-10-16).
+ *  - `gemini-3.6-flash` and `gemini-3.1-flash-lite` are the current GA
+ *    flash-tier models superseding the deprecated 2.0 line.
+ * This list WILL go stale again — that is exactly why `ModelListSource`
+ * exists: staleness is now labelled (`"fallback"`), never silently
+ * presented as a verified catalog.
  */
 export const DEFAULT_GEMINI_MODELS: ModelInfo[] = [
   { id: "gemini-2.5-pro", modalities: ["text", "image", "audio"] },
   { id: "gemini-2.5-flash", modalities: ["text", "image", "audio"] },
-  { id: "gemini-2.0-flash", modalities: ["text", "image", "audio"] },
-  { id: "gemini-2.0-flash-lite", modalities: ["text", "image", "audio"] },
+  { id: "gemini-3.6-flash", modalities: ["text", "image", "audio"] },
+  { id: "gemini-3.1-flash-lite", modalities: ["text", "image", "audio"] },
 ];
 
 /**
@@ -365,17 +385,20 @@ function buildModelInfos(modelMap: Record<string, string>): ModelInfo[] {
  * Real Gemini/Vertex model discovery via `ai.models.list()`. Shared by both the
  * Gemini and Vertex adapters (same SDK, same `models.list`). Model `name`s come
  * back namespaced (`"models/gemini-2.0-flash"`); the `"models/"` prefix is
- * stripped to the native id. Falls back to `fallback` when the client exposes no
- * `list`, the call fails, or the result is empty. Never throws.
+ * stripped to the native id. Falls back to `fallback` (tagged
+ * `source: "fallback"`) when the client exposes no `list`, the call fails, or
+ * the result is empty; a genuine live result is tagged `source: "provider"`.
+ * Never throws.
  */
 export async function listGeminiModels(
   getClient: () => Promise<GeminiClientLike> | GeminiClientLike,
   fallback: ModelInfo[],
   signal?: AbortSignal,
-): Promise<ModelInfo[]> {
+): Promise<ModelListResult> {
+  const asFallback: ModelListResult = { models: fallback, source: "fallback" };
   try {
     const client = await getClient();
-    if (typeof client.models.list !== "function") return fallback;
+    if (typeof client.models.list !== "function") return asFallback;
     const pager = await client.models.list();
     const seen = new Set<string>();
     const out: ModelInfo[] = [];
@@ -387,9 +410,9 @@ export async function listGeminiModels(
       seen.add(id);
       out.push({ id, modalities: ["text", "image", "audio"] });
     }
-    return out.length > 0 ? out : fallback;
+    return out.length > 0 ? { models: out, source: "provider" } : asFallback;
   } catch {
-    return fallback;
+    return asFallback;
   }
 }
 
@@ -570,8 +593,14 @@ export function createGeminiAdapter(
     return { ok: true, detail: `${label} client ready` };
   };
 
-  const listModels = (ctx?: CallContext): Promise<ModelInfo[]> =>
+  const listModelsWithSource = (ctx?: CallContext): Promise<ModelListResult> =>
     modelCache.get(() => listGeminiModels(getClient, DEFAULT_GEMINI_MODELS, ctx?.signal));
+
+  // Back-compat surface for any caller that only wants the bare list — same
+  // cache, so this never triggers a second probe when `listModelsWithSource`
+  // already primed it (or vice versa).
+  const listModels = (ctx?: CallContext): Promise<ModelInfo[]> =>
+    listModelsWithSource(ctx).then((r) => r.models);
 
   const dispose = async (): Promise<void> => {
     client = undefined;
@@ -585,6 +614,7 @@ export function createGeminiAdapter(
     chat,
     stream,
     listModels,
+    listModelsWithSource,
     health,
     dispose,
   };

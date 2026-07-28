@@ -81,3 +81,68 @@ describe("gemini — listModels", () => {
     }
   });
 });
+
+describe("gemini — listModelsWithSource (provenance)", () => {
+  it("tags a genuine live result \"provider\"", async () => {
+    const adapter = createGeminiAdapter(
+      {
+        modelMap,
+        createClient: () => fakeClient(["models/gemini-2.5-pro", "models/gemini-2.0-flash"]),
+      },
+      () => "gm-key",
+    );
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("provider");
+    expect(result.models.map((m) => m.id)).toEqual(["gemini-2.5-pro", "gemini-2.0-flash"]);
+  });
+
+  it("tags the curated fallback \"fallback\" — never indistinguishable from a live result", async () => {
+    const adapter = createGeminiAdapter(
+      {
+        modelMap,
+        createClient: () =>
+          ({
+            models: {
+              generateContentStream: (async () => (async function* () {})()) as never,
+              list: async () => {
+                throw new Error("offline");
+              },
+            },
+          }) as GeminiClientLike,
+      },
+      () => "gm-key",
+    );
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+    expect(result.models).toEqual(DEFAULT_GEMINI_MODELS);
+  });
+
+  it("tags an empty-but-successful live response \"fallback\" too — success alone isn't enough", async () => {
+    const adapter = createGeminiAdapter(
+      { modelMap, createClient: () => fakeClient([]) },
+      () => "gm-key",
+    );
+    const result = await adapter.listModelsWithSource!();
+    expect(result.source).toBe("fallback");
+    expect(result.models).toEqual(DEFAULT_GEMINI_MODELS);
+  });
+
+  it("listModels() and listModelsWithSource() share one cache — models.list() is only actually called once", async () => {
+    let calls = 0;
+    const client: GeminiClientLike = {
+      models: {
+        generateContentStream: (async () => (async function* () {})()) as never,
+        list: async () => {
+          calls++;
+          return (async function* () {
+            yield { name: "models/gemini-2.5-pro" };
+          })();
+        },
+      },
+    };
+    const adapter = createGeminiAdapter({ modelMap, createClient: () => client }, () => "gm-key");
+    await adapter.listModels!();
+    await adapter.listModelsWithSource!();
+    expect(calls).toBe(1);
+  });
+});

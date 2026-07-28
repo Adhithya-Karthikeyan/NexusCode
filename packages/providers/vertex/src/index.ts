@@ -41,6 +41,7 @@ import type {
   FinishReason,
   Message,
   ModelInfo,
+  ModelListResult,
   StreamChunk,
   Usage,
 } from "@nexuscode/shared";
@@ -278,11 +279,16 @@ export function createVertexAdapter(cfg: VertexConfig): ProviderAdapter {
     return { ok: true, detail: "Vertex AI client ready (GCP ADC)" };
   };
 
-  const listModels = (ctx?: CallContext): Promise<ModelInfo[]> => {
+  const listModelsWithSource = (ctx?: CallContext): Promise<ModelListResult> => {
     const curated = buildModelInfos(cfg.modelMap);
     const fallback = curated.length > 0 ? curated : DEFAULT_GEMINI_MODELS;
     return modelCache.get(() => listGeminiModels(getClient, fallback, ctx?.signal));
   };
+
+  // Back-compat surface — same cache as `listModelsWithSource`, so calling
+  // both never doubles the probe.
+  const listModels = (ctx?: CallContext): Promise<ModelInfo[]> =>
+    listModelsWithSource(ctx).then((r) => r.models);
 
   const dispose = async (): Promise<void> => {
     client = undefined;
@@ -296,6 +302,7 @@ export function createVertexAdapter(cfg: VertexConfig): ProviderAdapter {
     chat,
     stream,
     listModels,
+    listModelsWithSource,
     health,
     dispose,
   };

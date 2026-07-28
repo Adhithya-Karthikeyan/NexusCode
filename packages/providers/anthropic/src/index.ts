@@ -31,6 +31,7 @@ import type {
   FinishReason,
   Message,
   ModelInfo,
+  ModelListResult,
   StreamChunk,
   ToolDef,
   Usage,
@@ -46,10 +47,15 @@ const ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com";
 const ANTHROPIC_VERSION = "2023-06-01";
 
 /**
- * A curated snapshot of current selectable Claude models. Used as the graceful
- * fallback for {@link ProviderAdapter.listModels} when the live `/v1/models`
- * endpoint cannot be reached (no key, offline, error). Pricing/context stay
- * config-driven — this is only the id catalog.
+ * A curated snapshot of current selectable Claude models. Used as the
+ * graceful fallback for {@link listModels}/{@link listModelsWithSource} when
+ * the live `/v1/models` endpoint cannot be reached (no key, offline, error).
+ * Pricing/context stay config-driven — this is only the id catalog.
+ *
+ * NOT refreshed as part of the model-list-provenance work (2026-07-29):
+ * these four ids match the Claude generation this very build is running as
+ * (per this environment's own model roster, not a memory guess), so unlike
+ * Gemini's fallback there was nothing here to verify or correct.
  */
 export const DEFAULT_ANTHROPIC_MODELS: ModelInfo[] = [
   { id: "claude-opus-5", modalities: ["text", "image"] },
@@ -560,20 +566,22 @@ async function resolveAuthHeaders(
 /**
  * Real model discovery: `GET {baseURL}/v1/models` with the resolved auth header
  * (`x-api-key` or OAuth `Bearer`) + `anthropic-version`, mapping `data[].id`.
- * Falls back to {@link DEFAULT_ANTHROPIC_MODELS} on any failure (no key, offline,
- * non-200, empty list). Never throws.
+ * Falls back to {@link DEFAULT_ANTHROPIC_MODELS} (tagged `source: "fallback"`)
+ * on any failure (no key, offline, non-200, empty list); a genuine live
+ * result is tagged `source: "provider"`. Never throws.
  */
 async function listAnthropicModels(
   cfg: AnthropicConfig,
   cred: CredentialResolver,
   signal?: AbortSignal,
-): Promise<ModelInfo[]> {
+): Promise<ModelListResult> {
+  const asFallback: ModelListResult = { models: DEFAULT_ANTHROPIC_MODELS, source: "fallback" };
   const fetchImpl = cfg.fetchImpl ?? fetch;
   const base = (cfg.baseURL ?? ANTHROPIC_DEFAULT_BASE_URL).replace(/\/$/, "");
   try {
     const auth = await resolveAuthHeaders(cfg, cred);
     // No credential resolvable → don't even try the network; use the fallback.
-    if (Object.keys(auth).length === 0) return DEFAULT_ANTHROPIC_MODELS;
+    if (Object.keys(auth).length === 0) return asFallback;
     const headers: Record<string, string> = {
       "anthropic-version": ANTHROPIC_VERSION,
       ...(cfg.defaultHeaders ?? {}),
@@ -583,7 +591,7 @@ async function listAnthropicModels(
       headers,
       ...(signal ? { signal } : {}),
     });
-    if (!res.ok) return DEFAULT_ANTHROPIC_MODELS;
+    if (!res.ok) return asFallback;
     const body = (await res.json()) as { data?: Array<{ id?: unknown }> };
     const seen = new Set<string>();
     const out: ModelInfo[] = [];
@@ -593,9 +601,9 @@ async function listAnthropicModels(
       seen.add(id);
       out.push({ id, modalities: ["text", "image"] });
     }
-    return out.length > 0 ? out : DEFAULT_ANTHROPIC_MODELS;
+    return out.length > 0 ? { models: out, source: "provider" } : asFallback;
   } catch {
-    return DEFAULT_ANTHROPIC_MODELS;
+    return asFallback;
   }
 }
 
@@ -782,8 +790,13 @@ export function createAnthropicAdapter(
     return { ok: true, detail: "Anthropic client ready (key resolved)" };
   };
 
-  const listModels = (ctx?: CallContext): Promise<ModelInfo[]> =>
+  const listModelsWithSource = (ctx?: CallContext): Promise<ModelListResult> =>
     modelCache.get(() => listAnthropicModels(cfg, cred, ctx?.signal));
+
+  // Back-compat surface — same cache as `listModelsWithSource`, so calling
+  // both never doubles the probe.
+  const listModels = (ctx?: CallContext): Promise<ModelInfo[]> =>
+    listModelsWithSource(ctx).then((r) => r.models);
 
   const dispose = async (): Promise<void> => {
     client = undefined;
@@ -798,6 +811,7 @@ export function createAnthropicAdapter(
     chat,
     stream,
     listModels,
+    listModelsWithSource,
     health,
     dispose,
   };

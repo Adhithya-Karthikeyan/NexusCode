@@ -1251,6 +1251,24 @@ Fix in flight: an explicit pick pins, with pairing kept as an opt-in "match
 system appearance" toggle. **Screenshot proof required** — the suite stayed
 green at 402/402 the whole time this bug was live.
 
+### 🔴 FOUND: the app has NO timeout anywhere — Integrations can hang forever
+`grep` for `timeout|deadline|withTimeout|Task.sleep` across
+`NexusKit/Integrations.swift` and `NexusKit/NexusClient.swift` returns
+**nothing**. `IntegrationsController.refresh()` awaits three
+`client.runJSON(...)` calls with no deadline and only clears `isLoading` via
+`defer` once all three return. A pending permission prompt, a wedged MCP
+server or a slow network leaves "Loading integrations…" up forever, with no
+failure state and no escape but quitting. Caught it in the redesign's own
+`final_integrations.png`, which is stuck on the spinner because the Documents
+prompt was blocking an MCP server from starting.
+
+This is the **same class of defect as the 22-minute stdin hang** that consumed
+most of this project's night. The CLI side learned the lesson thoroughly —
+`runBoundedCapture`, `DEFAULT_PROBE_TIMEOUT_MS`, the 750ms local-server probe
+are all bounded — but the app's own client never got the same treatment.
+Fix: bound `refresh()`, surface a real failure naming what did not answer,
+offer retry, and keep "failed" distinct from "timed out/inconclusive".
+
 ### UI review findings — read the screenshots, do not trust the report
 Reviewed `redesign/shots/01_chat_empty.png`, `compare_chat_before_after.png`,
 `03_studio_light.png`, `narrow_01_chat.png` directly. The sweep is a real
@@ -1261,10 +1279,26 @@ order, because the first two read as *broken* rather than merely plain:
    prominent control in the app, while the `model` control beside it is nearly
    twice as wide and empty. Never truncate the provider name; truncate the
    model id instead.
-2. **The `model` dropdown shows an empty grey placeholder.** Given the owner's
-   "switching models is not working" report, a blank model field is the worst
-   possible thing to leave in that strip. Show the resolved model, marking it
-   when it is the provider default rather than an explicit pick.
+2. **The `model` dropdown shows an empty grey placeholder — and that blank
+   silently means `claude-opus-5`.** Verified by running the composer's own
+   invocation verbatim (`nexus chat --persistent -o ndjson -p anthropic -t
+   --ask`, no `-m`): the `session` event comes back
+   `"model":"claude-opus-5"` — the most expensive model available. So the user
+   sees a blank control and is billed at top-tier rates having never been
+   shown which model they are on. That contradicts every other cost-honesty
+   guarantee in this repo (unknown cost never renders `$0.00`, the three-state
+   cost model, `costIncomplete`). The strip must always show the model that
+   will actually run, marked when it is a default rather than an explicit
+   pick. The `session` event already carries the resolved id if computing it
+   on the render path is unattractive.
+   **Separate product question for the owner:** `config get` has
+   `defaultProvider: anthropic` but **no `defaultModel`**, so `claude-opus-5`
+   is coming from the adapter's own ordering, not from any choice the user
+   made. Whether the zero-config default should be the priciest model is a
+   decision for the owner, not something to silently change.
+   (Also noted: `defaultEffort: "off"` is still in config after the effort
+   control was removed from the app. Harmless — the CLI still honours it —
+   but it is now unreachable from the UI.)
 3. Empty state is not optically centred — the top ~40% of the canvas is dead.
 4. Suggestion rows stretch the full ~915pt for 3–5 word labels. Constrain to
    ~560–640pt or a 2×2 grid.

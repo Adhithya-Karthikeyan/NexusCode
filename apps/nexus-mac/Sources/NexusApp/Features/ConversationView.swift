@@ -613,7 +613,8 @@ struct ControlStrip: View {
             options: roleOptions,
             selection: controller.role ?? Self.nativeToolLoopId,
             isLoading: rolesController?.isLoading ?? false,
-            width: 148,
+            minWidth: 148,
+            maxWidth: 148,
             emptyHint: rolesController?.error ?? "No roles found"
         ) { id in
             controller.role = id == Self.nativeToolLoopId ? nil : id
@@ -695,7 +696,8 @@ struct ControlStrip: View {
                     placeholder: "+ add",
                     options: providers.filter { !controller.backends.contains($0.id) },
                     selection: nil,
-                    width: 72,
+                    minWidth: 72,
+                    maxWidth: 72,
                     emptyHint: providers.isEmpty ? "No providers loaded yet" : "All providers already added"
                 ) { id in
                     if !controller.backends.contains(id) { controller.backends.append(id) }
@@ -927,7 +929,17 @@ private struct DropdownPicker: View {
     var options: [PickerOption]
     var selection: String?
     var isLoading = false
-    var width: CGFloat = 120
+    /// A floor, not a fixed size — the button grows to fit whatever
+    /// `displayText` actually is, up to `maxWidth` (`nil` = unbounded). Before
+    /// this, every picker used a single fixed `width`, which is exactly how
+    /// the provider name ("anthropic") ended up truncating mid-word
+    /// ("ant…opic") in the app's single most prominent control while the
+    /// model picker beside it — genuinely the longer, more technical value —
+    /// sat mostly empty at nearly double the width. The short, human-facing
+    /// value gets room to breathe; the long, technical one is where
+    /// truncation belongs if it has to happen at all.
+    var minWidth: CGFloat = 120
+    var maxWidth: CGFloat? = 120
     var emptyHint: String?
     var onSelect: (String) -> Void
 
@@ -973,7 +985,7 @@ private struct DropdownPicker: View {
             .foregroundStyle(selection == nil ? theme.color(\.textMuted) : theme.color(\.textSecondary))
             .padding(.horizontal, Space.sm)
             .padding(.vertical, 5)
-            .frame(width: width, alignment: .leading)
+            .frame(minWidth: minWidth, maxWidth: maxWidth, alignment: .leading)
             .background(theme.color(\.surfaceInset))
             .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
             .overlay {

@@ -14,6 +14,7 @@ import type {
   FinishReason,
   Message,
   ModelInfo,
+  ModelListResult,
   StreamChunk,
   Usage,
 } from "@nexuscode/shared";
@@ -110,6 +111,25 @@ export interface ProviderAdapter {
    * result MAY be cached briefly per adapter.
    */
   listModels?(ctx?: CallContext): Promise<ModelInfo[]>;
+
+  /**
+   * The SAME model discovery as {@link listModels}, plus its provenance —
+   * whether the returned list is confirmed live or the curated/config
+   * fallback (see `ModelListSource`, `@nexuscode/shared`). Additive &
+   * optional, exactly like `embed`/`health`: an adapter that implements
+   * `listModels` but not this degrades to being treated as unverified
+   * (`"fallback"`) by any caller that needs provenance rather than silently
+   * presenting an unconfirmed list as fact — see
+   * `listModelsForProvider` (`packages/cli/src/runtime.ts`), the ONE place
+   * that reads this. An adapter SHOULD implement this whenever it has a
+   * REAL live-vs-fallback distinction to report (every HTTP-backed provider
+   * with a curated static catalog, and the subprocess CLIs that probe their
+   * own vendor session); one with no such distinction (a fully static
+   * catalog like Bedrock, or the offline `mock` family) can leave this
+   * unimplemented — its list was never going to claim to be verified
+   * either way.
+   */
+  listModelsWithSource?(ctx?: CallContext): Promise<ModelListResult>;
 
   /** Optional cheap readiness probe: keys present, daemon up, CLI on PATH. */
   health?(ctx: CallContext): Promise<HealthStatus>;
