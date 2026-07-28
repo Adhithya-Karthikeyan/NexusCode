@@ -806,13 +806,26 @@ struct ControlStrip: View {
 /// `ModePicker` but generic over `EffortLevel`, so the strip doesn't read as
 /// two different segmented-control styles side by side.
 ///
-/// Labels and enablement are driven per-segment by `providerReasoning`
-/// (`NexusProvider.reasoning`, flattened onto the selected `PickerOption` —
-/// see `ControlStrip.selectedProviderReasoning`), so this no longer renders
-/// the same four names for every provider regardless of whether picking one
-/// would do anything — the owner's report this task exists to fix ("pick
+/// Enablement is driven per-segment by `providerReasoning` (`NexusProvider
+/// .reasoning`, flattened onto the selected `PickerOption` — see
+/// `ControlStrip.selectedProviderReasoning`), so this no longer treats every
+/// provider as offering the same four options regardless of whether picking
+/// one would do anything — the owner's report this task exists to fix ("pick
 /// codex and set effort to High and nothing happens; the control is
 /// decorative there").
+///
+/// The SEGMENT TEXT, though, stays exactly "Off"/"Low"/"Med"/"High" — never
+/// the token-budget count — on purpose: an earlier version put "High — 24k
+/// thinking tokens" etc. directly on the buttons, and a real screenshot at
+/// ~1900pt showed the strip wrapping to its two-row fallback anyway, with
+/// the provider/model pickers squeezed to near-illegible widths well above
+/// the 900pt minimum this control strip is required to survive at
+/// (`ControlStrip`'s doc). The provider-specific detail (real token counts
+/// for `.tokenBudget`, or why a segment is disabled) lives entirely in
+/// `help(for:disabled:)` instead — discoverable on hover, at zero strip
+/// width. See `NexusProvider.reasoningLabel(for:)` for the same detail
+/// string used elsewhere for a NON-strip context (a future picker row, not
+/// this always-visible control).
 private struct EffortPicker: View {
     @Environment(\.nexusTheme) private var theme
     @Binding var effort: EffortLevel
@@ -878,24 +891,34 @@ private struct EffortPicker: View {
         ReasoningCapability.isUnsupported(level, reasoning: providerReasoning)
     }
 
-    /// `ReasoningCapability.label(for:reasoning:)` already returns `nil` for
-    /// both "unknown" and "confirmed negative" (no truthful label exists for
-    /// either) — falling back to the plain level name here is exactly right
-    /// for both: unknown shows it because it might still work, and a
-    /// disabled/confirmed-negative segment shows it because the greyed-out
-    /// state (not the text) is what's carrying "won't work" here.
-    private func label(for level: EffortLevel) -> String {
-        ReasoningCapability.label(for: level, reasoning: providerReasoning) ?? level.title
-    }
+    /// Always just the level name (see this type's doc for why the token
+    /// count never lands here) — `Off`/`Low`/`Med`/`High`, full stop,
+    /// regardless of capability. Whether it renders enabled or disabled is
+    /// `isDisabled(_:)`'s job; the specific reason lives in `help(for:disabled:)`.
+    private func label(for level: EffortLevel) -> String { level.title }
 
+    /// Every bit of provider-specific detail this control has to offer —
+    /// the real token count, why a segment is disabled, or that support is
+    /// merely unconfirmed — lives here instead of on the segment itself.
     private func help(for level: EffortLevel, disabled: Bool) -> String {
-        guard disabled else {
-            let base = "Reasoning effort — appended as --effort when not Off"
-            guard level != .off, providerReasoning == nil else { return base }
+        if disabled {
+            let provider = providerId.map { " on \($0)" } ?? " on this provider"
+            return "\(level.title) reasoning effort isn't supported\(provider) — picking it would do nothing"
+        }
+        let base = "Reasoning effort — appended as --effort when not Off"
+        guard level != .off else { return base }
+        guard let providerReasoning else {
             return "\(base) (support for this provider hasn't been confirmed yet)"
         }
-        let provider = providerId.map { " on \($0)" } ?? " on this provider"
-        return "\(level.title) reasoning effort isn't supported\(provider) — picking it would do nothing"
+        // Folds in the real token count for a `.tokenBudget` provider (e.g.
+        // "High — 24k thinking tokens"); `ReasoningCapability.label` returns
+        // just `level.title` for `.effortString`/unsupported/unknown, so
+        // those fall through to the generic `base` line instead of repeating
+        // the level name back at the user for no reason.
+        if let detail = ReasoningCapability.label(for: level, reasoning: providerReasoning), detail != level.title {
+            return detail
+        }
+        return base
     }
 }
 
