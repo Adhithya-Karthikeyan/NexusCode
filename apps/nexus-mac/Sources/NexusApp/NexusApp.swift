@@ -10,6 +10,15 @@ import NexusKit
 struct NexusMacApp: App {
     @State private var workspace = WorkspaceModel()
 
+    /// The window's opening size, overridable by `NEXUS_UI_WIDTH`/`_HEIGHT`
+    /// for the screenshot sweep — the design brief requires every screen
+    /// captured at both 1440x900 and the app's own 900pt minimum, and a
+    /// fresh bundle id (mandatory per verification round, see `PLAN.md`) has
+    /// no restored window frame to resize. Unset falls back to the same
+    /// 1280x860 this always used.
+    static let defaultWidth = Double(ProcessInfo.processInfo.environment["NEXUS_UI_WIDTH"] ?? "") ?? 1280
+    static let defaultHeight = Double(ProcessInfo.processInfo.environment["NEXUS_UI_HEIGHT"] ?? "") ?? 860
+
     var body: some Scene {
         WindowGroup {
             ThemedRoot()
@@ -25,7 +34,7 @@ struct NexusMacApp: App {
         // (`maxWidth/maxHeight: .infinity`), which leaves a macOS window with no
         // ideal size to resolve — a window that cannot size itself may never
         // become visible at all.
-        .defaultSize(width: 1280, height: 860)
+        .defaultSize(width: Self.defaultWidth, height: Self.defaultHeight)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -158,6 +167,20 @@ final class WorkspaceModel {
         // only way to tell "saved false" apart from "never saved."
         if defaults.object(forKey: Keys.matchSystem) != nil {
             matchSystemAppearance = defaults.bool(forKey: Keys.matchSystem)
+        }
+        // Screenshot/verification seam — see `WorkspaceTab.fromEnvironment`'s
+        // doc for why this is an env var rather than synthetic input. Applied
+        // LAST so it wins over restored defaults, and only when the variables
+        // are actually set: a normal launch never enters either branch.
+        if let tab = WorkspaceTab.fromEnvironment() { self.tab = tab }
+        if let forced = ProcessInfo.processInfo.environment["NEXUS_UI_THEME"],
+           AppTheme.named(forced) != nil || NexusTheme.named(forced) != nil {
+            themeId = forced
+            // A forced theme is an explicit pick, exactly like clicking a
+            // swatch — so it must not be silently swapped back to its
+            // light/dark pair by appearance-following (see
+            // `SettingsView.selectTheme`, which makes the same call).
+            matchSystemAppearance = false
         }
         attach()
     }

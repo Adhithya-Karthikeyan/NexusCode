@@ -14,6 +14,25 @@ public enum WorkspaceTab: String, CaseIterable, Identifiable, Sendable {
 
     public var id: String { rawValue }
 
+    /// The tab a screenshot/verification run should open on, from
+    /// `NEXUS_UI_TAB`.
+    ///
+    /// This exists because the alternative is worse. Driving navigation for a
+    /// screenshot sweep otherwise needs either a synthetic click (which this
+    /// project has banned outright — a coordinate click once typed into an
+    /// unrelated document) or the accessibility API (which an ad-hoc-signed
+    /// throwaway bundle is never granted, so `AXPress` silently no-ops and
+    /// every capture comes back showing Chat — three such misleading captures
+    /// were taken and discarded in an earlier pass). An env var read once at
+    /// launch is deterministic, needs no permissions, and cannot touch
+    /// anything outside this process.
+    ///
+    /// Unset or unrecognised means `nil` — the normal path, so a real launch
+    /// is completely unaffected.
+    public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> WorkspaceTab? {
+        environment["NEXUS_UI_TAB"].flatMap(WorkspaceTab.init(rawValue:))
+    }
+
     public var title: String {
         switch self {
         case .chat: return "Chat"

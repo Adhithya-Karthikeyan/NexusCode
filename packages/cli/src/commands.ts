@@ -4086,6 +4086,35 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
       });
       return;
     }
+
+    // Fold the target's LIVE model list into the registry before resolving a
+    // default model or validating — mirrors the TUI's `listModelsFor` (this
+    // file's `runTui` deps, above), which is the only other caller of
+    // `assessSwitchTarget` and never runs in `--persistent` mode. Without
+    // this, `caps.models` below is whatever `capabilitiesOf` captured at
+    // registration — a curated snapshot — and codex/gemini/anthropic's REAL
+    // catalogs are live-probed, not static (`listModelsForProvider`'s doc,
+    // `./runtime.js`), so a genuinely-advertised model (e.g. codex's
+    // configured model, reported by `nexus models -p codex -o json`) was
+    // rejected as "not advertised" purely because nothing had ever told the
+    // registry it exists. `listModelsForProvider` bounds the probe itself and
+    // reuses each adapter's own short-TTL model cache
+    // (`createModelListCache`), so this never spawns a fresh probe on every
+    // switch — a warm cache (e.g. from a prior `nexus models`/picker call)
+    // resolves near-instantly. `recordDiscoveredModels` is idempotent and, per
+    // its own doc, never lets an unresolvable list (probe failed, no
+    // credentials — `listModelsForProvider` degrades to the SAME curated
+    // models `caps.models` already has) expand what is accepted: it only ever
+    // adds ids that are new.
+    const liveModels = await listModelsForProvider(runtime, targetProvider);
+    runtime.registry.recordDiscoveredModels(
+      targetProvider,
+      liveModels.map((r) => ({
+        id: r.model,
+        ...(r.contextWindow !== undefined ? { contextWindow: r.contextWindow } : {}),
+      })),
+    );
+
     const resolvedModel =
       targetModel ?? resolveSwitchModel(runtime, targetProvider, config);
     const to = { providerId: targetProvider, modelId: resolvedModel };
