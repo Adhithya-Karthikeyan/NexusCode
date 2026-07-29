@@ -58,6 +58,19 @@ describe("codex — listReasoningLevels (live-probed via `codex debug models --b
     ]);
   });
 
+  /**
+   * The team-lead-verified fact this locks in: `~/.codex/config.toml` already
+   * had `model_reasoning_effort = "xhigh"` configured with ZERO flags passed
+   * on this run — codex already reasons by default. NexusCode's "off" only
+   * omits the `-c model_reasoning_effort=…` override — it never sends
+   * anything that would turn reasoning OFF — so a picker must not offer
+   * "off" here as if it disables reasoning.
+   */
+  it("offDisablesReasoning is FALSE — codex already reasons by default; --effort only selects the level", async () => {
+    const adapter = adapterFor("doctor-success");
+    expect((await adapter.listReasoningLevels!()).offDisablesReasoning).toBe(false);
+  });
+
   it("falls back to the value written in config.toml (never a guess) when the catalog probe times out", async () => {
     const dir = isolatedCodexHome('model = "gpt-5.6-fake"\nmodel_reasoning_effort = "xhigh"\n');
     const adapter = createCodexAdapter({
@@ -66,7 +79,7 @@ describe("codex — listReasoningLevels (live-probed via `codex debug models --b
       listModelsTimeoutMs: 500,
     });
     const result = await adapter.listReasoningLevels!();
-    expect(result).toEqual({ levels: [{ id: "xhigh" }], defaultLevel: "xhigh", source: "fallback" });
+    expect(result).toEqual({ levels: [{ id: "xhigh" }], defaultLevel: "xhigh", source: "fallback", offDisablesReasoning: false });
   });
 
   it("falls back to config.toml when the catalog has no entry for the configured model", async () => {
@@ -80,33 +93,34 @@ describe("codex — listReasoningLevels (live-probed via `codex debug models --b
       levels: [{ id: "medium" }],
       defaultLevel: "medium",
       source: "fallback",
+      offDisablesReasoning: false,
     });
   });
 
   it("falls back to an empty list (never invented options) when neither the catalog nor config.toml resolve", async () => {
     const adapter = adapterFor("debugmodels-no-levels"); // empty codex home, no config.toml at all
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("falls back honestly when the catalog reply is not valid JSON", async () => {
     const adapter = adapterFor("debugmodels-malformed");
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("falls back honestly when the catalog probe exits non-zero", async () => {
     const adapter = adapterFor("debugmodels-error");
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("falls back to an empty list when the configured model itself can't be resolved (doctor fails) and config.toml has nothing either", async () => {
     const adapter = adapterFor("doctor-hang");
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("degrades honestly when the binary is not on PATH (no CLI spawned)", async () => {
     const dir = isolatedCodexHome();
     const adapter = createCodexAdapter({ bin: "definitely-not-a-real-codex-binary-xyz", resolveEnv: async () => ({ CODEX_HOME: dir }) });
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("uses --bundled (no network dependency) rather than a live catalog refresh", async () => {

@@ -53,30 +53,44 @@ describe("claude-code — listReasoningLevels (live-probed via the real `/effort
     expect(result.levels.map((l) => l.id)).toEqual(["low", "medium", "high", "xhigh", "max", "ultracode", "auto"]);
   });
 
+  /**
+   * The team-lead-verified fact this locks in: `claude` already emits real
+   * `reasoning` events with ZERO `--effort` passed (its own session default
+   * already reasons). NexusCode's "off" only omits the flag — it never sends
+   * anything that would turn reasoning OFF — so a picker must not offer "off"
+   * here as if it disables reasoning. True on EVERY branch (this is a static
+   * fact about the wire, not a probe result), so it must hold even when the
+   * probe itself fails — see the fallback-path assertions below.
+   */
+  it("offDisablesReasoning is FALSE — claude-code already reasons by default; --effort only selects the level", async () => {
+    const adapter = adapterFor("success");
+    expect((await adapter.listReasoningLevels!()).offDisablesReasoning).toBe(false);
+  });
+
   it("degrades to an empty, \"fallback\"-tagged list (never a guess) when the probe times out", async () => {
     const adapter = adapterFor("effort-hang");
     const result = await adapter.listReasoningLevels!();
-    expect(result).toEqual({ levels: [], source: "fallback" });
+    expect(result).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("degrades honestly when the CLI exits non-zero", async () => {
     const adapter = adapterFor("effort-error");
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("degrades honestly when the reply is not valid JSON", async () => {
     const adapter = adapterFor("effort-malformed");
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("degrades honestly when the JSON reply has no parseable Usage clause", async () => {
     const adapter = adapterFor("effort-empty");
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("degrades honestly when the binary is not on PATH (no CLI spawned)", async () => {
     const adapter = createClaudeCodeAdapter({ bin: "definitely-not-a-real-claude-binary-xyz" });
-    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback" });
+    expect(await adapter.listReasoningLevels!()).toEqual({ levels: [], source: "fallback", offDisablesReasoning: false });
   });
 
   it("caches the live probe so a picker refresh does not re-spawn the CLI", async () => {

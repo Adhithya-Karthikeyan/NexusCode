@@ -249,11 +249,25 @@ describe("nexus effort <provider> — live per-provider discovery", () => {
       supported: boolean;
       levels: { id: string }[];
       source: string;
+      offDisablesReasoning: boolean;
     };
     expect(obj.provider).toBe("claude-code");
     expect(obj.supported).toBe(true);
     expect(obj.source).toBe("provider");
     expect(obj.levels.map((l) => l.id)).toEqual(["low", "medium", "high", "xhigh", "max", "ultracode", "auto"]);
+    // claude-code already reasons by its own default (verified: a real
+    // `chat --persistent -p claude-code` run with NO --effort emits real
+    // `reasoning` events) — "off" is not a level this CLI has at all, and
+    // must never appear as a false "disables reasoning" option.
+    expect(obj.offDisablesReasoning).toBe(false);
+    expect(obj.levels.map((l) => l.id)).not.toContain("off");
+  }, 20_000);
+
+  it("claude-code, text mode: says it always reasons instead of offering a false 'off'", async () => {
+    const r = await run(["effort", "claude-code"], "", { NEXUS_CLAUDE_CODE_BIN: RICH_FAKE_CLAUDE });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/always reasons/);
+    expect(r.stdout).not.toMatch(/^\s*off\s/m);
   }, 20_000);
 });
 
