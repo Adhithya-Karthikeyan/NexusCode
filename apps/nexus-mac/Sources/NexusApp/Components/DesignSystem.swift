@@ -7,28 +7,6 @@ import NexusKit
 /// (`Depth`, `SurfaceStyle`) live in that file; this one holds the widgets
 /// every screen composes from.
 
-/// The previous type ramp, kept as a bridge while each screen migrates to
-/// `Type`.
-///
-/// `Kind` handed back a bare `Font`, which is precisely why nothing in the app
-/// had tracking or considered leading — the token had no way to carry them.
-/// Every entry here now resolves to the corresponding `Type` style's face, so
-/// a screen that has not been rebuilt yet still picks up the new sizes and
-/// weights immediately, and migrating it to `.textStyle(Type.x)` afterwards
-/// only adds the tracking and leading. Delete this once no call sites remain.
-enum Kind {
-    static let hero = Type.display.font
-    static let title = Type.title.font
-    static let headline = Type.heading.font
-    static let section = Type.eyebrow.font
-    static let body = Type.body.font
-    static let bodyEmphasis = Type.bodyStrong.font
-    static let caption = Type.caption.font
-    static let micro = Type.monoMicro.font
-    static let mono = Type.mono.font
-    static let monoSmall = Type.monoMicro.font
-}
-
 extension Type {
     /// 13pt medium — a row label or an emphasised line of body text. Distinct
     /// from `label` (12pt) which is for a CONTROL's own name.

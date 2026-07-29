@@ -307,6 +307,46 @@ extension View {
     }
 }
 
+// MARK: - Speaker slab
+
+/// The user's own turn in the transcript: raised on dark, recessed on light.
+///
+/// The single treatment that cannot be shared between the two modes, because
+/// the ladder is not symmetric. On a dark theme a raised surface is lighter
+/// than its canvas and there is plenty of room upward. On BOTH light themes,
+/// `elevation.level1` and `level2` are the identical `#FFFFFF` — the canvas is
+/// already pure white, so "raised" has nowhere to go, and a level-2 slab
+/// rendered white-on-white separated only by a hairline. That is the light-mode
+/// mirror of the material inversion this redesign started with: a structural
+/// gap in the ladder, not a styling preference.
+///
+/// Light themes do have room DOWNWARD (`surfaceInset` is `#F3EDE3` on Daylight,
+/// `#EEF0F2` on Studio against a white canvas), so on light the slab recesses
+/// instead. This is not a compromise — it is the convention Claude and ChatGPT
+/// both use in light mode, and it is the correct physics either way: the block
+/// reads as a distinct speaker by stepping off the canvas, in whichever
+/// direction that mode actually affords.
+struct SpeakerSlab: ViewModifier {
+    @Environment(\.nexusTheme) private var theme
+
+    func body(content: Content) -> some View {
+        if theme.isDark {
+            content.surface(2, radius: Radius.card, specular: 0.9)
+        } else {
+            content
+                .background {
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .fill(theme.color(\.surfaceInset))
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+                }
+        }
+    }
+}
+
 // MARK: - Page measure
 
 extension View {

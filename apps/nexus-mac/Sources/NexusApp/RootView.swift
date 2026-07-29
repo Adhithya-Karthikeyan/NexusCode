@@ -731,7 +731,7 @@ struct SettingsView: View {
         PageScaffold {
             // `PageHeader`, not a hand-rolled title+subtitle stack — this was
             // the pattern every other screen's page title now shares
-            // (`DESIGN.md`'s "one Kind.title moment per screen").
+            // (`DESIGN.md`'s "one Type.title moment per screen").
             PageHeader(
                 "Settings",
                 subtitle: "\(AppTheme.all.count) themes designed for this window — material, elevation and gradient a terminal palette can't express."

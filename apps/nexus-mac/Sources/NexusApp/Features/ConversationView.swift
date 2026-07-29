@@ -951,7 +951,7 @@ struct ControlStrip: View {
             HStack(spacing: 4) {
                 Image(systemName: controller.approvalsEnabled ? "hand.raised.fill" : "hand.raised.slash")
                     .font(.system(size: 9))
-                // Prose UI label, not machine output — `Kind.mono` is
+                // Prose UI label, not machine output — `Type.mono` is
                 // reserved for literal CLI/JSON text (the command preview,
                 // provider/model ids), not English button copy.
                 Text("Ask first")
@@ -1582,7 +1582,7 @@ struct TurnView: View {
                 .multilineTextAlignment(.leading)
                 .padding(.horizontal, Space.xl)
                 .padding(.vertical, Space.lg)
-                .surface(2, radius: Radius.card, specular: 0.9)
+                .modifier(SpeakerSlab())
                 // Capped well short of the full measure. Left to grow, a long
                 // prompt filled the column edge to edge and stopped reading as
                 // an inset block at all — it looked like a heading over the

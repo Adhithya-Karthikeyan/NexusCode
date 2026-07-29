@@ -156,7 +156,7 @@ config, where you are the author.
 | --- | --- | --- | --- |
 | `defaultProvider` | string | `"anthropic"` | Provider used when no `-p` is given. Falls back to a usable provider (`mock` first) if this one has no credential. |
 | `defaultModel` | string | *(unset)* | Model used when no `-m` is given. Unset means the provider's first model. |
-| `defaultEffort` | `"off"` \| `"low"` \| `"medium"` \| `"high"` | `"off"` | Reasoning effort used when `--effort` is not given, for `ask`/`agent`/`chat`/`compare`/`race`/`consensus`/`chain`/`plan`. `--effort` always wins over this. A provider that cannot honor the resolved level warns on stderr and runs without it — never silently. |
+| `defaultEffort` | string | `"off"` | Reasoning effort used when `--effort` is not given, for `ask`/`agent`/`chat`/`compare`/`race`/`consensus`/`chain`/`plan`/`code`. `"off"` always works; any other value is PROVIDER-NATIVE (run `nexus effort <provider>` for the real, live-probed scale — claude-code alone accepts seven levels). `--effort` always wins over this. Left at its own `"off"` default with nothing configured, a token-budget HTTP provider (anthropic/gemini/vertex/bedrock) gets an implicit `"medium"` so extended thinking is on by default; claude-code/codex are left alone so their own already-configured effort governs. A provider that cannot honor an explicitly-configured level warns on stderr and runs without it — never silently. |
 | `providers` | `ProviderConfig[]` | `[]` | Extra/overriding provider entries. Entries here win over the built-in catalog. |
 | `mcp` | `McpServerConfig[]` | `[]` | MCP servers connected and tool-discovered at session startup. |
 | `routing` | `RouteRule[]` | `[]` | Declarative routing rules. |
@@ -802,7 +802,7 @@ limited to non-secret settings.
 | --- | --- | --- |
 | `NEXUS_DEFAULT_PROVIDER` | `defaultProvider` | any provider id |
 | `NEXUS_DEFAULT_MODEL` | `defaultModel` | any model id |
-| `NEXUS_DEFAULT_EFFORT` | `defaultEffort` | `off`, `low`, `medium`, `high` |
+| `NEXUS_DEFAULT_EFFORT` | `defaultEffort` | `off`, or any provider-native level (e.g. `medium`, `xhigh`) |
 | `NEXUS_APPROVAL` | `approval` | `auto`, `confirm`, `dry-run` |
 | `NEXUS_HISTORY_DB` | `history.dbPath` | a path |
 | `NEXUS_HISTORY_DISABLED` | `history.enabled = false` | `1` or `true` |

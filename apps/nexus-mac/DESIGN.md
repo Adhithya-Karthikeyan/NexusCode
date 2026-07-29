@@ -103,6 +103,14 @@ Three decisions carry this:
 Sizes stay anchored to real macOS metrics rather than invented ones — that part
 of the old system was right and is kept.
 
+`Type` is the **only** type system. The old `Kind` is deleted, not deprecated:
+it returned a bare `Font`, which is exactly why nothing in the app had tracking
+or considered leading, and leaving both standing is how a codebase ends up with
+the half-migrated look this redesign exists to fix. Note that `micro` (sans) and
+`monoMicro` (monospaced) are the same size and easy to conflate — collapsing
+them during the migration silently monospaced 22 sans labels. Machine output
+gets mono; a badge reading "expires ~7h" is prose.
+
 ## Depth: luminance stacking, lit from above
 
 A dark UI has no overhead light to cast a shadow downward, so a drop shadow
@@ -170,11 +178,22 @@ The highest-stakes surface, and the least designed thing in the old build.
 
 - **Reading measure 720pt**, up from 660. Claude and ChatGPT run ~768,
   Perplexity ~720; 660 at 15pt prose was landing under 60 characters a line.
-- **The user's turn is a slab** — filled at level 2, inset from the leading
-  edge, capped at 78% of the measure so the indent survives the longest prompt.
-  Deliberately not a bubble: no tail, no capsule, no saturated fill, because
-  round coloured bubbles read as casual texting and undercut the tool framing.
-  But it *is* a container, because weight alone was not doing the job.
+- **The user's turn is a slab** — inset from the leading edge and capped at 78%
+  of the measure so the indent survives the longest prompt. Deliberately not a
+  bubble: no tail, no capsule, no saturated fill, because round coloured
+  bubbles read as casual texting and undercut the tool framing. But it *is* a
+  container, because weight alone was not doing the job.
+- **The slab rises on dark and recesses on light** (`SpeakerSlab`). The ladder
+  is not symmetric, and assuming it was produced the light-mode mirror of the
+  material bug: on BOTH light themes `elevation.level1` and `level2` are the
+  identical `#FFFFFF`, so a "raised" slab measured **1.0000 against a canvas at
+  1.0000** — literally zero separation, with only a hairline to distinguish it.
+  Light themes do have room downward (`surfaceInset` is `#F3EDE3` on Daylight,
+  `#EEF0F2` on Studio), so on light the slab steps *back* instead: measured
+  0.8787 and 0.8948 against the same white canvas. Not a compromise — it is the
+  convention Claude and ChatGPT both use in light mode, and it is the correct
+  physics in each direction. **When a treatment depends on elevation, check
+  that the rung above actually differs from the rung below in that theme.**
 - **The assistant's turn is introduced by an attribution row** — provider
   identity dot, `provider/model` in mono, cache state, and the copy control.
   Shown on *every* turn, not only when the provider changed. Repetition is the

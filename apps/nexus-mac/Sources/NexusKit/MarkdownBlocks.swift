@@ -194,8 +194,8 @@ public enum MarkdownParser {
     /// ATX-style `#` headings only (no setext `===`/`---` underlines — those
     /// are indistinguishable from a thematic break or a paragraph without
     /// look-ahead this renderer doesn't need for chat text). Levels are
-    /// capped at 4: the design system's type ramp (`Kind.title` down to
-    /// `Kind.section`) has four distinct steps, and a `#####` in the wild
+    /// capped at 4: the design system's type ramp (`Type.title` down to
+    /// `Type.eyebrow`) has four distinct steps, and a `#####` in the wild
     /// reads as "still a heading", not as a reason to add a fifth size.
     private static func matchHeading(_ content: Substring) -> (level: Int, inline: String)? {
         var count = 0

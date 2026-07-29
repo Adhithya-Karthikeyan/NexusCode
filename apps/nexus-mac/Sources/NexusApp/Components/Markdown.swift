@@ -9,7 +9,7 @@ import NexusKit
 /// Block structure (headings, lists, fenced code, blockquotes, rules) comes
 /// from `MarkdownParser` in NexusKit — pure, UI-free, unit-tested logic, kept
 /// there rather than here so it can run headlessly. Everything in THIS file
-/// is presentation: it turns a `[MarkdownBlock]` into `Space`/`Kind`-scaled,
+/// is presentation: it turns a `[MarkdownBlock]` into `Space`/`Type`-scaled,
 /// theme-tokened SwiftUI, the same design-system vocabulary every other view
 /// in the app uses, so an assistant answer reads as part of the product
 /// rather than a debug dump of markdown source.
@@ -174,9 +174,9 @@ private struct MarkdownBlockView: View, Equatable {
 /// A real size/weight ramp, distinct from body copy at every step — but built
 /// entirely from sizes/weights `DesignSystem.swift` already defines and uses
 /// elsewhere, rather than inventing a parallel scale next to it:
-/// - `#`  -> `Kind.title`      (15/semibold)
-/// - `##` -> `Kind.headline`   (13/semibold)
-/// - `###`/`####` -> `Kind.bodyEmphasis`/`Kind.section`'s own (size, weight),
+/// - `#`  -> `Type.title`      (15/semibold)
+/// - `##` -> `Type.heading`    (13/semibold)
+/// - `###`/`####` -> `Type.bodyStrong`/`Type.eyebrow`'s own (size, weight),
 ///   uppercased with the same tracking `SectionHeader` already uses for its
 ///   label row, since a level-3/4 heading in chat prose reads more like a
 ///   section label than a title.
@@ -185,17 +185,17 @@ private struct HeadingText: View {
     let level: Int
     let inline: String
 
-    /// Mirrors `Kind.title`/`headline`/`bodyEmphasis`/`section`'s own
+    /// Mirrors `Type.title`/`heading`/`bodyStrong`/`eyebrow`'s own
     /// (size, weight) pairs. `DesignSystem.swift` is off-limits while
     /// `app-themes` is mid-wiring the theme system through it, and `Font` is
     /// opaque — there's no API to read a point size back out of an existing
-    /// `Kind.*` value — so these are named to make the correspondence to
-    /// each `Kind` stop explicit rather than restating unlabeled numbers.
+    /// `Type.*` value — so these are named to make the correspondence to
+    /// each `Type` stop explicit rather than restating unlabeled numbers.
     private enum Scale {
-        static let h1: (size: CGFloat, weight: Font.Weight) = (15, .semibold)  // Kind.title
-        static let h2: (size: CGFloat, weight: Font.Weight) = (13, .semibold)  // Kind.headline
-        static let h3: (size: CGFloat, weight: Font.Weight) = (13, .medium)    // Kind.bodyEmphasis
-        static let h4: (size: CGFloat, weight: Font.Weight) = (11, .semibold)  // Kind.section
+        static let h1: (size: CGFloat, weight: Font.Weight) = (15, .semibold)  // Type.title
+        static let h2: (size: CGFloat, weight: Font.Weight) = (13, .semibold)  // Type.heading
+        static let h3: (size: CGFloat, weight: Font.Weight) = (13, .medium)    // Type.bodyStrong
+        static let h4: (size: CGFloat, weight: Font.Weight) = (11, .semibold)  // Type.eyebrow
     }
 
     var body: some View {
@@ -394,7 +394,7 @@ private struct InlineText: View {
             if let intent = run.inlinePresentationIntent {
                 if intent.contains(.code) {
                     // Scaled relative to the CONTEXT it's in, not pinned to
-                    // one flat size — `Kind.monoSmall` (10.5pt) was fine for
+                    // one flat size — `Type.monoMicro` (10.5pt) was fine for
                     // 13pt body text but tiny and off-baseline inside a 15pt
                     // H1. One step down from the surrounding size, floored at
                     // the documented 10pt minimum, keeps it legibly smaller

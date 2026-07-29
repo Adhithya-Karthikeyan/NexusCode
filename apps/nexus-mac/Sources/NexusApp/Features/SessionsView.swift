@@ -23,9 +23,10 @@ struct SessionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // No separate divider here: `PageHeader` draws its own bottom
+            // hairline (and owns its margins), so a `Rectangle` underneath it
+            // renders a second rule 1px below the first.
             headerBar
-
-            Rectangle().fill(theme.color(\.chromeDivider)).frame(height: 1)
 
             // No `.padding()` follows this — every branch handles its own
             // padding internally, so nothing here demands "available space
@@ -99,8 +100,6 @@ struct SessionsView: View {
                 }
             )
         )
-        .padding(.horizontal, Space.xl)
-        .padding(.vertical, Space.md)
     }
 
     // MARK: - Split view

@@ -219,13 +219,13 @@ public struct AccentSystem: Sendable, Hashable {
 
 // MARK: - Typography intent
 
-/// Most themes share one balanced type ramp — that's `Kind` in
+/// Most themes share one balanced type ramp — that's `Type` in
 /// `DesignSystem.swift`, and it stays the default for anything that doesn't
 /// opt in. A theme can lean the ramp toward a point of view: a command-tool
 /// theme reads slightly tighter and more mono-forward, a friendly theme reads
 /// slightly softer and more open.
 public enum TypographyIntent: Sendable, Hashable {
-    /// The shared default: `Kind`'s ramp, unmodified.
+    /// The shared default: `Type`'s ramp, unmodified.
     case neutral
     /// Tighter tracking on labels, numerals lean monospaced — for themes
     /// built around a command-palette / tool register.
