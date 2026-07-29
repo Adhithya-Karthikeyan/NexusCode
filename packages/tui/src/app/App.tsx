@@ -477,6 +477,7 @@ export function App(props: AppProps): React.JSX.Element {
       currentProvider,
       currentContextMax,
       listModelsFor,
+      listEffortLevelsFor,
       effortOverride,
       currentReasoningSupported,
       projectedView,

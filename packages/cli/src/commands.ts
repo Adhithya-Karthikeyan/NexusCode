@@ -98,7 +98,13 @@ import {
 } from "@nexuscode/context";
 import { PromptEngine } from "@nexuscode/prompt";
 import type { CachedResponse } from "@nexuscode/cache";
-import { httpPoolOptions, type ChatRequest, type ToolDef } from "@nexuscode/shared";
+import {
+  httpPoolOptions,
+  type ChatRequest,
+  type EffortLevelInfo,
+  type EffortListSource,
+  type ToolDef,
+} from "@nexuscode/shared";
 import type { ParsedArgs } from "./args.js";
 import {
   buildPowerSources,
@@ -4673,9 +4679,39 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   const hasTools = toolRegistry.list().length > 0;
   // Reasoning-effort state for the `/effort` picker; only meaningful when the
   // active provider advertises reasoning (the picker reflects that). Same
-  // vocabulary the headless `--effort` flag validates against.
+  // `reasoningParamsFor`/`applyEffort` machinery the headless `--effort` flag
+  // uses, so an interactive pick and a headless run reach the provider
+  // through one seam.
   let activeEffort: EffortLevel = "off";
   const reasoningSupported = reasoningSupportedFor(runtime, providerId);
+  /**
+   * Live, provider-scoped `/effort` options for whichever provider is
+   * ACTIVE at pick time (not just `providerId`, the startup provider — the
+   * TUI's `/model`/`/provider` pickers can switch it mid-session) — mirrors
+   * `listModelsFor` below exactly. `reasoningCapabilityFor`'s `kind` decides
+   * the shape: `"token-budget"` gets the real thinking-token counts as
+   * hints, `"cli-native"` (claude-code/codex) asks the adapter's own live
+   * probe via `listEffortLevelsFor`, anything else falls back to the bare
+   * generic three names — the TUI's own last-resort default when this
+   * returns nothing.
+   */
+  const listEffortLevelsForActive = async (
+    pid: string,
+  ): Promise<{ id: string; hint?: string }[]> => {
+    const cap = reasoningCapabilityFor(runtime, pid);
+    if (!cap.supported) return [];
+    if (cap.kind === "token-budget") {
+      return Object.entries(cap.levels ?? EFFORT_BUDGET_TOKENS).map(([id, tokens]) => ({
+        id,
+        hint: `${Math.round(tokens / 1000)}k thinking tokens`,
+      }));
+    }
+    if (cap.kind === "cli-native") {
+      const live = await listEffortLevelsFor(runtime, pid);
+      return (live?.levels ?? []).map((l) => (l.description ? { id: l.id, hint: l.description } : { id: l.id }));
+    }
+    return [{ id: "low" }, { id: "medium" }, { id: "high" }];
+  };
   // The preflight is pure (see `./model-switch.js`); these two adapters bind it to
   // the live dispatch state and commit an accepted switch exactly once, so the
   // `/model` and `/provider` paths can no longer drift apart.
@@ -4792,10 +4828,15 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
         applySwitch(preflightProviderSwitch(switchContext(transcript), p)),
       // `/effort` picker: apply the chosen reasoning effort to the next turn, and
       // tell the TUI whether the active provider supports reasoning at all.
+      // `e` always originates from THIS SAME picker's own `optionsProvider`
+      // (`listEffortLevelsForActive` below, plus the TUI's own "off"/generic
+      // fallback) — never free-typed — so any non-empty value is trusted,
+      // the same way `onPickModel`/`onPickProvider` trust their own pickers.
       onEffortChange: (e: string) => {
-        if (isEffortLevel(e)) activeEffort = e;
+        if (e) activeEffort = e;
       },
       reasoningSupported,
+      listEffortLevelsFor: listEffortLevelsForActive,
       ...(system !== undefined ? { system } : {}),
       ...(themeId !== undefined ? { themeId } : {}),
     });
@@ -5123,6 +5164,98 @@ export async function cmdModels(args: ParsedArgs, io: Io = defaultIo): Promise<n
   for (const r of rows) {
     const provenance = r.source === "fallback" ? " — unverified (built-in default)" : "";
     io.out(`  ${r.model}${r.hint ? `  (${r.hint})` : ""}${provenance}\n`);
+  }
+  return 0;
+}
+
+// ── effort (real, per-provider reasoning-effort discovery) ────────────────────
+
+/**
+ * `nexus effort [provider]` — the dedicated "ask on purpose" surface for
+ * reasoning-effort options, mirroring `cmdModels` exactly (same target-
+ * resolution rules, same `source` provenance discipline). This is the ONLY
+ * place NexusCode spawns a provider CLI just to ask about its effort scale
+ * — `providers status -o json` deliberately never does (see that command's
+ * own doc comment on why it never probes live), so a client that wants the
+ * REAL per-provider scale (the macOS app's control strip, this command's own
+ * text/JSON output) comes here, exactly like `nexus models <provider>` is
+ * where a genuinely verified model catalog appears.
+ *
+ * A provider with no reasoning concept at all (`reasoningSupported: false`)
+ * reports zero levels — the caller's job is to hide the control entirely
+ * rather than render a dead one (per this feature's own "no dead controls"
+ * requirement), not this command's.
+ */
+export async function cmdEffort(args: ParsedArgs, io: Io = defaultIo): Promise<number> {
+  const config = await loadEffectiveConfig();
+  const runtime = await buildAuthedRuntime(config);
+  const output = parseOutput(args);
+
+  const explicit = args.positionals[0] ?? args.flags.get("provider");
+  let target: string;
+  if (explicit !== undefined) {
+    if (!runtime.registry.has(explicit)) {
+      io.err(`nexus effort: provider "${explicit}" not available (see \`nexus providers list\`)\n`);
+      return 1;
+    }
+    target = explicit;
+  } else {
+    const resolution = resolveDefaultProvider(runtime, config.defaultProvider);
+    if (!resolution) {
+      io.err("nexus effort: no provider is available — sign in with `nexus login`.\n");
+      return 1;
+    }
+    target = resolution.providerId;
+  }
+
+  const cap = reasoningCapabilityFor(runtime, target);
+  let levels: EffortLevelInfo[] = [];
+  let defaultLevel: string | undefined;
+  let source: EffortListSource = "fallback";
+  if (cap.supported) {
+    if (cap.kind === "token-budget") {
+      levels = Object.entries(cap.levels ?? EFFORT_BUDGET_TOKENS).map(([id, tokens]) => ({
+        id,
+        description: `${Math.round(tokens / 1000)}k thinking tokens`,
+      }));
+      source = "provider"; // NexusCode's own defined scale, not a guess.
+    } else if (cap.kind === "cli-native") {
+      const live = await listEffortLevelsFor(runtime, target);
+      levels = live?.levels ?? [];
+      if (live?.defaultLevel) defaultLevel = live.defaultLevel;
+      source = live?.source ?? "fallback";
+    } else {
+      levels = [{ id: "low" }, { id: "medium" }, { id: "high" }];
+      source = "provider";
+    }
+  }
+
+  if (output === "json") {
+    io.out(
+      `${JSON.stringify({
+        provider: target,
+        supported: cap.supported,
+        levels: levels.map((l) => ({ id: l.id, ...(l.description ? { description: l.description } : {}) })),
+        ...(defaultLevel ? { defaultLevel } : {}),
+        source,
+      })}\n`,
+    );
+    return 0;
+  }
+
+  if (!cap.supported) {
+    io.out(`${target} — no reasoning effort control (this provider has no effort concept)\n`);
+    return 0;
+  }
+  if (levels.length === 0) {
+    io.out(`${target} — reasoning effort supported, but the live scale could not be determined\n`);
+    return 0;
+  }
+  const provenance = source === "fallback" ? " (unverified)" : "";
+  io.out(`${target}${provenance}\n`);
+  for (const l of levels) {
+    const current = l.id === defaultLevel ? "  ●" : "";
+    io.out(`  ${l.id}${l.description ? `  (${l.description})` : ""}${current}\n`);
   }
   return 0;
 }

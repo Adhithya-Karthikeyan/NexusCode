@@ -459,7 +459,12 @@ private struct SidebarNavRow: View {
                 }
             }
             .foregroundStyle(isSelected ? theme.color(\.textPrimary) : theme.color(\.textSecondary))
-            .padding(.horizontal, Space.lg)
+            // Tighter horizontally when compact: a 64pt rail minus the list's
+            // own insets leaves ~56pt, and 12pt of padding each side left the
+            // selection pill crowding both edges with the accent rail hard
+            // against the window's. 6pt gives the lifted surface room to read
+            // as a distinct object at either width.
+            .padding(.horizontal, isCompact ? Space.sm : Space.lg)
             .padding(.vertical, 7)
             // Selection is a RAISED SURFACE, not a wash of accent colour.
             //
@@ -488,7 +493,11 @@ private struct SidebarNavRow: View {
                 }
             }
             .overlay(alignment: .leading) {
-                if isSelected {
+                // The accent rail only earns its place beside a label. In the
+                // icon-only rail there is no leading edge to hang it off
+                // without it reading as a stray mark, and the lifted surface
+                // already says "selected" on its own there.
+                if isSelected && !isCompact {
                     Capsule()
                         .fill(theme.color(\.accentDefault))
                         .frame(width: 3, height: 15)

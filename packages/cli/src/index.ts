@@ -27,6 +27,7 @@ import {
   cmdIndex,
   cmdJobs,
   cmdKeys,
+  cmdEffort,
   cmdLogin,
   cmdLogout,
   cmdLsp,
@@ -82,10 +83,12 @@ const FLAG_SPEC: FlagSpec = {
     "max-turns": [],
     "max-steps": [],
     role: ["r"],
-    // `--effort <off|low|medium|high>`: reasoning effort for ask/agent/chat/
-    // compare/race/consensus/chain (and plan, via the shared OODA path). Same
-    // vocabulary as the TUI's `/effort` picker — see `reasoningParamsFor` /
-    // `applyEffort` in commands.ts, the ONE place either surface builds it.
+    // `--effort <level>`: reasoning effort for ask/agent/chat/compare/race/
+    // consensus/chain (and plan, via the shared OODA path). "off" is
+    // universal; every other value is PROVIDER-NATIVE (`nexus effort
+    // <provider>` lists the real scale) — see `reasoningParamsFor` /
+    // `applyEffort` in commands.ts, the ONE place either surface (this flag,
+    // the TUI's `/effort` picker) builds it.
     effort: [],
     parent: [],
     deps: [],
@@ -258,8 +261,10 @@ Options:
   -r, --role <name>       agent/plan: run the OODA framework as a specialized role
       --max-steps <n>     agent/plan: cap OODA iterations (default: role budget)
       --effort <lvl>      ask/agent/chat/compare/race/consensus/chain: reasoning
-                          effort off|low|medium|high (default off). Warns on
-                          stderr and sends the request WITHOUT it — never
+                          effort. "off" always works; every other value is
+                          PROVIDER-NATIVE (see 'nexus effort <provider>' for
+                          the real scale — claude-code/codex included). Warns
+                          on stderr and sends the request WITHOUT it — never
                           silently — when the resolved provider can't honor it.
       --parent <id>       task add: parent task id (subtask)
       --deps <a,b>        task add: dependency task ids (comma-separated)
@@ -306,11 +311,16 @@ class AskCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "One-shot completion. Reads stdin when no prompt is given.",
     details:
-      "--effort <off|low|medium|high> asks the provider to reason harder before " +
-      "answering (mapped to a thinking-token budget on budget-based providers, " +
-      "or sent as-is on providers with a native effort parameter). Default off. " +
-      "When the resolved provider cannot honor it, a clear warning prints to " +
-      "stderr and the request proceeds WITHOUT it — never silently.",
+      "--effort <level> asks the provider to reason harder before answering — " +
+      "'off' always works; every other value is PROVIDER-NATIVE (see 'nexus " +
+      "effort <provider>' for the real scale: claude-code alone accepts seven, " +
+      "not the generic low/medium/high some providers use). Left unset, a " +
+      "reasoning-capable HTTP provider (anthropic/gemini/vertex/bedrock) gets a " +
+      "sensible implicit default so extended thinking is genuinely on; " +
+      "claude-code/codex are left alone so their own already-configured effort " +
+      "governs. When the resolved provider cannot honor an EXPLICIT --effort, " +
+      "a clear warning prints to stderr and the request proceeds WITHOUT it — " +
+      "never silently.",
     examples: [
       ["Ask with high reasoning effort", "nexus ask -p mock --effort high 'explain this'"],
     ],
@@ -325,7 +335,7 @@ class AgentCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Agentic run: native tool loop, or the full OODA framework with --role.",
     details:
-      "Without --role, runs the fast native tool-execution loop. With --role <coder|reviewer|tester|planner|researcher|architect|doc-writer|security-reviewer|coordinator>, runs the OODA loop (Observe→Reason→Plan→Act→Evaluate→Repeat): plan drafting, reflection, retry/self-correction, and dynamic replanning — all on the engine bus. --max-steps caps OODA iterations. A --role run honors --resume <id> / --continue exactly like `chat --persistent --resume`: the prior conversation is rehydrated with its full tool-call exchange (tool_use + result, not just text), but the role always plans afresh against THIS invocation's prompt — resumed plan/task state is not a thing this framework tracks. --effort <off|low|medium|high> applies to both paths (default off); a provider that cannot honor it gets a stderr warning and the request goes out without it, never silently. A --role run against a cli-subprocess agent (codex/claude-code) is refused before --effort is even evaluated — see the error for the two working routes.",
+      "Without --role, runs the fast native tool-execution loop. With --role <coder|reviewer|tester|planner|researcher|architect|doc-writer|security-reviewer|coordinator>, runs the OODA loop (Observe→Reason→Plan→Act→Evaluate→Repeat): plan drafting, reflection, retry/self-correction, and dynamic replanning — all on the engine bus. --max-steps caps OODA iterations. A --role run honors --resume <id> / --continue exactly like `chat --persistent --resume`: the prior conversation is rehydrated with its full tool-call exchange (tool_use + result, not just text), but the role always plans afresh against THIS invocation's prompt — resumed plan/task state is not a thing this framework tracks. --effort <level> applies to both paths (\"off\" always works; every other value is provider-native — see 'nexus effort <provider>'); a provider that cannot honor an EXPLICIT --effort gets a stderr warning and the request goes out without it, never silently. A --role run against a cli-subprocess agent (codex/claude-code) is refused before --effort is even evaluated — not because those two can't wire --effort at all (they now do — see 'nexus code'), but because the OODA role framework itself is incompatible with a CLI that runs its own agent loop; see the error for the two working routes.",
     examples: [
       ["Native tool loop", "nexus agent -p mock -m mock-tools 'read the config'"],
       ["OODA coder role", "nexus agent --role coder --max-steps 4 -p mock -m mock-tools 'add a hello function'"],
@@ -426,7 +436,7 @@ class CodeCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Drive a subprocess coding CLI (claude-code / codex) through the engine.",
     details:
-      "Runs a wrapped coding agent that edits files and runs shells; its file-edit/tool-result/approval events stream as UiEvents (diffs + tool activity on stderr). Degrades with a clear message when the CLI is not installed. --effort is always unsupported here: claude-code/codex run their own agent loop with no wire path for a reasoning-effort request, so any --effort prints a stderr warning and is never sent.",
+      "Runs a wrapped coding agent that edits files and runs shells; its file-edit/tool-result/approval events stream as UiEvents (diffs + tool activity on stderr). Degrades with a clear message when the CLI is not installed. --effort <level> reaches the CLI for real here: claude-code wires it as --effort <level> (its own session flag — 'nexus effort claude-code' lists all seven: low|medium|high|xhigh|max|ultracode|auto), codex wires it as -c model_reasoning_effort=<level> ('nexus effort codex' lists what the CONFIGURED model supports). With no --effort at all, each CLI's own already-configured effort governs, untouched — NexusCode never silently overrides it. An EXPLICIT --effort value the resolved provider's live scale doesn't recognize still surfaces as a stderr warning (unsupported) or the CLI's own rejection (unsupported for that value specifically), never a silent drop.",
     examples: [
       ["Run Claude Code on a task", "nexus code --agent claude-code 'fix the failing test'"],
       ["Run Codex", "nexus code -a codex 'add a README'"],
@@ -468,10 +478,11 @@ class ChatCommand extends HandlerCommand {
       "process forever; cancelling the turn (SIGINT/SIGTERM) denies any of its pending " +
       "approvals immediately. In non-persistent (batch) mode there is no live channel " +
       "to answer an approval, so `ask`'s network tier is denied outright instead.\n" +
-      "`--effort <off|low|medium|high>` sets reasoning effort for every turn in the " +
-      "session (default off, resolved once at startup — not per-line). When the " +
-      "resolved provider cannot honor it, a stderr warning prints and the turn " +
-      "proceeds without it — never silently.",
+      "`--effort <level>` sets reasoning effort for every turn in the session " +
+      "(resolved once at startup — not per-line; 'off' always works, every " +
+      "other value is provider-native — see 'nexus effort <provider>'). When " +
+      "an EXPLICIT --effort can't be honored, a stderr warning prints and the " +
+      "turn proceeds without it — never silently.",
     examples: [
       ["Pipe a conversation", "printf 'hi\\nwhat did I say?\\n' | nexus chat -p mock"],
       ["Continue the last conversation", "nexus chat --continue"],
@@ -539,9 +550,10 @@ class CompareCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Fan a prompt out across -b providers.",
     details:
-      "--effort <off|low|medium|high> applies to every -b lane (default off); a " +
-      "lane whose provider can't honor it gets its own stderr warning and runs " +
-      "without it — the other lanes are unaffected.",
+      "--effort <level> applies to every -b lane ('off' always works, every " +
+      "other value is provider-native — see 'nexus effort <provider>'); a " +
+      "lane whose provider can't honor an EXPLICIT --effort gets its own " +
+      "stderr warning and runs without it — the other lanes are unaffected.",
   });
   protected handler(): Handler {
     return cmdCompare;
@@ -553,9 +565,10 @@ class RaceCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Race -b providers; --mode first (fastest ok, cancels losers) | best (judge-ranked).",
     details:
-      "--effort <off|low|medium|high> applies to every -b lane (default off); a " +
-      "lane whose provider can't honor it gets its own stderr warning and runs " +
-      "without it — the other lanes are unaffected.",
+      "--effort <level> applies to every -b lane ('off' always works, every " +
+      "other value is provider-native — see 'nexus effort <provider>'); a " +
+      "lane whose provider can't honor an EXPLICIT --effort gets its own " +
+      "stderr warning and runs without it — the other lanes are unaffected.",
     examples: [
       ["Fastest healthy answer", "nexus race -b mock -b mock:mock-smart hi"],
       ["Judge-ranked best", "nexus race --mode best -b mock -b mock:mock-smart hi"],
@@ -571,9 +584,10 @@ class ConsensusCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Fan across -b providers, then reconcile them into one answer via a judge.",
     details:
-      "--effort <off|low|medium|high> applies to every -b lane (default off); a " +
-      "lane whose provider can't honor it gets its own stderr warning and runs " +
-      "without it — the other lanes are unaffected.",
+      "--effort <level> applies to every -b lane ('off' always works, every " +
+      "other value is provider-native — see 'nexus effort <provider>'); a " +
+      "lane whose provider can't honor an EXPLICIT --effort gets its own " +
+      "stderr warning and runs without it — the other lanes are unaffected.",
     examples: [["Reconcile two lanes", "nexus consensus -b mock -b mock:mock-smart hi"]],
   });
   protected handler(): Handler {
@@ -586,9 +600,10 @@ class ChainCommand extends HandlerCommand {
   static override usage = Command.Usage({
     description: "Run staged with hand-offs. Default preset plan→edit→review over mock; override with --stages.",
     details:
-      "--effort <off|low|medium|high> applies to every stage (default off); a " +
-      "stage whose provider can't honor it gets its own stderr warning and runs " +
-      "without it — the other stages are unaffected.",
+      "--effort <level> applies to every stage ('off' always works, every " +
+      "other value is provider-native — see 'nexus effort <provider>'); a " +
+      "stage whose provider can't honor an EXPLICIT --effort gets its own " +
+      "stderr warning and runs without it — the other stages are unaffected.",
     examples: [
       ["Default preset over mock", "nexus chain 'build a todo app'"],
       ["Explicit stages", "nexus chain --stages mock:mock-fast,mock:mock-smart 'plan then write'"],
@@ -641,6 +656,25 @@ class ModelsCommand extends HandlerCommand {
   });
   protected handler(): Handler {
     return cmdModels;
+  }
+}
+
+class EffortCommand extends HandlerCommand {
+  static override paths = [["effort"]];
+  static override usage = Command.Usage({
+    description:
+      "List the REAL reasoning-effort levels for ONE provider (positional, -p, else the active default) — live-probed from the provider, never a guessed/curated list.",
+    details:
+      "Each provider defines its own effort vocabulary: claude-code's own `/effort` reports seven levels (`low|medium|high|xhigh|max|ultracode|auto`), codex's set is pulled from its own model catalog (`codex debug models`) and varies by which model is configured, and the token-budget family (anthropic/gemini/vertex/bedrock) reports NexusCode's own `low|medium|high` mapped to real thinking-token counts. A provider with no reasoning concept at all reports zero levels — `supported: false` in `-o json` — so a client knows to hide the control rather than render a dead one. This is the dedicated live-probe surface `--effort`'s own validation and the TUI's `/effort` picker both draw from; `providers status -o json` deliberately never probes this live (see that command's doc).",
+    examples: [
+      ["List the active provider's effort levels", "nexus effort"],
+      ["List one provider's effort levels", "nexus effort claude-code"],
+      ["Scope by flag", "nexus effort -p codex"],
+      ["JSON for scripting", "nexus effort claude-code -o json"],
+    ],
+  });
+  protected handler(): Handler {
+    return cmdEffort;
   }
 }
 
@@ -1076,6 +1110,7 @@ cli.register(RouteCommand);
 cli.register(MemoryCommand);
 cli.register(ProvidersCommand);
 cli.register(ModelsCommand);
+cli.register(EffortCommand);
 cli.register(LoginCommand);
 cli.register(LogoutCommand);
 cli.register(AuthCommand);

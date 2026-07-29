@@ -262,26 +262,20 @@ struct ConversationView: View {
             : "This runs `nexus \(controller.mode.rawValue)` and renders its event stream."
     }
 
-    /// Deliberately more substantial than a lone glyph in a void.
+    /// The opening statement: kicker, headline, one line of explanation, and
+    /// four suggestions — left-aligned on the same margin the composer below
+    /// it uses, so the whole screen reads as one block.
     ///
-    /// This used to be a generic icon-in-a-glow-circle — the single most
-    /// template-looking element in the app. `ChatHeroMark` replaced the glow
-    /// with something specific to THIS product — a live echo of the exact
-    /// `nexus <mode>` invocation the control strip above is configured to
-    /// run — but as a boxed, bordered element floating above the headline it
-    /// read as a second, unexplained UI control (a debug readout), not part
-    /// of the same statement as `heroTitle` below it. It's a KICKER now —
-    /// plain text, tight against the headline it introduces, the same
-    /// editorial relationship a small label above a big headline always has
-    /// — so the "this app always shows you the real command" identity
-    /// survives without a floating box to carry it.
+    /// The kicker is the identity moment. It carries the live provider's own
+    /// colour and the exact `nexus <mode> -p <provider>` this window will run
+    /// — the one thing on the opening screen that could not appear in any
+    /// other app, which is what an opening screen is for. It replaces a
+    /// glyph-in-a-radial-glow that was the most template-looking element in
+    /// the build.
     ///
-    /// The suggestions are a 2-column grid, not a full-width list: at this
-    /// column's own 660pt measure, a single-column list put a long empty
-    /// tail after every 3-5 word label — the label was never going to be
-    /// long enough to fill a 660pt row, so the row was never the right unit.
-    /// Two ~320pt columns give each suggestion a cell close to its own
-    /// content width instead.
+    /// Suggestions are two columns, not a full-width list: at this measure a
+    /// single column left a long empty tail after every 3–5 word label, so
+    /// the row was never the right unit.
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 0) {
             // A kicker, set in mono and carrying the live provider's identity
@@ -1381,42 +1375,6 @@ private struct ModePicker: View {
     }
 }
 
-/// The empty state's KICKER, sitting directly above `heroTitle` — a live
-/// echo of the exact `nexus <mode>` invocation the control strip is
-/// currently configured to run, in the same monospace-plus-caret language
-/// the composer's command preview and the transcript's own streaming cursor
-/// use elsewhere in this file. Reusing `StreamingCaret` here (not a new
-/// blinking-cursor implementation) is deliberate: it is the one piece of
-/// motion in this app that already means "live," so it says "ready" here as
-/// literally as it says "streaming" in `TurnView`.
-///
-/// Plain text, not a bordered card — a boxed, separately-elevated element
-/// floating above the headline read as a second UI control (a debug
-/// readout) rather than part of the same statement as the headline below
-/// it. A kicker is a small label directly above a big one; tight spacing to
-/// `heroTitle` (see `emptyState`) is what makes that relationship read.
-private struct ChatHeroMark: View {
-    @Environment(\.nexusTheme) private var theme
-    let mode: RunMode
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Text("nexus")
-                .foregroundStyle(theme.color(\.textMuted))
-            Text(mode.rawValue)
-                .fontWeight(.semibold)
-                // Neutral, not the accent gradient: this word is placeholder
-                // copy naming the current mode, not a selection, the primary
-                // action, or live state — the three things accent is
-                // rationed to (see `DESIGN.md`).
-                .foregroundStyle(theme.color(\.textSecondary))
-            StreamingCaret()
-        }
-        .font(.system(size: 13, design: .monospaced))
-        .animation(.easeOut(duration: 0.15), value: mode)
-    }
-}
-
 /// One row of the empty state's "try asking" grid — a full-width card rather
 /// than the small capsule this used to be, so the four suggestions read as
 /// real, chosen content occupying the transcript region rather than a thin
@@ -1563,18 +1521,6 @@ struct TurnView: View {
     var showsReasoning = false
     var isStreaming = false
     var compact = false
-    /// The provider CURRENTLY serving this conversation (`ViewState.session
-    /// ?.provider`) — `nil` for a context (e.g. a compare/race `LaneColumn`)
-    /// that has no single "current provider" concept to compare against.
-    ///
-    /// Only ever used to decide whether `providerBadge` renders, never to
-    /// derive `turn`'s own attribution — `turn.provider`/`.model` already
-    /// carry that, stamped once from folded events (see `Turn.provider`'s
-    /// doc). Reading "what's current" for the COMPARISON is fine; it is
-    /// reading it as the SOURCE of a turn's own attribution that would be
-    /// the bug (a switch changes `session` on turns that started before the
-    /// switch too, which is exactly what `Turn.provider` exists to survive).
-    var currentProvider: String? = nil
     @State private var hoveringAnswer = false
     @State private var copied = false
 

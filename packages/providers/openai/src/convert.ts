@@ -186,7 +186,14 @@ export function buildStreamingBody(req: ChatRequest, opts: BodyOptions): Streami
     };
   }
   if (opts.supportsReasoningEffort && req.reasoning?.enabled && req.reasoning.effort) {
-    body.reasoning_effort = req.reasoning.effort;
+    // `req.reasoning.effort` is a plain `string` (see `ReasoningOptions`'s doc,
+    // `@nexuscode/shared`) because each provider defines its own vocabulary —
+    // the pinned OpenAI SDK's `reasoning_effort` field is typed against only
+    // ITS OWN known values, narrower than what a caller may legitimately send
+    // through NexusCode's own generic `low`/`medium`/`high` family or a
+    // native OpenAI-compatible backend's own extra levels. Sent verbatim,
+    // same escape-hatch discipline as `providerExtensions` below.
+    body.reasoning_effort = req.reasoning.effort as NonNullable<StreamingParams["reasoning_effort"]>;
   }
   // Escape hatch: verbatim provider-specific params win over everything above.
   if (req.providerExtensions) Object.assign(body, req.providerExtensions);

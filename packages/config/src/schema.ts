@@ -1127,8 +1127,18 @@ export const NexusConfig = z
      * always wins over this when given; a provider that cannot honor the
      * resolved level still warns on stderr rather than silently dropping it
      * (see `applyEffort` in `packages/cli/src/commands.ts`).
+     *
+     * A plain `z.string()`, not a closed enum: each provider defines its own
+     * effort vocabulary (claude-code alone accepts seven names NexusCode's
+     * own generic `"low"|"medium"|"high"` family does not share — see
+     * `EffortLevel`'s doc, `packages/cli/src/commands.ts`), so a fixed enum
+     * here would reject a value the user's actual provider genuinely
+     * supports. `"off"` is the baked-in default this config knob starts at;
+     * when nothing overrides it, `applyEffort` picks a sensible IMPLICIT
+     * per-provider-family default instead of leaving reasoning off forever
+     * (see `implicitEffortDefaultFor`, `packages/cli/src/model-switch.ts`).
      */
-    defaultEffort: z.enum(["off", "low", "medium", "high"]).default("off"),
+    defaultEffort: z.string().default("off"),
     providers: z.array(ProviderConfig).default([]),
     /** Declared MCP servers (system-spec §7). Connected + tool-discovered at session startup. */
     mcp: z.array(McpServerConfig).default([]),

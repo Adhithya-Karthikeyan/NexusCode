@@ -238,6 +238,34 @@ public final class ConversationController {
         view = ViewState.reduce(events: UiEventDecoder.decodeStream(ndjson))
     }
 
+    /// A short scripted conversation covering every shape the transcript has
+    /// to render well: a plain answer with markdown, a mid-conversation
+    /// provider switch, a tool call with a result, a diff, and a failed turn.
+    ///
+    /// Lives in `NexusKit` rather than beside its one call site in the app so
+    /// it is reachable from the test target — `PreviewSeamTests` asserts it
+    /// still covers all six shapes, since a script that quietly decayed to
+    /// three text deltas would keep screenshotting "fine" while proving
+    /// nothing about the surfaces it was written to exercise.
+    public static let demoTranscript = """
+    {"t":"session","id":"run_demo_1","provider":"anthropic","model":"claude-opus-5","ts":1785088736427}
+    {"t":"prompt","lane":"main","id":"p0","text":"Why is the sidebar rendering lighter than the canvas it sits next to?"}
+    {"t":"text","lane":"main","delta":"Because the material is overruling the token. `surfaceSunken` is the darkest colour in the theme, but `.ultraThinMaterial` doesn't render the token — it renders **what's behind the window**, lightened.\\n\\nMeasured on the shipped build at 1440x900:\\n\\n- sidebar — relative luminance `0.0244`\\n- canvas panel — `0.0123`\\n- window floor — `0.0048`\\n\\nSo the surface that should be furthest back is twice as bright as the one in front of it. No token is wrong; the material is deciding value when it should only be adding texture."}
+    {"t":"usage","lane":"main","inputTokens":1840,"outputTokens":212,"cacheRead":0,"cacheWrite":0,"costUsd":0.0184}
+    {"t":"done","lane":"main","finishReason":"stop"}
+    {"t":"switch","lane":"main","from":{"providerId":"anthropic","modelId":"claude-opus-5"},"to":{"providerId":"openai","modelId":"gpt-5-codex"},"accepted":true,"blockers":[],"warnings":[],"preserved":["conversation transcript","assembled project context"],"adaptations":[],"reason":"explicit switch requested by client"}
+    {"t":"session","id":"run_demo_2","provider":"openai","model":"gpt-5-codex","ts":1785088836427}
+    {"t":"prompt","lane":"main","id":"p1","text":"Fix it, then show me the diff."}
+    {"t":"text","lane":"main","delta":"Tinting the material back to the token's own value keeps the translucency without letting it govern luminance."}
+    {"t":"tool_call","lane":"main","id":"call-1","name":"read_file","args":{"path":"Sources/NexusApp/Components/DesignSystem.swift","limit":120}}
+    {"t":"tool_result","lane":"main","id":"call-1","ok":true,"result":[{"type":"text","text":"@ViewBuilder\\nfunc themedFill<S: Shape>(_ color: Color, treatment: SurfaceTreatment, in shape: S) -> some View {"}]}
+    {"t":"diff","lane":"main","path":"Sources/NexusApp/Components/DesignSystem.swift","patch":"@@ -132,7 +132,10 @@\\n     if let material = treatment.material {\\n-        shape.fill(material)\\n+        ZStack {\\n+            shape.fill(material)\\n+            shape.fill(color.opacity(isDark ? 0.82 : 0.55))\\n+        }\\n     } else {\\n         shape.fill(color)\\n     }"}
+    {"t":"usage","lane":"main","inputTokens":2410,"outputTokens":388,"cacheRead":1792,"cacheWrite":0,"costUsd":0.0091}
+    {"t":"done","lane":"main","finishReason":"stop"}
+    {"t":"prompt","lane":"main","id":"p2","text":"Run the theme contrast suite."}
+    {"t":"error","lane":"main","code":"quota_exhausted","message":"This provider is out of quota for the current billing period.","retryable":true}
+    """
+
     /// Provider/model for single-lane modes.
     public var provider: String?
     public var model: String?
