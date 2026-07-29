@@ -24,28 +24,33 @@ struct TasksView: View {
         // list itself now fills or scrolls the REST of the window, not the
         // whole thing top-aligned inside one big ScrollView.
         PageScaffold {
-            VStack(alignment: .leading, spacing: Space.lg) {
+            // The header owns its own margins and hairline now (see
+            // `PageHeader`), so the composer chrome below it is padded
+            // separately rather than sharing one outer `.padding` — wrapping
+            // both put the separator in the middle of the block and
+            // double-padded the title.
+            VStack(alignment: .leading, spacing: 0) {
                 headerRow
                 if let controller {
-                    ProgressSummary(progress: controller.progress)
-                    AddTaskField(title: $newTitle) { title in
-                        Task { await controller.add(title: title) }
+                    VStack(alignment: .leading, spacing: Space.lg) {
+                        ProgressSummary(progress: controller.progress)
+                        AddTaskField(title: $newTitle) { title in
+                            Task { await controller.add(title: title) }
+                        }
+                        // Dismissible `.warning`: every source of
+                        // `controller.error` (a failed refresh, add, status
+                        // change, or delete) leaves the queue below fully
+                        // valid either way — see `InlineBanner`'s doc for why
+                        // that's unconditional.
+                        if let error = controller.error, !controller.tasks.isEmpty {
+                            InlineBanner(message: error) { controller.error = nil }
+                        }
                     }
-                    // Dismissible `.warning`: every source of `controller.error`
-                    // (a failed refresh, add, status change, or delete) leaves
-                    // the queue below fully valid either way — see
-                    // `InlineBanner`'s doc for why that's unconditional. Even
-                    // the one non-network case ("no subcommand sets status X
-                    // directly") is still informational in exactly the same
-                    // sense: nothing on screen is blocked by it.
-                    if let error = controller.error, !controller.tasks.isEmpty {
-                        InlineBanner(message: error) { controller.error = nil }
-                    }
+                    .padding(.horizontal, Space.xl)
+                    .padding(.vertical, Space.lg)
+                    .pageMeasure()
                 }
             }
-            .padding(Space.xl)
-            .padding(.bottom, Space.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
         } content: {
             if let controller {
                 if controller.isLoading && controller.tasks.isEmpty {
@@ -56,7 +61,8 @@ struct TasksView: View {
                     HeroEmptyState(
                         icon: "checklist",
                         title: "No tasks yet",
-                        message: "Add one above to start the durable queue — it persists across sessions via `nexus task`."
+                        message: "The queue is durable — tasks persist across sessions, so anything added here survives a restart.",
+                        eyebrow: "Tasks"
                     )
                 } else {
                     ScrollView {
@@ -92,7 +98,7 @@ struct TasksView: View {
                         }
                         .padding(.horizontal, Space.xl)
                         .padding(.bottom, Space.xl)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .pageMeasure()
                     }
                 }
             } else {
@@ -144,11 +150,11 @@ private struct ProgressSummary: View {
             VStack(alignment: .leading, spacing: Space.sm) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("\(progress.completed) of \(progress.total) done")
-                        .font(Kind.bodyEmphasis)
+                        .textStyle(Type.bodyStrong)
                         .foregroundStyle(theme.color(\.textPrimary))
                     Spacer(minLength: Space.sm)
                     Text("\(progress.percent)%")
-                        .font(Kind.mono)
+                        .textStyle(Type.mono)
                         .foregroundStyle(theme.color(\.accentDefault))
                         .monospacedDigit()
                 }
@@ -172,7 +178,7 @@ private struct AddTaskField: View {
         HStack(spacing: Space.sm) {
             TextField("Add a task…", text: $title)
                 .textFieldStyle(.plain)
-                .font(Kind.body)
+                .textStyle(Type.body)
                 .foregroundStyle(theme.color(\.textPrimary))
                 .padding(.horizontal, Space.sm)
                 .padding(.vertical, 7)
@@ -208,11 +214,11 @@ private struct EmptyStatusRow: View {
     var body: some View {
         HStack(spacing: Space.xs) {
             Text(label.uppercased())
-                .font(Kind.micro)
+                .textStyle(Type.micro)
                 .tracking(0.5)
                 .foregroundStyle(theme.color(\.textMuted).opacity(0.55))
             Text("Empty")
-                .font(Kind.micro)
+                .textStyle(Type.micro)
                 .foregroundStyle(theme.color(\.textMuted).opacity(0.35))
         }
     }
@@ -277,20 +283,20 @@ private struct TaskRow: View {
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(task.title)
-                            .font(Kind.bodyEmphasis)
+                            .textStyle(Type.bodyStrong)
                             .foregroundStyle(isSettled ? theme.color(\.textMuted) : theme.color(\.textPrimary))
                             .strikethrough(isSettled)
                             .lineLimit(2)
 
                         if let parentId = task.parentId {
                             Text("parent: \(title(for: parentId))")
-                                .font(Kind.caption)
+                                .textStyle(Type.caption)
                                 .foregroundStyle(theme.color(\.textMuted))
                                 .lineLimit(1)
                         }
                         if !task.deps.isEmpty {
                             Text("depends on: \(task.deps.map(title(for:)).joined(separator: ", "))")
-                                .font(Kind.caption)
+                                .textStyle(Type.caption)
                                 .foregroundStyle(theme.color(\.textMuted))
                                 .lineLimit(1)
                         }
@@ -300,7 +306,7 @@ private struct TaskRow: View {
 
                     if let updatedAt = task.updatedAt {
                         Text(updatedAt, style: .relative)
-                            .font(Kind.caption)
+                            .textStyle(Type.caption)
                             .foregroundStyle(theme.color(\.textMuted))
                     }
                 }

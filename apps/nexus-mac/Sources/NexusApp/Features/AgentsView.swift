@@ -75,23 +75,35 @@ struct AgentsView: View {
             // screen at all, just the hero empty state one region down.
             VStack(alignment: .leading, spacing: 0) {
                 PageHeader("Agents", subtitle: "Provider lanes, agent runs, and OMC subagents — everything working right now")
-                    .padding(.horizontal, Space.xl)
-                    .padding(.top, Space.xl)
-                    .padding(.bottom, hasReadout ? Space.sm : Space.xl)
 
                 if hasReadout {
                     HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud, conversation: workspace.conversation)
                         .padding(.horizontal, Space.xl)
-                        .padding(.bottom, Space.lg)
+                        .padding(.vertical, Space.lg)
                 }
             }
         } content: {
             if isFullyEmpty {
+                // A real action, not just an explanation. An empty state with
+                // nothing to do reads as a dead end and — measured against the
+                // Git tab's version, which always had a CTA — visibly lacks the
+                // mass to hold the middle of a 1440pt window. The button also
+                // answers the question the copy raises ("how do I get a lane
+                // to appear?") in one click instead of leaving the user to
+                // work out that lanes come from Compare.
                 HeroEmptyState(
                     icon: "person.3.sequence",
                     title: "Nothing running",
-                    message: "Provider lanes appear here during a Compare or Race run. NexusCode's own agent runs (`nexus agent --role`) and OMC subagents appear here too, whenever they run in this project."
-                )
+                    message: "Provider lanes appear here during a Compare or Race run. NexusCode's own agent runs and OMC subagents appear here too, whenever they run in this project.",
+                    eyebrow: "Agents"
+                ) {
+                    Button("Start a Compare run") {
+                        workspace.conversation?.mode = .compare
+                        workspace.tab = .chat
+                    }
+                    .buttonStyle(SoftButton(tone: .accent))
+                    .disabled(workspace.conversation == nil)
+                }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.lg) {
@@ -201,7 +213,7 @@ private struct HeaderStrip: View {
                 HStack(spacing: Space.sm) {
                     StatusDot(isRunning: totalRunning > 0, isFailed: false, size: 9)
                     Text(totalRunning > 0 ? "\(totalRunning) running" : "Idle")
-                        .font(Kind.title)
+                        .textStyle(Type.title)
                         .foregroundStyle(theme.color(\.textPrimary))
                         .monospacedDigit()
 
@@ -250,7 +262,7 @@ private struct HeaderStrip: View {
                         Spacer(minLength: 0)
                         if let model = hud.modelDisplayName {
                             Text(model)
-                                .font(Kind.caption)
+                                .textStyle(Type.caption)
                                 .foregroundStyle(theme.color(\.textMuted))
                                 .lineLimit(1)
                         }
@@ -284,11 +296,11 @@ private struct ReadoutMetric: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(label.uppercased())
-                .font(Kind.micro)
+                .textStyle(Type.micro)
                 .tracking(0.5)
                 .foregroundStyle(theme.color(\.textMuted).opacity(0.8))
             Text(value)
-                .font(Kind.monoSmall)
+                .textStyle(Type.monoMicro)
                 .foregroundStyle(valueColor)
                 .monospacedDigit()
         }
@@ -378,7 +390,7 @@ private struct AgentCard: View {
                             }
                         }
                         Text(row.subtitle)
-                            .font(Kind.caption)
+                            .textStyle(Type.caption)
                             .foregroundStyle(row.isFailed ? theme.color(\.errorFg) : theme.color(\.textMuted))
                             .lineLimit(1)
                     }
@@ -387,7 +399,7 @@ private struct AgentCard: View {
 
                     if let elapsed {
                         Text(elapsed)
-                            .font(Kind.mono)
+                            .textStyle(Type.mono)
                             .foregroundStyle(row.isRunning ? theme.color(\.accentDefault) : theme.color(\.textMuted))
                             .monospacedDigit()
                     }
@@ -413,7 +425,7 @@ private struct AgentCard: View {
 
                 if let detail = row.detail {
                     Text(detail)
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textSecondary))
                         .lineLimit(2)
                         // Align under the title, past the status dot's column.
@@ -502,11 +514,11 @@ private struct StepRail: View {
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(theme.color(\.textSecondary))
                             Text("step \(step.step)")
-                                .font(Kind.micro)
+                                .textStyle(Type.micro)
                                 .foregroundStyle(theme.color(\.textMuted).opacity(0.7))
                         }
                         Text(step.narration)
-                            .font(Kind.caption)
+                            .textStyle(Type.caption)
                             .foregroundStyle(theme.color(\.textMuted))
                             .lineLimit(2)
                     }
@@ -549,7 +561,7 @@ private struct OriginBadge: View {
 
     var body: some View {
         Text(text)
-            .font(Kind.micro)
+            .textStyle(Type.micro)
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)
             .background(colors.bg, in: Capsule())
@@ -590,7 +602,7 @@ private struct VerdictBadge: View {
 
     var body: some View {
         Text(text)
-            .font(Kind.micro)
+            .textStyle(Type.micro)
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)
             .background(colors.bg, in: Capsule())
@@ -621,12 +633,12 @@ private struct MissionPanel: View {
                     VStack(alignment: .leading, spacing: Space.xs) {
                         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
                             Text(mission.objective.isEmpty ? mission.name : mission.objective)
-                                .font(Kind.bodyEmphasis)
+                                .textStyle(Type.bodyStrong)
                                 .foregroundStyle(theme.color(\.textPrimary))
                                 .lineLimit(2)
                             Spacer(minLength: Space.sm)
                             Text("\(mission.taskCounts.completed)/\(mission.taskCounts.total)")
-                                .font(Kind.mono)
+                                .textStyle(Type.mono)
                                 .foregroundStyle(theme.color(\.textMuted))
                                 .monospacedDigit()
                         }
@@ -694,12 +706,12 @@ private struct TimelineRail: View {
                                 .foregroundStyle(theme.color(\.textSecondary))
                             if let at = event.at {
                                 Text(at, style: .time)
-                                    .font(Kind.micro)
+                                    .textStyle(Type.micro)
                                     .foregroundStyle(theme.color(\.textMuted).opacity(0.7))
                             }
                         }
                         Text(event.detail)
-                            .font(Kind.caption)
+                            .textStyle(Type.caption)
                             .foregroundStyle(theme.color(\.textMuted))
                             .lineLimit(2)
                     }
@@ -722,7 +734,7 @@ private struct UnreadableNotice: View {
                 .font(.system(size: 9))
                 .accessibilityHidden(true)
             Text("Could not read \(paths.joined(separator: ", ")) — some values may be stale.")
-                .font(Kind.micro)
+                .textStyle(Type.micro)
         }
         .foregroundStyle(theme.color(\.warningFg).opacity(0.85))
     }

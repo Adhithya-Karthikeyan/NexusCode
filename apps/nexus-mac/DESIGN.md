@@ -188,6 +188,26 @@ The highest-stakes surface, and the least designed thing in the old build.
   so the scrim painted a visible lighter rectangle across the code instead of
   fading it.
 
+## Lists and page measure
+
+- **A list row is a row, not a card.** Sessions rendered every entry as a fully
+  bordered `Card` — eleven identical rectangles down a column with no weight
+  difference between the selected one and the rest. N identical cards have no
+  scan rhythm: the eye has nowhere to land, and the border noise competes with
+  the content inside it. A row is transparent at rest with a hairline beneath,
+  washed on hover, and a genuinely raised surface with a specular edge and an
+  accent rail when selected — the same "selection is elevation, not paint" rule
+  the sidebar uses, so the two read as one idea.
+- **Forms and lists get a measure; transcripts get the window.**
+  `pageMeasure()` caps settings-style pages at 900pt (the theme grid at 1180,
+  because a grid genuinely uses the width). At 1440 every list screen stretched
+  its cards edge to edge, stranding a trailing button a screen-width from the
+  label it belonged to. Full-bleed is right for content that fills its measure
+  and wrong for content that does not.
+- **`PageHeader` owns its own margins and hairline.** Six screens each supplied
+  their own, with six different sets of numbers and no separator on any of
+  them, so a page title read as loose text floating above unrelated content.
+
 ## Empty states
 
 The chat empty state is **composer-anchored**: kicker, headline, suggestions
@@ -200,6 +220,13 @@ Shared empty states use `MarkPlate` — the glyph on a real level-2 surface with
 a specular edge — instead of a 190pt radial glow. Same shape language as
 everything else on screen, and it gives the composition a definite top edge to
 hang from.
+
+**Every empty state needs a real action.** Compared side by side, Git's empty
+state (which always had a CTA) held the middle of a 1440pt window and Agents'
+(which did not) read as a thin island in a void — the difference was mass, not
+copy. An empty state with nothing to do is also a dead end: the button answers
+the question the copy raises ("how do I get a lane to appear?") instead of
+leaving the user to infer it.
 
 ## Motion
 

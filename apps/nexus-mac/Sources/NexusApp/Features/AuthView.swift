@@ -80,9 +80,6 @@ private struct AuthContent: View {
             // the window background into "Signed in"/"Available" subsection
             // labels, so its own name never appeared anywhere on it.
             PageHeader("Accounts", subtitle: "Provider sign-in — nexus auth status/login")
-                .padding(.horizontal, Space.xl)
-                .padding(.top, Space.xl)
-                .padding(.bottom, Space.md)
 
             // Dismissible: whatever provider list is already loaded below
             // (or the empty/loading state) stays exactly as valid either
@@ -128,7 +125,7 @@ private struct AuthContent: View {
                         }
                         .padding(Space.xl)
                         .padding(.top, controller.error == nil ? 0 : Space.sm)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .pageMeasure()
                     }
                 }
             }
@@ -258,19 +255,35 @@ private struct ProviderRow: View {
     var body: some View {
         Card {
             VStack(alignment: .leading, spacing: Space.sm) {
-                HStack(alignment: .top, spacing: Space.sm) {
-                    StatusDot(isRunning: isSigningIn, isFailed: false, size: 8)
-                        .padding(.top, 4)
+                HStack(alignment: .top, spacing: Space.md) {
+                    // Identity at rest, status while working. This row IS
+                    // provenance — it is the list of who you can talk to — so
+                    // the provider's own colour belongs here (see
+                    // `ProviderIdentity`). A `StatusDot` showing only
+                    // "signing in" left every row a neutral grey the rest of
+                    // the time, which is exactly the information this screen
+                    // exists to convey being thrown away. The animated dot
+                    // still wins while a sign-in is in flight, because motion
+                    // means "live" and that outranks identity for the moment
+                    // it applies.
+                    Group {
+                        if isSigningIn {
+                            StatusDot(isRunning: true, isFailed: false, size: 8)
+                        } else {
+                            ProviderDot(provider: provider.providerId, size: 8)
+                        }
+                    }
+                    .padding(.top, 4)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: Space.xs) {
+                        HStack(spacing: Space.sm) {
                             Text(provider.providerId)
                                 .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(theme.color(\.textPrimary))
                             KindBadge(icon: kindIcon, label: kindLabel)
                         }
                         Text(provider.loggedIn ? provider.method : "not signed in")
-                            .font(Kind.caption)
+                            .textStyle(Type.caption)
                             .foregroundStyle(provider.loggedIn ? theme.color(\.successFg) : theme.color(\.textMuted))
                     }
 
@@ -286,7 +299,7 @@ private struct ProviderRow: View {
                 // verbatim rather than summarized into something vaguer.
                 if let detail = provider.detail {
                     Text(detail)
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textSecondary))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -325,7 +338,7 @@ private struct ProviderRow: View {
                     }
                     if provider.kind == .cloudSso {
                         Text("Delegates to the cloud CLI's own login (e.g. `aws sso login` / `gcloud auth login`) — nothing is reimplemented here.")
-                            .font(Kind.micro)
+                            .textStyle(Type.micro)
                             .foregroundStyle(theme.color(\.textMuted))
                     }
                 }
@@ -338,7 +351,7 @@ private struct ProviderRow: View {
                 HStack(spacing: Space.sm) {
                     SecureField("API key", text: $keyDraft)
                         .textFieldStyle(.roundedBorder)
-                        .font(Kind.mono)
+                        .textStyle(Type.mono)
                     Button("Save") { onSaveKey() }
                         .buttonStyle(SoftButton(tone: .accent, size: .compact))
                         .disabled(keyDraft.isEmpty || isSavingKey)
@@ -361,7 +374,7 @@ private struct ProviderRow: View {
                         ? "Session detected — reuses the vendor CLI's own login."
                         : "Not detected — install and sign in to the vendor CLI directly; no login needed here."
                 )
-                .font(Kind.caption)
+                .textStyle(Type.caption)
                 .foregroundStyle(theme.color(\.textMuted))
             }
 
@@ -409,7 +422,7 @@ private struct OAuthProgress: View {
                 HStack(spacing: Space.xs) {
                     ProgressView().controlSize(.small)
                     Text("Starting…")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                 }
             } else {
@@ -419,7 +432,7 @@ private struct OAuthProgress: View {
             HStack(spacing: Space.sm) {
                 TextField("Paste the code shown in your browser, if asked", text: $pastedCode)
                     .textFieldStyle(.roundedBorder)
-                    .font(Kind.mono)
+                    .textStyle(Type.mono)
                     .onSubmit(onSubmitCode)
                 Button("Submit", action: onSubmitCode)
                     .buttonStyle(SoftButton(size: .compact))
@@ -446,7 +459,7 @@ private struct KindBadge: View {
                 .accessibilityHidden(true)
             Text(label.uppercased())
         }
-        .font(Kind.micro)
+        .textStyle(Type.micro)
         .padding(.horizontal, 5)
         .padding(.vertical, 1.5)
         .background(theme.color(\.surfaceOverlay), in: Capsule())

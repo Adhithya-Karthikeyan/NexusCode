@@ -57,8 +57,12 @@ struct SessionsView: View {
             HeroEmptyState(
                 icon: "clock.arrow.circlepath",
                 title: "No sessions yet",
-                message: "Sessions appear here once you run `nexus ask` — every conversation is recorded to the session store."
-            )
+                message: "Every conversation is recorded to the session store, and shows up here to resume or replay.",
+                eyebrow: "Sessions"
+            ) {
+                Button("Start a conversation") { workspace.tab = .chat }
+                    .buttonStyle(SoftButton(tone: .accent))
+            }
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 // A stale-data caveat, not a fatal error — the list already
@@ -117,7 +121,10 @@ struct SessionsView: View {
         ScrollView {
             // `controller.sessions` is already newest-first (sorted in
             // `refresh()`), so this renders in that order without re-sorting.
-            LazyVStack(spacing: Space.sm) {
+            // Flush, not gapped. `SessionRow` carries its own hairline
+            // separator now, so a gap between rows would put a visible break
+            // above every separator and make one boundary read as two.
+            LazyVStack(spacing: 0) {
                 ForEach(controller.sessions) { session in
                     SessionRow(
                         session: session,
@@ -241,74 +248,105 @@ private struct SessionRow: View {
         }
     }
 
+    @State private var hovering = false
+
+    /// A row, not a card.
+    ///
+    /// Every session used to be a fully bordered `Card` — eleven identical
+    /// boxes stacked down the column, each drawing its own rectangle, with no
+    /// difference in weight between the one you had selected and the ten you
+    /// had not. A list of N identical cards has no scan rhythm: the eye has
+    /// nowhere to land and the border noise competes with the content inside
+    /// it.
+    ///
+    /// So the chrome is spent only where it carries information. At rest a row
+    /// is transparent with a hairline beneath it; hovered it picks up a wash;
+    /// selected it becomes a genuine raised surface with a specular edge and
+    /// an accent rail — the same "selection is elevation, not paint" rule the
+    /// sidebar uses, so the two read as one idea.
     var body: some View {
         Button(action: action) {
-            Card(padding: Space.md) {
-                VStack(alignment: .leading, spacing: Space.sm) {
-                    HStack(alignment: .top, spacing: Space.sm) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(displayName)
-                                .font(Kind.bodyEmphasis)
-                                .foregroundStyle(theme.color(\.textPrimary))
-                                .lineLimit(1)
-                            if let modelLine {
-                                HStack(spacing: 4) {
-                                    Circle()
-                                        .fill(providerColor(session.provider))
-                                        .frame(width: 6, height: 6)
-                                    Text(modelLine)
-                                        .font(Kind.caption)
-                                        .foregroundStyle(theme.color(\.textMuted))
-                                        .lineLimit(1)
-                                }
-                            }
-                        }
+            VStack(alignment: .leading, spacing: Space.md) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                    Text(displayName)
+                        .textStyle(Type.bodyStrong)
+                        .foregroundStyle(theme.color(\.textPrimary))
+                        .lineLimit(1)
+                    Spacer(minLength: Space.sm)
+                    if let updatedAt = session.updatedAt {
+                        Text(updatedAt, style: .relative)
+                            .textStyle(Type.caption)
+                            .foregroundStyle(theme.color(\.textMuted))
+                            .lineLimit(1)
+                    }
+                }
 
-                        Spacer(minLength: Space.sm)
+                if let modelLine {
+                    HStack(spacing: Space.sm) {
+                        ProviderDot(provider: session.provider)
+                        Text(modelLine)
+                            .textStyle(Type.monoMicro)
+                            .foregroundStyle(theme.color(\.textSecondary))
+                            .lineLimit(1)
+                    }
+                }
 
-                        if let updatedAt = session.updatedAt {
-                            Text(updatedAt, style: .relative)
-                                .font(Kind.caption)
-                                .foregroundStyle(theme.color(\.textMuted))
+                HStack(spacing: Space.lg) {
+                    Metric(label: "turns", value: "\(session.turnCount)")
+                    Metric(label: "tok", value: formatCount(session.inputTokens + session.outputTokens))
+                    if let cost = costLabel(session) {
+                        if let help = costHelp(session) {
+                            Metric(label: "cost", value: cost).help(help)
+                        } else {
+                            Metric(label: "cost", value: cost)
                         }
                     }
-
-                    HStack(spacing: Space.md) {
-                        Metric(label: "turns", value: "\(session.turnCount)")
-                        Metric(label: "tok", value: formatCount(session.inputTokens + session.outputTokens))
-                        if let cost = costLabel(session) {
-                            if let help = costHelp(session) {
-                                Metric(label: "cost", value: cost, emphasis: true).help(help)
-                            } else {
-                                Metric(label: "cost", value: cost, emphasis: true)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .fill(theme.surface(2))
+                } else if hovering {
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .fill(theme.color(\.surfaceOverlay).opacity(0.5))
                 }
             }
             .overlay {
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(
-                        isSelected ? theme.color(\.accentDefault).opacity(0.6) : .clear,
-                        lineWidth: 1.4
-                    )
+                if isSelected {
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .strokeBorder(Depth.specular(theme, level: 2, strength: 0.9), lineWidth: 1)
+                }
             }
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Capsule()
+                        .fill(theme.color(\.accentDefault))
+                        .frame(width: 3)
+                        .padding(.vertical, Space.lg)
+                }
+            }
+            // The separator belongs to the unselected, unhovered rest state
+            // only — drawing it under a raised row would cut across the
+            // surface that is meant to read as lifted off the list.
+            .overlay(alignment: .bottom) {
+                if !isSelected && !hovering {
+                    Rectangle()
+                        .fill(theme.hairline.opacity(0.6))
+                        .frame(height: 1)
+                        .padding(.horizontal, Space.lg)
+                }
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    private func providerColor(_ provider: String?) -> Color {
-        switch provider?.lowercased() {
-        case "anthropic": return theme.color(\.providerAnthropic)
-        case "openai": return theme.color(\.providerOpenai)
-        case "google", "gemini": return theme.color(\.providerGoogle)
-        case "xai", "grok": return theme.color(\.providerXai)
-        case "ollama": return theme.color(\.providerOllama)
-        case "mistral": return theme.color(\.providerMistral)
-        case "deepseek": return theme.color(\.providerDeepseek)
-        default: return theme.color(\.providerCustom)
-        }
+        .onHover { hovering = $0 }
+        .animation(Motion.state, value: hovering)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -327,11 +365,11 @@ private struct SessionDetailCard: View {
         VStack(alignment: .leading, spacing: Space.lg) {
             VStack(alignment: .leading, spacing: Space.xs) {
                 Text(session.name ?? session.sessionId)
-                    .font(Kind.title)
+                    .textStyle(Type.title)
                     .foregroundStyle(theme.color(\.textPrimary))
                     .textSelection(.enabled)
                 Text(session.sessionId)
-                    .font(Kind.monoSmall)
+                    .textStyle(Type.monoMicro)
                     .foregroundStyle(theme.color(\.textMuted))
                     .textSelection(.enabled)
             }
@@ -379,11 +417,11 @@ private struct SessionDetailCard: View {
                     if let created = session.createdAt {
                         HStack(spacing: 5) {
                             Text("CREATED")
-                                .font(Kind.micro)
+                                .textStyle(Type.micro)
                                 .tracking(0.5)
                                 .foregroundStyle(theme.color(\.textMuted).opacity(0.8))
                             Text(created, style: .relative)
-                                .font(Kind.caption)
+                                .textStyle(Type.caption)
                                 .foregroundStyle(theme.color(\.textSecondary))
                         }
                     }
@@ -405,7 +443,7 @@ private struct SessionDetailCard: View {
                     }
                 } else if detail != nil {
                     Text("No runs recorded for this session.")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                 }
             }
@@ -427,19 +465,19 @@ private struct RunRow: View {
         HStack(spacing: Space.sm) {
             StatusDot(isRunning: false, isFailed: isFailed, size: 6, animate: false)
             Text(run.adapterId ?? run.runId)
-                .font(Kind.monoSmall)
+                .textStyle(Type.monoMicro)
                 .foregroundStyle(theme.color(\.textSecondary))
                 .lineLimit(1)
             if let model = run.model {
                 Text(model)
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.textMuted))
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
             if let status = run.status {
                 Text(status)
-                    .font(Kind.micro)
+                    .textStyle(Type.micro)
                     .foregroundStyle(isFailed ? theme.color(\.errorFg) : theme.color(\.textMuted))
             }
         }

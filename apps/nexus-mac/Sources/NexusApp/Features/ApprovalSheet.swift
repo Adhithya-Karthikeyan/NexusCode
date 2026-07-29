@@ -63,10 +63,10 @@ public struct ApprovalSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(approval.toolName)
-                    .font(Kind.title)
+                    .textStyle(Type.title)
                     .foregroundStyle(theme.color(\.textPrimary))
                 Text("wants to \(actionVerb)")
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.textMuted))
             }
             Spacer(minLength: 0)
@@ -90,12 +90,12 @@ public struct ApprovalSheet: View {
     private func metaRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top, spacing: Space.sm) {
             Text(label.uppercased())
-                .font(Kind.micro)
+                .textStyle(Type.micro)
                 .tracking(0.5)
                 .foregroundStyle(theme.color(\.textMuted))
                 .frame(width: 60, alignment: .leading)
             Text(value)
-                .font(Kind.body)
+                .textStyle(Type.body)
                 .foregroundStyle(theme.color(\.textSecondary))
                 .textSelection(.enabled)
             Spacer(minLength: 0)
@@ -106,7 +106,7 @@ public struct ApprovalSheet: View {
     private func labeledBlock(_ label: String, @ViewBuilder _ block: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             Text(label.uppercased())
-                .font(Kind.micro)
+                .textStyle(Type.micro)
                 .tracking(0.5)
                 .foregroundStyle(theme.color(\.textMuted))
             block()
@@ -120,7 +120,7 @@ public struct ApprovalSheet: View {
             Rectangle().fill(theme.color(\.chromeDivider)).frame(height: 1)
             HStack(spacing: Space.md) {
                 Text("This blocks the conversation until you answer.")
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.textMuted))
                     .lineLimit(2)
                 Spacer(minLength: 0)

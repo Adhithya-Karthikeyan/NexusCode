@@ -22,6 +22,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   ModelCatalog,
   contextWindowFor,
+  implicitEffortDefaultFor,
   preflightModelSwitch,
   preflightProviderSwitch,
   reasoningSupportedFor,
@@ -496,5 +497,100 @@ describe("reasoningSupportedFor — effort must actually reach the wire", () => 
     const config = NexusConfig.parse({ defaultProvider: "mock" });
     const runtime = await buildRuntime(config, { secrets: stubSecrets });
     expect(reasoningSupportedFor(runtime, "does-not-exist")).toBe(false);
+  });
+
+  /**
+   * The restoration this test locks in: a `cli-subprocess` provider is no
+   * longer BLANKET-excluded. claude-code/codex now wire `--effort`/`-c
+   * model_reasoning_effort=…` for real (see each adapter's `buildArgs`), and
+   * that IS exactly what implementing `listReasoningLevels` signals — so a
+   * `cli-subprocess` adapter that has it is TRUE here, structurally, with no
+   * id/kind guesswork. The neighboring "FALSE …even though it declares
+   * reasoning" test above still passes unmodified: a `cli-subprocess`
+   * adapter WITHOUT `listReasoningLevels` (e.g. a future wrapped CLI that
+   * hasn't wired it yet) stays FALSE automatically.
+   */
+  it("TRUE for a cli-subprocess provider that DOES implement listReasoningLevels (claude-code/codex's real wiring)", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    const adapter = adapterWith("wired-cli", "cli-subprocess", true);
+    adapter.listReasoningLevels = async () => ({ levels: [{ id: "xhigh" }], source: "provider" });
+    await runtime.registry.register(adapter, { skipHealth: true });
+    expect(reasoningSupportedFor(runtime, "wired-cli")).toBe(true);
+  });
+});
+
+/**
+ * `implicitEffortDefaultFor` — what `--effort` implicitly resolves to when
+ * the caller passes no flag AND `config.defaultEffort` is still sitting at
+ * its own baked-in "off" default (see `applyEffort` in commands.ts for
+ * exactly where this is consulted, and why it is scoped by TRANSPORT rather
+ * than a single global value).
+ */
+describe("implicitEffortDefaultFor — a sensible default without silently overriding a provider's own config", () => {
+  function adapterWith(id: string, transport: TransportKind, reasoning: boolean): ProviderAdapter {
+    return {
+      id,
+      label: id,
+      transport,
+      capabilities: async () => ({
+        models: [],
+        streaming: true,
+        tools: false,
+        parallelToolCalls: false,
+        vision: false,
+        structuredOutput: false,
+        reasoning,
+        systemPrompt: true,
+        fileEdit: false,
+        shellExec: false,
+        git: false,
+        approvalGate: false,
+        mcp: false,
+        cancel: "abort-signal",
+      }),
+      chat: async () => {
+        throw new Error("unused");
+      },
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        throw new Error("unused");
+      },
+    };
+  }
+
+  it("\"medium\" for an http-sdk reasoning-capable provider (anthropic/gemini/vertex/bedrock's family) — nothing else decides this, so NexusCode does", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    await runtime.registry.register(adapterWith("thinky", "http-sdk", true), { skipHealth: true });
+    expect(implicitEffortDefaultFor(runtime, "thinky")).toBe("medium");
+  });
+
+  it("\"off\" for a cli-subprocess provider EVEN WHEN it wires reasoning — claude-code/codex already have their own configured effort, never silently overridden", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    const adapter = adapterWith("wired-cli", "cli-subprocess", true);
+    adapter.listReasoningLevels = async () => ({ levels: [{ id: "xhigh" }], source: "provider" });
+    await runtime.registry.register(adapter, { skipHealth: true });
+    expect(implicitEffortDefaultFor(runtime, "wired-cli")).toBe("off");
+  });
+
+  it("\"off\" for an http-openai-compat provider — the shared transport never puts effort on the wire unless it opts in", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    await runtime.registry.register(adapterWith("deepseek-like", "http-openai-compat", true), { skipHealth: true });
+    expect(implicitEffortDefaultFor(runtime, "deepseek-like")).toBe("off");
+  });
+
+  it("\"off\" when the provider does not declare reasoning at all (mock)", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    expect(implicitEffortDefaultFor(runtime, "mock")).toBe("off");
+  });
+
+  it("\"off\" for an unknown provider id (never throws)", async () => {
+    const config = NexusConfig.parse({ defaultProvider: "mock" });
+    const runtime = await buildRuntime(config, { secrets: stubSecrets });
+    expect(implicitEffortDefaultFor(runtime, "does-not-exist")).toBe("off");
   });
 });

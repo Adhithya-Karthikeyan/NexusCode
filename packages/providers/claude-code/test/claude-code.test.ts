@@ -79,6 +79,24 @@ describe("claude-code adapter — argv", () => {
     expect(overridden.join(" ")).toContain("--resume sess-configured");
     expect(overridden).not.toContain("sess-restored");
   });
+
+  it("wires req.reasoning.effort onto a real --effort <level> flag (verified against claude --help)", () => {
+    const args = buildClaudeCodeArgs(
+      {},
+      { ...req("fix"), reasoning: { enabled: true, effort: "xhigh" } },
+    );
+    expect(args.join(" ")).toContain("--effort xhigh");
+  });
+
+  it("omits --effort entirely when reasoning is disabled — never overrides the CLI's own configured effort", () => {
+    const args = buildClaudeCodeArgs({}, { ...req("fix"), reasoning: { enabled: false } });
+    expect(args.join(" ")).not.toContain("--effort");
+  });
+
+  it("omits --effort when reasoning is simply absent from the request", () => {
+    const args = buildClaudeCodeArgs({}, req("fix"));
+    expect(args.join(" ")).not.toContain("--effort");
+  });
 });
 
 describe("claude-code adapter — full stream mapping", () => {

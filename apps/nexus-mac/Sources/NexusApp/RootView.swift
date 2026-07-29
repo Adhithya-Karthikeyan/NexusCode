@@ -359,7 +359,7 @@ private struct ProjectSwitcherRow: View {
                     .accessibilityHidden(true)
                 if !isCompact {
                     Text(workspace.projectDirectory.lastPathComponent)
-                        .font(Kind.bodyEmphasis)
+                        .textStyle(Type.bodyStrong)
                         .foregroundStyle(theme.color(\.textPrimary))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -440,7 +440,7 @@ private struct SidebarNavRow: View {
                     .accessibilityHidden(true)
                 if !isCompact {
                     Text(tab.title)
-                        .font(Kind.bodyEmphasis)
+                        .textStyle(Type.bodyStrong)
                 }
                 Spacer(minLength: 0)
                 if badge > 0 {
@@ -531,7 +531,7 @@ struct SetupBanner: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.color(\.warningFg))
             Text(message)
-                .font(Kind.caption)
+                .textStyle(Type.caption)
                 .foregroundStyle(theme.color(\.textSecondary))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -681,11 +681,11 @@ private struct StatusMetric: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(label.uppercased())
-                .font(Kind.micro)
+                .textStyle(Type.micro)
                 .tracking(0.5)
                 .foregroundStyle(theme.color(\.textMuted).opacity(0.8))
             Text(value)
-                .font(Kind.monoSmall)
+                .textStyle(Type.monoMicro)
                 .foregroundStyle(valueColor)
                 .monospacedDigit()
         }
@@ -736,9 +736,6 @@ struct SettingsView: View {
                 "Settings",
                 subtitle: "\(AppTheme.all.count) themes designed for this window — material, elevation and gradient a terminal palette can't express."
             )
-            .padding(.horizontal, Space.xl)
-            .padding(.top, Space.xl)
-            .padding(.bottom, Space.lg)
         } content: {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
@@ -798,8 +795,13 @@ struct SettingsView: View {
                     }
                 }
                 .padding(.horizontal, Space.xl)
+                .padding(.top, Space.xl)
                 .padding(.bottom, Space.xl)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Wider than the other settings pages: this one is a swatch
+                // grid, and the grid genuinely uses the width it is given —
+                // capping it to 900 would drop it from six columns to four
+                // and add scrolling for no benefit.
+                .pageMeasure(1180)
             }
         }
     }
@@ -816,10 +818,10 @@ struct SettingsView: View {
         )) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Match system appearance")
-                    .font(Kind.bodyEmphasis)
+                    .textStyle(Type.bodyStrong)
                     .foregroundStyle(theme.color(\.textPrimary))
                 Text("A paired theme (e.g. Meridian ↔ Studio) follows Light/Dark Mode. Off pins exactly the theme picked below.")
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.textMuted))
             }
         }
@@ -835,11 +837,11 @@ struct LabeledLine: View {
     var body: some View {
         HStack(alignment: .top, spacing: Space.sm) {
             Text(label)
-                .font(Kind.caption)
+                .textStyle(Type.caption)
                 .foregroundStyle(theme.color(\.textMuted))
                 .frame(width: 70, alignment: .leading)
             Text(value)
-                .font(Kind.mono)
+                .textStyle(Type.mono)
                 .foregroundStyle(theme.color(\.textSecondary))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -875,11 +877,11 @@ struct ThemeSwatch: View {
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(theme.name)
-                    .font(Kind.bodyEmphasis)
+                    .textStyle(Type.bodyStrong)
                     .foregroundStyle(theme.color(\.textPrimary))
                     .lineLimit(1)
                 Text(theme.isDark ? "Dark" : "Light")
-                    .font(Kind.micro)
+                    .textStyle(Type.micro)
                     .foregroundStyle(theme.color(\.textMuted))
             }
         }

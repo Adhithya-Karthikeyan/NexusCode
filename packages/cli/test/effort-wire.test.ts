@@ -100,4 +100,25 @@ describe("--effort reaches the outgoing ChatRequest", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]!.reasoning).toBeUndefined();
   });
+
+  /**
+   * A provider-NATIVE level name (claude-code's "xhigh", codex's "ultra", …)
+   * has no entry in NexusCode's own `EFFORT_BUDGET_TOKENS` table — that table
+   * only covers the generic token-budget family (anthropic/gemini/vertex/
+   * bedrock's shared "low"/"medium"/"high"). The old closed `EffortLevel`
+   * union made this case unreachable entirely; now `effort` is a plain
+   * `string`, so this proves the request still carries the level VERBATIM
+   * with `budgetTokens` simply omitted — never a thrown error, never a
+   * silently substituted generic level.
+   */
+  it("a provider-native level with no budget-token entry (e.g. 'xhigh') still arrives as reasoning.enabled=true, effort='xhigh', with budgetTokens OMITTED", async () => {
+    const { adapter, requests } = spyReasoningAdapter();
+    const registry = new ProviderRegistry();
+    await registry.register(adapter, { skipHealth: true });
+
+    await dispatchOnce(registry, reasoningParamsFor("xhigh"));
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.reasoning).toEqual({ enabled: true, effort: "xhigh" });
+  });
 });

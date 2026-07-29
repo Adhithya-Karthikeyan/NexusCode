@@ -54,6 +54,21 @@ describe("codex adapter — argv", () => {
     );
     expect(args.slice(-3)).toEqual(["resume", "thread-42", "continue"]);
   });
+
+  it("wires req.reasoning.effort onto -c model_reasoning_effort=<level> (codex has no dedicated flag)", () => {
+    const args = buildCodexArgs({}, { ...req("fix"), reasoning: { enabled: true, effort: "xhigh" } });
+    expect(args.join(" ")).toContain("-c model_reasoning_effort=xhigh");
+  });
+
+  it("omits the -c override entirely when reasoning is disabled — never overrides ~/.codex/config.toml", () => {
+    const args = buildCodexArgs({}, { ...req("fix"), reasoning: { enabled: false } });
+    expect(args.join(" ")).not.toContain("model_reasoning_effort");
+  });
+
+  it("omits the -c override when reasoning is simply absent from the request", () => {
+    const args = buildCodexArgs({}, req("fix"));
+    expect(args.join(" ")).not.toContain("model_reasoning_effort");
+  });
 });
 
 describe("codex adapter — stream mapping", () => {

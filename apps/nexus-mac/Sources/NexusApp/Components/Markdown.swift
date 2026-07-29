@@ -304,7 +304,7 @@ private struct MarkdownCodeBlockView: View {
         VStack(alignment: .leading, spacing: Space.xs) {
             if let language = code.language {
                 Text(language.uppercased())
-                    .font(Kind.micro)
+                    .textStyle(Type.micro)
                     .tracking(0.5)
                     .foregroundStyle(theme.color(\.textMuted))
             }

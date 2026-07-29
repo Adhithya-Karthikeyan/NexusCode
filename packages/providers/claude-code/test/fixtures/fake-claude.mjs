@@ -26,6 +26,14 @@
  *   model-malformed   non-JSON stdout
  *   model-empty       valid JSON reply with no "Available:" clause
  *   (anything else)   the real `/model` reply observed from `claude` 2.1.220
+ *
+ * `-p "/effort" --output-format json` (real effort discovery) is gated the
+ * same way, for `listReasoningLevels()`. Sub-modes:
+ *   effort-hang        never exits (probe timeout test)
+ *   effort-error       exit 1 with no reply
+ *   effort-malformed   non-JSON stdout
+ *   effort-empty       valid JSON reply with no "Usage:" clause
+ *   (anything else)    the real `/effort` reply observed from `claude` 2.1.220
  */
 
 const mode = process.env.FAKE_CLAUDE_MODE || "success";
@@ -55,6 +63,28 @@ if (process.argv[2] === "-p" && process.argv[3] === "/model") {
       result:
         "Current model: Opus 5 (1M context) (effort: xhigh)\n" +
         "Usage: /model <name>. Available: sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full model ID.",
+    });
+    process.exit(0);
+  }
+}
+if (process.argv[2] === "-p" && process.argv[3] === "/effort") {
+  if (mode === "effort-hang") {
+    setInterval(() => {}, 1000);
+  } else if (mode === "effort-error") {
+    process.exit(1);
+  } else if (mode === "effort-malformed") {
+    process.stdout.write("not json\n");
+    process.exit(0);
+  } else if (mode === "effort-empty") {
+    emit({ type: "result", subtype: "success", is_error: false, result: "no usage clause here" });
+    process.exit(0);
+  } else {
+    emit({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      total_cost_usd: 0,
+      result: "Usage: /effort <low|medium|high|xhigh|max|ultracode|auto>",
     });
     process.exit(0);
   }

@@ -31,9 +31,6 @@ struct IntegrationsView: View {
         // centre the space below the header instead of pinning to its top.
         PageScaffold {
             headerRow
-                .padding(.horizontal, Space.xl)
-                .padding(.top, Space.xl)
-                .padding(.bottom, Space.lg)
         } content: {
             if let controller {
                 if controller.isLoading && controller.mcpServers.isEmpty && controller.tools.isEmpty {
@@ -53,7 +50,7 @@ struct IntegrationsView: View {
                         }
                         .padding(.horizontal, Space.xl)
                         .padding(.bottom, Space.xl)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .pageMeasure()
                     }
                 }
             } else {
@@ -96,7 +93,7 @@ struct IntegrationsView: View {
             )
             if controller.mcpServers.isEmpty {
                 Text("No MCP servers declared.")
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.textMuted))
             } else {
                 VStack(spacing: Space.sm) {
@@ -119,7 +116,7 @@ struct IntegrationsView: View {
             )
             if controller.tools.isEmpty {
                 Text("No tools registered.")
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.textMuted))
             } else {
                 ForEach(displayGroups(controller)) { group in
@@ -189,24 +186,24 @@ struct IntegrationsView: View {
             // The honest fallback for an older/future CLI whose `config get
             // hooks` doesn't return a `hooks` array at all — never invented.
             Text("Lifecycle hooks aren't exposed by this CLI build's `nexus config get hooks` yet.")
-                .font(Kind.caption)
+                .textStyle(Type.caption)
                 .foregroundStyle(theme.color(\.textMuted))
 
         case .failed(let message):
             Text(message)
-                .font(Kind.caption)
+                .textStyle(Type.caption)
                 .foregroundStyle(theme.color(\.errorFg))
 
         case .loaded(let enabled, let hooks):
             VStack(alignment: .leading, spacing: Space.sm) {
                 if !enabled {
                     Text("Hooks are disabled (hooks.enabled = false).")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.warningFg))
                 }
                 if hooks.isEmpty {
                     Text("No hooks declared.")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                 } else {
                     VStack(spacing: Space.xs) {
@@ -315,12 +312,12 @@ private struct HookRow: View {
                 // — see `DESIGN.md`'s badge rule.
                 CountPill(text: hook.event, tone: .neutral)
                 Text(([hook.command] + hook.args).joined(separator: " "))
-                    .font(Kind.monoSmall)
+                    .textStyle(Type.monoMicro)
                     .foregroundStyle(theme.color(\.textSecondary))
                     .lineLimit(1)
                 if let matcher = hook.matcher {
                     Text(matcher)
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                         .lineLimit(1)
                 }
@@ -329,7 +326,7 @@ private struct HookRow: View {
                     CountPill(text: "fail-open", tone: .warning)
                 }
                 Text("\(hook.timeoutMs)ms")
-                    .font(Kind.micro)
+                    .textStyle(Type.micro)
                     .foregroundStyle(theme.color(\.textMuted))
             }
         }
@@ -358,11 +355,11 @@ private struct McpServerRow: View {
                 HStack(spacing: Space.sm) {
                     StatusDot(isRunning: server.connected, isFailed: isFailedConnection, size: 8, animate: false)
                     Text(server.name)
-                        .font(Kind.bodyEmphasis)
+                        .textStyle(Type.bodyStrong)
                         .foregroundStyle(theme.color(\.textPrimary))
                     if let transport = server.transport {
                         Text(transport)
-                            .font(Kind.caption)
+                            .textStyle(Type.caption)
                             .foregroundStyle(theme.color(\.textMuted))
                     }
                     Spacer(minLength: Space.sm)
@@ -379,7 +376,7 @@ private struct McpServerRow: View {
                 }
                 if let error = server.error {
                     Text(error)
-                        .font(Kind.monoSmall)
+                        .textStyle(Type.monoMicro)
                         .foregroundStyle(theme.color(\.errorFg))
                         .textSelection(.enabled)
                         .lineLimit(3)
@@ -447,10 +444,10 @@ private struct IntegrationHintRow: View {
                 .font(.system(size: 9))
                 .accessibilityHidden(true)
             Text(integration.kind.map { "\(integration.name) (\($0)) not available" } ?? "\(integration.name) not available")
-                .font(Kind.caption)
+                .textStyle(Type.caption)
             if let hint = integration.hint {
                 Text("— \(hint)")
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
             }
         }
         .foregroundStyle(theme.color(\.warningFg))
@@ -467,18 +464,25 @@ private struct NexusToolRow: View {
     private var isDimmed: Bool { !tool.enabled || tool.integrationAvailable == false }
 
     var body: some View {
-        HStack(spacing: Space.sm) {
+        HStack(spacing: Space.md) {
+            // Mono: a tool name is a machine identifier (`web_search`), not
+            // English control copy — the same rule the transcript's model ids
+            // and command preview follow.
             Text(tool.name)
-                .font(Kind.body)
+                .textStyle(Type.mono)
                 .foregroundStyle(isDimmed ? theme.color(\.textMuted) : theme.color(\.textPrimary))
                 .lineLimit(1)
             Spacer(minLength: Space.sm)
             CountPill(text: tool.permission.rawValue, tone: permissionTone)
         }
-        .padding(.horizontal, Space.sm)
-        .padding(.vertical, Space.xs)
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.sm)
         .background(theme.color(\.surfaceInset), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
-        .opacity(isDimmed ? 0.55 : 1)
+        // "Unavailable" is said ONCE, by the muted label colour above. It used
+        // to be said twice — muted colour AND a blanket 0.55 opacity on the
+        // whole row — which multiplied to roughly 30% effective contrast and
+        // made the actual content of this section the least readable text on
+        // the screen. One signal per meaning.
     }
 
     /// The permission tier is safety information, not decoration — read is

@@ -7,11 +7,19 @@
  * `NEXUS_CLAUDE_CODE_BIN` env override so `nexus code` drives it through the
  * SAME engine path as any provider.
  *
- * ONE exception to "ignores argv": it simulates the real vendor CLI's 404 when
- * handed its own provider id as a `--model` value (`--model claude-code`) —
- * exactly the bug this fixture exists to catch (nexus must never invent that
- * flag; a subprocess provider with no explicit model must omit `--model`
- * entirely and let the vendor CLI use its own signed-in default).
+ * TWO exceptions to "ignores argv":
+ *   - it simulates the real vendor CLI's 404 when handed its own provider id
+ *     as a `--model` value (`--model claude-code`) — exactly the bug this
+ *     fixture exists to catch (nexus must never invent that flag; a
+ *     subprocess provider with no explicit model must omit `--model`
+ *     entirely and let the vendor CLI use its own signed-in default).
+ *   - when `--effort <level>` is present, the level is echoed into the
+ *     STREAMED text delta (`"... effort=<level>"`) — not just the final
+ *     `result` line, which a caller may never re-print once the answer was
+ *     already streamed — so a CLI-integration test asserting on raw stdout
+ *     can see proof the flag genuinely reached this subprocess's argv, the
+ *     same proof-of-wire discipline `effort-wire.test.ts` uses at the unit
+ *     level.
  */
 const SID = "sess-fake-cli-1";
 function emit(obj) {
@@ -44,7 +52,10 @@ emit({
   tools: ["Edit", "Bash", "Read"],
   mcp_servers: [],
 });
-emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Editing app.ts." } } });
+const effortIdx = process.argv.indexOf("--effort");
+const effortArg = effortIdx >= 0 ? process.argv[effortIdx + 1] : undefined;
+const deltaText = effortArg ? `Editing app.ts. effort=${effortArg}` : "Editing app.ts.";
+emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: deltaText } } });
 emit({
   type: "assistant",
   message: {

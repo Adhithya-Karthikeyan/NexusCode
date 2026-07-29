@@ -172,6 +172,16 @@ struct SectionHeader: View {
 
 /// The one title moment at the top of a screen — distinct from
 /// `SectionHeader`, which labels a GROUP within a screen.
+///
+/// Owns its own margins and its own bottom hairline, which every call site
+/// used to supply by hand — six screens, six slightly different sets of
+/// numbers, and no separator on any of them. The effect on screen was that a
+/// page title sat as loose text floating above unrelated content, with nothing
+/// saying where chrome ended and the page began; on a sparse screen it read as
+/// stranded in the top-left corner of a void.
+///
+/// The hairline matches the one under the chat control strip, so every screen
+/// in the app now has the same top edge.
 struct PageHeader: View {
     @Environment(\.nexusTheme) private var theme
     let title: String
@@ -199,6 +209,13 @@ struct PageHeader: View {
             }
             Spacer(minLength: 0)
             accessory
+        }
+        .padding(.horizontal, Space.xl)
+        .padding(.top, Space.xl)
+        .padding(.bottom, Space.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.hairline).frame(height: 1)
         }
     }
 }

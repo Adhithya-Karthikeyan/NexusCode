@@ -112,6 +112,15 @@ enum Type {
     /// VoiceOver in its original case where that matters.
     static let eyebrow = TextStyle(font: .system(size: 10.5, weight: .semibold), tracking: 0.8)
 
+    /// The smallest sans label — badge text, pill contents, inline markers.
+    ///
+    /// Distinct from `monoMicro`, which is the same size but MONOSPACED. They
+    /// are easy to conflate and doing so is not cosmetic: collapsing this into
+    /// `monoMicro` during the migration silently turned 22 sans labels
+    /// (`CountPill` contents, status markers, key hints) into monospaced ones.
+    /// Machine output gets mono; a badge that says "expires ~7h" is prose.
+    static let micro = TextStyle(font: .system(size: 10.5, weight: .semibold))
+
     /// Literal machine output only — the `nexus` command line, model ids, raw
     /// JSON, diffs. Never plain English control copy, which is the "terminal
     /// wearing a window" failure.
@@ -295,6 +304,27 @@ extension View {
     /// Renders this content as a surface at `level` of the theme's ladder.
     func surface(_ level: Int, radius: CGFloat = Radius.card, specular: Double = 1, bordered: Bool = true) -> some View {
         modifier(SurfaceStyle(level: level, radius: radius, specularStrength: specular, bordered: bordered))
+    }
+}
+
+// MARK: - Page measure
+
+extension View {
+    /// Caps a settings-style page's content to a readable measure and pins it
+    /// to the leading edge.
+    ///
+    /// At 1440pt every list screen stretched its cards edge to edge, so a
+    /// provider row with ~400pt of content drew a 1600pt rectangle with a
+    /// trailing button stranded a screen-width away from the label it belongs
+    /// to. Full-bleed is right for a transcript (which fills its measure) and
+    /// wrong for forms and lists (which do not).
+    ///
+    /// Leading-aligned rather than centred: the page header above it starts at
+    /// the window's left margin, and centring the body under a left-aligned
+    /// title makes the two read as unrelated layouts.
+    func pageMeasure(_ width: CGFloat = 900) -> some View {
+        frame(maxWidth: width, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

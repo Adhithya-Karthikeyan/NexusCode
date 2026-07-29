@@ -15,6 +15,18 @@
  *   doctor-no-model   valid doctor JSON with no `checks["config.load"].details.model`
  *   (anything else)   a `checks["config.load"].details.model` report, shaped
  *                      like the real `codex doctor --json` (codex-cli 0.145.0)
+ *
+ * `debug models --bundled` (real effort discovery) is gated the same way, for
+ * `listReasoningLevels()`. `doctor` (above) always resolves the configured
+ * model to `"gpt-5.6-fake"` unless a `doctor-*` mode says otherwise, so these
+ * sub-modes only need to vary the CATALOG step:
+ *   debugmodels-hang       never exits (probe timeout test)
+ *   debugmodels-error      exit 1 with no reply
+ *   debugmodels-malformed  non-JSON stdout
+ *   debugmodels-no-match   valid catalog with no entry for "gpt-5.6-fake"
+ *   debugmodels-no-levels  a matching entry with an empty supported_reasoning_levels
+ *   (anything else)        a matching entry, shaped like the real `codex debug
+ *                          models` catalog (codex-cli 0.145.0)
  */
 
 const mode = process.env.FAKE_CODEX_MODE || "success";
@@ -39,6 +51,41 @@ if (process.argv[2] === "doctor") {
   } else {
     process.stdout.write(
       JSON.stringify({ checks: { "config.load": { details: { model: "gpt-5.6-fake", "model provider": "openai" } } } }) + "\n",
+    );
+    process.exit(0);
+  }
+}
+
+if (process.argv[2] === "debug" && process.argv[3] === "models") {
+  if (mode === "debugmodels-hang") {
+    setInterval(() => {}, 1000);
+  } else if (mode === "debugmodels-error") {
+    process.exit(1);
+  } else if (mode === "debugmodels-malformed") {
+    process.stdout.write("not json\n");
+    process.exit(0);
+  } else if (mode === "debugmodels-no-match") {
+    process.stdout.write(JSON.stringify({ models: [{ slug: "some-other-model", supported_reasoning_levels: [{ effort: "low" }] }] }) + "\n");
+    process.exit(0);
+  } else if (mode === "debugmodels-no-levels") {
+    process.stdout.write(JSON.stringify({ models: [{ slug: "gpt-5.6-fake", supported_reasoning_levels: [] }] }) + "\n");
+    process.exit(0);
+  } else {
+    process.stdout.write(
+      JSON.stringify({
+        models: [
+          {
+            slug: "gpt-5.6-fake",
+            default_reasoning_level: "low",
+            supported_reasoning_levels: [
+              { effort: "low", description: "Fast responses with lighter reasoning" },
+              { effort: "medium", description: "Balances speed and reasoning depth" },
+              { effort: "high", description: "Greater reasoning depth" },
+              { effort: "xhigh", description: "Extra high reasoning depth" },
+            ],
+          },
+        ],
+      }) + "\n",
     );
     process.exit(0);
   }

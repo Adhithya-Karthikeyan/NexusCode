@@ -681,7 +681,7 @@ struct ControlStrip: View {
     /// `modelsAreUnverified`, gone the instant a real probe succeeds.
     private var modelListVerificationCaption: some View {
         Text("Unverified — sign in to load the real model list")
-            .font(Kind.caption)
+            .textStyle(Type.caption)
             .foregroundStyle(theme.color(\.textMuted))
     }
 
@@ -955,7 +955,7 @@ struct ControlStrip: View {
                 // reserved for literal CLI/JSON text (the command preview,
                 // provider/model ids), not English button copy.
                 Text("Ask first")
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
             }
         }
         .buttonStyle(SoftButton(tone: .neutral, size: .compact))
@@ -1167,7 +1167,7 @@ private struct DropdownPicker: View {
                     .font(.system(size: 7, weight: .bold))
                     .foregroundStyle(theme.color(\.textMuted))
             }
-            .font(Kind.monoSmall)
+            .textStyle(Type.monoMicro)
             .foregroundStyle(selection == nil ? theme.color(\.textMuted) : theme.color(\.textSecondary))
             .padding(.horizontal, Space.sm)
             .padding(.vertical, 5)
@@ -1206,7 +1206,7 @@ private struct DropdownList: View {
             VStack(alignment: .leading, spacing: 1) {
                 if options.isEmpty {
                     Text(emptyHint ?? "Nothing available")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                         .padding(Space.md)
                 } else {
@@ -1233,7 +1233,7 @@ private struct DropdownList: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         Text(option.id)
-                            .font(Kind.monoSmall)
+                            .textStyle(Type.monoMicro)
                         if option.warning != nil {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 8))
@@ -1242,12 +1242,12 @@ private struct DropdownList: View {
                     }
                     if let detail = option.detail {
                         Text(detail)
-                            .font(Kind.micro)
+                            .textStyle(Type.micro)
                             .foregroundStyle(theme.color(\.textMuted))
                     }
                     if let warning = option.warning {
                         Text(warning)
-                            .font(Kind.micro)
+                            .textStyle(Type.micro)
                             .foregroundStyle(theme.color(\.warningFg))
                     }
                 }
@@ -1403,7 +1403,7 @@ private struct SuggestionCard: View {
                     .foregroundStyle(theme.color(\.textSecondary))
                     .frame(width: 18)
                 Text(text)
-                    .font(Kind.bodyEmphasis)
+                    .textStyle(Type.bodyStrong)
                     .foregroundStyle(theme.color(\.textSecondary))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1435,7 +1435,7 @@ struct Chip: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(text).font(Kind.monoSmall)
+            Text(text).textStyle(Type.monoMicro)
             Button(action: onRemove) {
                 Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
             }
@@ -1784,7 +1784,7 @@ struct SwitchReceiptView: View {
                 // turn boundary, switch or not), rather than a bare "done"
                 // that implies more than it should.
                 Text("switched to \(receipt.to.label) — conversation and context carried over; tool-call history is not (never was, any turn boundary).")
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.textMuted))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1807,7 +1807,7 @@ struct SwitchReceiptView: View {
                     Text("Switch to \(receipt.to.label) blocked")
                         .font(.system(size: 12, weight: .semibold))
                     Text("Staying on \(receipt.from.label).")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                 }
                 Spacer(minLength: 0)
             }
@@ -1824,7 +1824,7 @@ struct SwitchReceiptView: View {
                     }
                 }
             }
-            .font(Kind.caption)
+            .textStyle(Type.caption)
             .foregroundStyle(theme.color(\.errorFg).opacity(0.9))
 
             if !receipt.warnings.isEmpty {
@@ -1853,7 +1853,7 @@ struct SwitchReceiptView: View {
                 Text(warning).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(Kind.micro)
+        .textStyle(Type.micro)
         .foregroundStyle(theme.color(\.warningFg).opacity(0.85))
         .padding(.leading, Space.lg)
     }
@@ -1928,7 +1928,7 @@ struct ToolRow: View {
                         .foregroundStyle(theme.color(\.textPrimary))
                     if let args = tool.args {
                         Text(args.inlineDescription)
-                            .font(Kind.monoSmall)
+                            .textStyle(Type.monoMicro)
                             .foregroundStyle(theme.color(\.textMuted))
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -1974,7 +1974,7 @@ struct ToolRow: View {
     private func labeledPayload(_ label: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label.uppercased())
-                .font(Kind.micro)
+                .textStyle(Type.micro)
                 .tracking(0.5)
                 .foregroundStyle(theme.color(\.textMuted))
             CodeBlock(text: text)
@@ -2032,7 +2032,7 @@ struct DiagnosticsStrip: View {
                 .font(.system(size: 10))
                 .foregroundStyle(fg.opacity(0.85))
             Text(text)
-                .font(Kind.monoSmall)
+                .textStyle(Type.monoMicro)
                 .foregroundStyle(fg.opacity(0.85))
                 .lineLimit(2)
             Spacer(minLength: 0)

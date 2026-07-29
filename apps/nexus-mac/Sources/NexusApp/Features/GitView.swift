@@ -37,9 +37,6 @@ struct GitView: View {
         // instead of sitting pinned to the top of a mostly-black window.
         PageScaffold {
             headerRow
-                .padding(.horizontal, Space.xl)
-                .padding(.top, Space.xl)
-                .padding(.bottom, Space.lg)
         } content: {
             if let client {
                 if let repoState {
@@ -75,7 +72,7 @@ struct GitView: View {
                             }
                             .padding(.horizontal, Space.xl)
                             .padding(.bottom, Space.xl)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .pageMeasure()
                         }
                     }
                 } else {
@@ -278,7 +275,7 @@ private struct ActionErrorText: View {
 
     var body: some View {
         Text(message)
-            .font(Kind.caption)
+            .textStyle(Type.caption)
             .foregroundStyle(theme.color(\.errorFg))
             .textSelection(.enabled)
     }
@@ -301,7 +298,7 @@ private struct ExplainCard: View {
 
                 if !repoState.hasAnyChanges {
                     Text("Nothing to explain — the working tree is clean.")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                 } else {
                     CodeBlock(text: repoState.previewDiff, isDiff: true, maxHeight: 160)
@@ -372,7 +369,7 @@ private struct ReviewCard: View {
 
                 if !repoState.hasAnyChanges {
                     Text("Nothing to review — the working tree is clean.")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                 } else {
                     CodeBlock(text: repoState.previewDiff, isDiff: true, maxHeight: 160)
@@ -389,12 +386,12 @@ private struct ReviewCard: View {
                         VStack(alignment: .leading, spacing: Space.sm) {
                             if !review.summary.isEmpty {
                                 Text(review.summary)
-                                    .font(Kind.body)
+                                    .textStyle(Type.body)
                                     .foregroundStyle(theme.color(\.textPrimary))
                             }
                             if review.comments.isEmpty {
                                 Text("No issues flagged.")
-                                    .font(Kind.caption)
+                                    .textStyle(Type.caption)
                                     .foregroundStyle(theme.color(\.textMuted))
                             } else {
                                 VStack(alignment: .leading, spacing: Space.xs) {
@@ -443,11 +440,11 @@ private struct ReviewCommentRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let file = comment.file {
                     Text(comment.line.map { "\(file):\($0)" } ?? file)
-                        .font(Kind.monoSmall)
+                        .textStyle(Type.monoMicro)
                         .foregroundStyle(theme.color(\.textMuted))
                 }
                 Text(comment.message)
-                    .font(Kind.body)
+                    .textStyle(Type.body)
                     .foregroundStyle(theme.color(\.textSecondary))
             }
         }
@@ -500,7 +497,7 @@ private struct CommitCard: View {
                             ? "Nothing staged. `nexus commit` will generate a message from the unstaged working-tree diff, but applying it needs staged changes first (git add)."
                             : "Nothing staged, and the working tree is clean — nothing to commit."
                     )
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.warningFg))
                 }
 
@@ -531,7 +528,7 @@ private struct CommitCard: View {
                             }
 
                             Text("Re-generates the message from the current staged diff and runs `git commit` — this applies a real commit and cannot be undone from here.")
-                                .font(Kind.caption)
+                                .textStyle(Type.caption)
                                 .foregroundStyle(theme.color(\.textMuted))
 
                             switch applyState {
@@ -539,7 +536,7 @@ private struct CommitCard: View {
                             case .failure(let message): ActionErrorText(message: message)
                             case .success:
                                 Text("Committed.")
-                                    .font(Kind.caption)
+                                    .textStyle(Type.caption)
                                     .foregroundStyle(theme.color(\.successFg))
                             }
                         }
@@ -604,11 +601,11 @@ private struct PrCard: View {
 
                 HStack(spacing: Space.sm) {
                     Text("Base ref")
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
                     TextField("main (optional)", text: $baseRef)
                         .textFieldStyle(.plain)
-                        .font(Kind.body)
+                        .textStyle(Type.body)
                         .foregroundStyle(theme.color(\.textPrimary))
                         .padding(.horizontal, Space.sm)
                         .padding(.vertical, 5)
@@ -631,7 +628,7 @@ private struct PrCard: View {
                 case .success(let pr):
                     VStack(alignment: .leading, spacing: Space.xs) {
                         Text(pr.title)
-                            .font(Kind.bodyEmphasis)
+                            .textStyle(Type.bodyStrong)
                             .foregroundStyle(theme.color(\.textPrimary))
                         CodeBlock(text: pr.body, isDiff: false)
                     }

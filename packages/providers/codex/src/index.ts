@@ -573,10 +573,18 @@ async function probeCodexConfiguredModel(cfg: CodexConfig): Promise<string | und
  * `CODEX_HOME` defaults to `~/.codex` — confirmed live off `codex doctor
  * --json`'s own `config.load.details.CODEX_HOME` field — mirrored here so
  * the config.toml fallback below looks in the exact place codex itself does,
- * honoring an explicit override.
+ * honoring an explicit override. Resolves through `cfg.resolveEnv` FIRST
+ * (the same override seam `resolveChildEnv`/`runBoundedCapture` give the
+ * spawned child), falling back to the ambient `process.env.CODEX_HOME` only
+ * when `cfg` supplies none — this read happens in-process, no subprocess
+ * involved, so without this it would silently ignore a caller's env override
+ * and read the AMBIENT host's `~/.codex/config.toml` instead (a real
+ * cross-test/cross-install leak a `resolveEnv`-scoped test fixture would
+ * never expect).
  */
-function codexHomeDir(): string {
-  const override = process.env.CODEX_HOME;
+async function codexHomeDir(cfg: CodexConfig): Promise<string> {
+  const resolved = cfg.resolveEnv ? await cfg.resolveEnv() : undefined;
+  const override = resolved?.CODEX_HOME ?? process.env.CODEX_HOME;
   return override && override.length > 0 ? override : join(homedir(), ".codex");
 }
 
@@ -597,9 +605,9 @@ function codexHomeDir(): string {
  * same key name is never mistaken for the global default codex itself would
  * fall back to. Returns `undefined` on any read/parse failure — never a guess.
  */
-async function readConfiguredCodexEffort(): Promise<string | undefined> {
+async function readConfiguredCodexEffort(cfg: CodexConfig): Promise<string | undefined> {
   try {
-    const text = await readFile(join(codexHomeDir(), "config.toml"), "utf8");
+    const text = await readFile(join(await codexHomeDir(cfg), "config.toml"), "utf8");
     const topLevel = text.split(/\n\s*\[/)[0] ?? text;
     const m = /^\s*model_reasoning_effort\s*=\s*"([^"]+)"\s*$/m.exec(topLevel);
     return m?.[1];
@@ -771,7 +779,7 @@ export function createCodexAdapter(cfg: CodexConfig = {}): ProviderAdapter {
         const { levels, defaultLevel } = await probeCodexEffort(cfg);
         return defaultLevel ? { levels, defaultLevel, source: "provider" } : { levels, source: "provider" };
       } catch {
-        const configured = await readConfiguredCodexEffort();
+        const configured = await readConfiguredCodexEffort(cfg);
         if (configured) return { levels: [{ id: configured }], defaultLevel: configured, source: "fallback" };
         return { levels: [], source: "fallback" };
       }
