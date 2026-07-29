@@ -118,6 +118,12 @@ export interface AppProps {
   onEffortChange?: (effort: string) => void;
   /** Whether the active provider supports reasoning (drives the `/effort` picker). */
   reasoningSupported?: boolean;
+  /**
+   * Live, provider-scoped reasoning-effort levels for the ACTIVE provider —
+   * see `SlashCommandDeps.listEffortLevelsForProvider`'s doc. Falls back to
+   * the generic `low/medium/high` names when absent.
+   */
+  listEffortLevelsFor?: (providerId: string) => Promise<readonly { id: string; hint?: string }[]>;
   /** `/clear` + `/new` — reset the transcript / start a new session. */
   onClearConversation?: () => void;
   onNewSession?: () => void;
@@ -201,6 +207,7 @@ export function App(props: AppProps): React.JSX.Element {
     activeModel,
     activeProvider,
     listModelsFor,
+    listEffortLevelsFor,
     onModelChange,
     onProviderChange,
     onEffortChange,
@@ -432,6 +439,12 @@ export function App(props: AppProps): React.JSX.Element {
         currentEffort: effortOverride,
         ...(currentReasoningSupported !== undefined
           ? { reasoningSupported: currentReasoningSupported }
+          : {}),
+        ...(listEffortLevelsFor
+          ? {
+              listEffortLevelsForProvider: (pid: string) =>
+                Promise.resolve(listEffortLevelsFor(pid)).then((r) => r.map((l) => ({ ...l }))),
+            }
           : {}),
         onPickEffort: (effort) => {
           setEffortOverride(effort);
