@@ -359,24 +359,28 @@ struct ConversationView: View {
     /// screen composes `composerCard` and `composerFootnote` itself so they
     /// can sit inside the hero group instead of against the window edge.
     private var composer: some View {
-        // A fixed-height scrim above an opaque band, rather than one gradient
-        // spanning the whole composer.
+        // A solid band on the canvas's own surface, separated by one hairline.
         //
-        // The first attempt faded across the composer's entire height, which
-        // left the input card itself sitting on a semi-transparent field: a
-        // code block scrolling underneath showed through it and the transcript
-        // appeared to be clipped by a floating rectangle. Separating the two
-        // gives the scroll a proper 28pt dissolve to pass under while the
-        // composer keeps a solid surface of its own — the shape ChatGPT and
-        // Claude both use, and the reason neither has a hard seam across the
-        // window.
+        // Two gradient scrims were tried here first and both were discarded on
+        // screen. A gradient across the whole composer left the input card
+        // itself semi-transparent, so a code block scrolling under it showed
+        // through. A short scrim above an opaque band failed for a subtler
+        // reason worth recording: a scrim can only dissolve content it shares
+        // a colour with, and a fenced code block carries its own darker
+        // `surfaceInset` fill — so instead of fading, the scrim painted a
+        // visible lighter rectangle across the code. The illusion cannot hold
+        // for arbitrary content.
+        //
+        // What is left is honest and always correct: the composer shares the
+        // canvas surface (so it adds no new luminance band — the specific
+        // defect measured in the old build, where composer, strip and canvas
+        // sat in random value order) and one hairline says where the scroll
+        // ends. Content clipping at a fixed toolbar edge is ordinary, legible
+        // behaviour; a half-working dissolve is not.
         VStack(spacing: 0) {
-            LinearGradient(
-                colors: [theme.surface(1).opacity(0), theme.surface(1)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 28)
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(height: 1)
 
             VStack(alignment: .leading, spacing: Space.lg) {
                 if !controller.presentedDiagnostics.isEmpty {
@@ -397,6 +401,7 @@ struct ConversationView: View {
             .frame(maxWidth: readingColumnWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, Space.xl)
+            .padding(.top, Space.lg)
             .padding(.bottom, Space.lg)
             .background(theme.surface(1))
         }
@@ -1982,17 +1987,16 @@ struct ToolRow: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
-                    Spacer(minLength: 0)
                 }
-                .padding(.horizontal, Space.sm)
-                .padding(.vertical, 6)
+                .padding(.horizontal, Space.lg)
+                .padding(.vertical, 7)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .onHover { hovering = $0 }
 
             if expanded {
-                VStack(alignment: .leading, spacing: Space.sm) {
+                VStack(alignment: .leading, spacing: Space.md) {
                     if let args = tool.args {
                         labeledPayload("args", prettyPrinted(args))
                     }
@@ -2000,19 +2004,24 @@ struct ToolRow: View {
                         labeledPayload("result", prettyPrinted(result))
                     }
                 }
-                .padding(.horizontal, Space.sm)
-                .padding(.bottom, Space.sm)
+                .padding(.horizontal, Space.lg)
+                .padding(.bottom, Space.lg)
             }
         }
+        // Sized to its own content rather than stretched across the reading
+        // measure. A collapsed tool call is three or four words; spanning it
+        // edge to edge drew a wide empty rectangle through the middle of the
+        // answer and broke the column's vertical flow for no information.
+        .fixedSize(horizontal: !expanded, vertical: false)
         .background(
-            hovering ? theme.color(\.surfaceOverlay).opacity(0.5) : .clear,
+            hovering ? theme.color(\.surfaceOverlay).opacity(0.6) : theme.color(\.surfaceInset).opacity(0.5),
             in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
         )
         .overlay {
             RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                 .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
         }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .animation(Motion.state, value: hovering)
     }
 
     @ViewBuilder

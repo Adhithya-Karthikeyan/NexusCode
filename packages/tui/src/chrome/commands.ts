@@ -91,12 +91,23 @@ export interface SlashCommandDeps {
   roles?: { id: string; hint?: string }[];
   currentRole?: string;
   onPickRole?: (id: string) => void;
-  /** Current reasoning effort ("off" | "low" | "medium" | "high"), for `/effort`. */
+  /** Current reasoning effort (e.g. `"off"`, `"medium"`, or a provider-native
+   *  name like `"xhigh"`), for `/effort`. */
   currentEffort?: string;
   /** Whether the ACTIVE provider supports reasoning effort (from its Capabilities). */
   reasoningSupported?: boolean;
   /** Apply a picked reasoning effort to the next turn. */
   onPickEffort?: (effort: string) => void;
+  /**
+   * Live, provider-scoped reasoning-effort levels for the ACTIVE provider —
+   * mirrors `listModelsForProvider`'s contract exactly: each provider defines
+   * its OWN scale (claude-code's seven levels are nothing like the generic
+   * token-budget family's three), so `/effort` must ask for THIS provider's
+   * real options rather than offering one fixed list to every provider.
+   * Additive: omit to keep the generic `off/low/medium/high` fallback below —
+   * `"off"` is always prepended by the picker itself, never included here.
+   */
+  listEffortLevelsForProvider?: (providerId: string) => Promise<readonly { id: string; hint?: string }[]>;
 
   /** Live session facts surfaced by the read-only info commands. */
   info?: {
@@ -217,17 +228,38 @@ export function buildSlashCommands(deps: SlashCommandDeps): SlashCommandSpec[] {
       pickerTitle: "Reasoning effort",
       // Scoped to what the ACTIVE provider actually supports: if it has no
       // reasoning capability, say so instead of offering inert levels.
-      optionsProvider: () => {
+      optionsProvider: async () => {
         if (deps.reasoningSupported === false) {
           return [{ label: "this provider has no reasoning mode", value: "" }];
         }
         const cur = deps.currentEffort ?? "off";
-        return [
-          { id: "off", hint: "no extended thinking" },
-          { id: "low", hint: "brief thinking" },
-          { id: "medium", hint: "balanced thinking" },
-          { id: "high", hint: "deep reasoning" },
-        ].map((e) => ({ label: e.id, value: e.id, hint: e.hint, current: e.id === cur }));
+        const provider = deps.currentProvider ?? "";
+        // Prefer the ACTIVE provider's REAL scale (claude-code's seven levels,
+        // codex's model-dependent set, …). Falls back to the generic
+        // token-budget family's three names only when no live loader is wired
+        // or it returns nothing — never a hard failure, same degrade
+        // discipline as `/model`'s `listModelsForProvider`.
+        let levels: readonly { id: string; hint?: string }[] = [];
+        if (deps.listEffortLevelsForProvider && provider) {
+          try {
+            levels = await deps.listEffortLevelsForProvider(provider);
+          } catch {
+            levels = [];
+          }
+        }
+        if (levels.length === 0) {
+          levels = [
+            { id: "low", hint: "brief thinking" },
+            { id: "medium", hint: "balanced thinking" },
+            { id: "high", hint: "deep reasoning" },
+          ];
+        }
+        return [{ id: "off", hint: "no extended thinking" }, ...levels].map((e) => ({
+          label: e.id,
+          value: e.id,
+          ...(e.hint ? { hint: e.hint } : {}),
+          current: e.id === cur,
+        }));
       },
       action: (value) => {
         if (value) deps.onPickEffort?.(value);

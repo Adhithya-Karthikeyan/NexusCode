@@ -126,6 +126,8 @@ export interface RunTuiOptions {
   onEffortChange?: (effort: string) => void;
   /** Whether the active provider supports reasoning (drives the `/effort` picker). */
   reasoningSupported?: boolean;
+  /** Live, provider-scoped `/effort` levels — see `SlashCommandDeps.listEffortLevelsForProvider`. */
+  listEffortLevelsFor?: (providerId: string) => Promise<readonly { id: string; hint?: string }[]>;
 }
 
 export interface RunTuiResult {
@@ -340,6 +342,7 @@ export async function runTui(engine: Engine, opts: RunTuiOptions): Promise<RunTu
       : {}),
     ...(opts.onEffortChange !== undefined ? { onEffortChange: opts.onEffortChange } : {}),
     ...(opts.reasoningSupported !== undefined ? { reasoningSupported: opts.reasoningSupported } : {}),
+    ...(opts.listEffortLevelsFor !== undefined ? { listEffortLevelsFor: opts.listEffortLevelsFor } : {}),
   };
 
   // Ink's built-in Ctrl+C handler sets raw mode on stdin; on a non-TTY stdin
