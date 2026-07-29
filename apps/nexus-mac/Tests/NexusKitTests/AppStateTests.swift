@@ -409,6 +409,56 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(args.contains("s_5"))
     }
 
+    // Regression: a resumed conversation used to silently omit `-p`/`-m`
+    // whenever this controller's picker hadn't already been populated —
+    // which, on a fresh app run where Sessions → Resume is the user's FIRST
+    // action, is the ordinary case, not an edge case (`ChatTab`'s auto-select
+    // only fires once the Chat tab itself has rendered — see `RootView
+    // .swift`). The resumed command then fell through to whatever the CLI
+    // defaults to right now instead of the provider/model that conversation
+    // was actually having — the exact "I don't have tools" class of report
+    // this closes. `NexusSession` already carries the session's own
+    // most-recent-run `provider`/`model` (`SessionMeta.provider`/`.model` on
+    // the CLI side); `reopen` now takes them so a resumed session launches
+    // with the SAME configuration a fresh one would, not a degraded one.
+    func testReopenRestoresTheSessionsOwnProviderAndModelSoResumeCarriesFullConfiguration() {
+        let c = controller()
+        // Nothing has auto-selected a provider yet in this run — the exact
+        // state a fresh app launch is in before `ChatTab` ever renders.
+        XCTAssertNil(c.provider)
+        XCTAssertNil(c.model)
+
+        c.reopen(sessionId: "s_5", provider: "anthropic", model: "claude-opus-5")
+
+        XCTAssertEqual(c.provider, "anthropic")
+        XCTAssertEqual(c.model, "claude-opus-5")
+
+        let args = c.plannedCommand(for: "again").arguments
+        XCTAssertTrue(args.contains("-p") && args.contains("anthropic"))
+        XCTAssertTrue(args.contains("-m") && args.contains("claude-opus-5"))
+        // `-t --ask` are independent of provider/model — `approvalsEnabled`
+        // defaults `true` and resume doesn't touch it — but assert it stays
+        // that way here too, so a resumed session's tool loop matches a
+        // fresh one's exactly, not just its backend selection.
+        XCTAssertTrue(args.contains("-t") && args.contains("--ask"))
+    }
+
+    // A session recorded before provider/model tracking existed (or a
+    // `Replay`/`Resume` invoked with incomplete metadata) reports `nil` for
+    // one or both — that must not CLOBBER a value this controller already
+    // has with `nil`. `provider ?? self.provider` is the merge policy, not a
+    // flat overwrite.
+    func testReopenWithNoRecordedProviderDoesNotClobberAnAlreadyChosenOne() {
+        let c = controller()
+        c.provider = "anthropic"
+        c.model = "claude-opus-5"
+
+        c.reopen(sessionId: "s_5")
+
+        XCTAssertEqual(c.provider, "anthropic")
+        XCTAssertEqual(c.model, "claude-opus-5")
+    }
+
     // MARK: - Provider switching (regression)
     //
     // History: this used to assert a provider/model change on a live session

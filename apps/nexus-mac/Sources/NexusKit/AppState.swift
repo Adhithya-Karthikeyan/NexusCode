@@ -654,10 +654,35 @@ public final class ConversationController {
     /// open a session. Resume stops here, leaving the transcript empty for
     /// `--resume` to carry forward; Replay follows up with `ingest(_:)` to
     /// re-populate it immediately from the recorded log.
-    public func reopen(sessionId: String) {
+    ///
+    /// - Parameters:
+    ///   - provider: The session's OWN last-used adapter id (`NexusSession
+    ///     .provider`, from `nexus session list -o json`'s `SessionMeta
+    ///     .provider` — the most recent run's adapter), not whatever this
+    ///     app run's picker currently holds. The picker's live value is
+    ///     unreliable here: it could still be `nil` (nothing has auto-
+    ///     selected yet — see `ChatTab`'s `.task`, which only fires once the
+    ///     Chat tab itself has been shown) or it could hold a provider left
+    ///     over from a completely unrelated conversation. Either way,
+    ///     leaving `persistentSessionArguments()` to omit `-p`/`-m` on
+    ///     resume hands the reopened conversation to whatever the CLI
+    ///     defaults to right now, silently — a DIFFERENT backend than the
+    ///     one that transcript was actually having, which is exactly the
+    ///     "no tools" class of report this fixes. `nil` (the default) only
+    ///     when the caller has no session metadata to offer; see the merge
+    ///     policy below.
+    ///   - model: Same reasoning, `NexusSession.model`.
+    ///
+    /// Merge policy: `provider ?? self.provider` (same for `model`), not a
+    /// flat overwrite — an older session recorded before provider/model
+    /// tracking existed reports `nil` for both, and a `nil` here must not
+    /// clobber a value this controller already has.
+    public func reopen(sessionId: String, provider: String? = nil, model: String? = nil) {
         endSession()
         clear()
         self.sessionId = sessionId
+        self.provider = provider ?? self.provider
+        self.model = model ?? self.model
     }
 
     /// Clear the transcript. Does not touch the durable session — history stays
