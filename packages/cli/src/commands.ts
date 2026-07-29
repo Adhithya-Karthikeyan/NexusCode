@@ -852,7 +852,7 @@ export async function cmdAsk(args: ParsedArgs, io: Io = defaultIo): Promise<numb
   }
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
   const system = args.flags.get("system") ?? defaultSystemPrompt();
-  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "ask", io);
+  const reasoning = applyEffort(effortResult.effort, effortResult.explicit, providerId, runtime, "ask", io);
 
   const rawInput = userText(prompt);
   // Assemble before response-cache lookup so the signature covers the exact
@@ -1320,7 +1320,7 @@ export async function cmdAgent(args: ParsedArgs, io: Io = defaultIo): Promise<nu
 
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
   const system = args.flags.get("system") ?? defaultSystemPrompt();
-  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "agent", io);
+  const reasoning = applyEffort(effortResult.effort, effortResult.explicit, providerId, runtime, "agent", io);
 
   // Tool registry (built-in suite) + permission gate.
   const toolRegistry = new ToolRegistry();
@@ -1635,7 +1635,7 @@ async function runAgentOoda(
   }
 
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
-  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "agent", io);
+  const reasoning = applyEffort(effortResult.effort, effortResult.explicit, providerId, runtime, "agent", io);
 
   // Role-filtered tool set: the built-in suite plus the background-job control
   // tools, so a coder/tester role can launch and poll long-running commands.

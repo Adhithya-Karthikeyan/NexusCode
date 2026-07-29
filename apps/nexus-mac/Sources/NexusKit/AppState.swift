@@ -221,6 +221,23 @@ public final class ConversationController {
         }
     }
 
+    /// Replays a scripted ndjson stream into this controller's view, for
+    /// screenshot verification of the transcript.
+    ///
+    /// A transcript cannot be designed without being looked at, and the
+    /// transcript is both the surface the user stares at all day and the one
+    /// that is empty on a fresh launch. Every previous design pass reviewed it
+    /// blank, which is a large part of why it shipped with no craft in it.
+    ///
+    /// Deliberately routed through the REAL `UiEventDecoder` and the REAL
+    /// `ViewState.reduce` rather than assembling `Turn` values by hand: what
+    /// gets screenshotted is then genuinely the production render path fed
+    /// real events, not a mock view that could disagree with it. Nothing calls
+    /// this unless `NEXUS_UI_DEMO` is set (see `WorkspaceModel.attach`).
+    public func replayForPreview(ndjson: String) {
+        view = ViewState.reduce(events: UiEventDecoder.decodeStream(ndjson))
+    }
+
     /// Provider/model for single-lane modes.
     public var provider: String?
     public var model: String?
