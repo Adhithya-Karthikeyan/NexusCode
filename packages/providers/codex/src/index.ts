@@ -27,18 +27,22 @@
  *   error / stream_error                         → terminal (error)
  */
 
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import type { CallContext, ChatResult, HealthStatus, ProviderAdapter } from "@nexuscode/core";
 import type {
   Capabilities,
   ChatRequest,
   ContentBlock,
+  EffortListResult,
   ModelInfo,
   ModelListResult,
   StreamChunk,
   Usage,
 } from "@nexuscode/shared";
 import { textOf } from "@nexuscode/shared";
-import { createModelListCache, type ModelListCache } from "@nexuscode/shared";
+import { createEffortListCache, createModelListCache, type EffortListCache, type ModelListCache } from "@nexuscode/shared";
 import {
   createSubprocessAdapter,
   writeDiff,
@@ -98,6 +102,21 @@ function buildArgs(cfg: CodexConfig, req: ChatRequest, ctx?: CallContext): strin
   if (cfg.approvalMode) args.push("--ask-for-approval", cfg.approvalMode);
   if (cfg.skipGitRepoCheck) args.push("--skip-git-repo-check");
   if (cfg.workdir) args.push("--cd", cfg.workdir);
+  // Real wire path for reasoning effort: codex has no dedicated flag (verified
+  // against `codex exec --help`, codex-cli 0.145.0) — the ONLY way to set it
+  // per-run is `-c model_reasoning_effort=<value>`, the same config-override
+  // mechanism `~/.codex/config.toml`'s own `model_reasoning_effort` key uses
+  // (confirmed live: an invalid value here surfaces the model's real
+  // `reasoning.effort` enum straight from the API's own validation error —
+  // see `probeCodexEffort`). `req.reasoning.effort` carries whatever
+  // provider-native level name this adapter's own `listReasoningLevels`
+  // (`probeCodexEffort`) reported as valid for the resolved model — sent
+  // verbatim. `enabled: false` omits the override entirely so the run falls
+  // back to whatever the user already has configured in `config.toml`,
+  // exactly like omitting `--model` falls back to codex's own default.
+  if (req.reasoning?.enabled && req.reasoning.effort) {
+    args.push("-c", `model_reasoning_effort=${req.reasoning.effort}`);
+  }
   for (const extra of cfg.extraArgs ?? []) args.push(extra);
 
   const resume = cfg.resume ?? ctx?.providerSessionId;

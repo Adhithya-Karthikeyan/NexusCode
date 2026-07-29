@@ -8,7 +8,7 @@ import NexusKit
 /// it will appear, so drifting the two independently is how you get a
 /// composer floating ~165pt away from the text it's replying to — measured,
 /// not hypothetical, at the default 1280pt window before this existed.
-private let readingColumnWidth: CGFloat = 660
+private let readingColumnWidth: CGFloat = 720
 
 /// The conversation surface: transcript, controls, composer.
 ///
@@ -75,30 +75,48 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        transcript
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Both bars are safe-area insets, not VStack siblings. An inset
-            // shrinks the area the transcript lays out against, so neither bar
-            // can be squeezed out by a greedy transcript — the failure that hid
-            // the composer and control strip entirely.
-            .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    ControlStrip(
-                        controller: controller,
-                        showsReasoning: $showsReasoning,
-                        providers: providers,
-                        models: models,
-                        isLoadingModels: isLoadingModels,
-                        modelsAreUnverified: modelsAreUnverified,
-                        onLoadModels: onLoadModels,
-                        rolesController: rolesController
-                    )
-                    Divider().overlay(theme.color(\.chromeDivider))
-                }
+        // The composer's position depends on whether there is a conversation
+        // yet, which is the fix for the largest visual defect in the old
+        // build: an empty chat put the hero composition in the vertical centre
+        // and pinned the composer to the window's bottom edge, leaving roughly
+        // 40% of a 1440x900 window as unexplained black between the two — the
+        // "enormous dead canvas with a small block of content floating in it"
+        // the owner has reacted to four times.
+        //
+        // Empty, the composer is PART of the opening composition: title,
+        // suggestions and input sit together as one centred group, so the
+        // thing you are meant to do next is inside the thing you are looking
+        // at. Once a turn exists the transcript owns the height and the
+        // composer docks to the bottom, which is the correct behaviour there
+        // and the only place the old layout was right.
+        Group {
+            if visibleLaneIds.isEmpty {
+                openingComposition
+            } else {
+                transcript
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // A safe-area inset, not a VStack sibling: an inset shrinks
+                    // the area the transcript lays out against, so the composer
+                    // cannot be squeezed out by a greedy transcript — the
+                    // failure that once hid it entirely.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        composer
+                    }
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                composer
-            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ControlStrip(
+                controller: controller,
+                showsReasoning: $showsReasoning,
+                providers: providers,
+                models: models,
+                isLoadingModels: isLoadingModels,
+                modelsAreUnverified: modelsAreUnverified,
+                onLoadModels: onLoadModels,
+                rolesController: rolesController
+            )
+        }
             // A sheet, deliberately: a blocked tool call is modal in fact — the
             // turn is genuinely halted waiting on this answer — so making it
             // modal in the UI matches reality rather than letting the user keep
@@ -137,21 +155,28 @@ struct ConversationView: View {
     /// rather than vanish behind the empty-state hero.
     private var visibleLaneIds: [String] { controller.view.visibleLaneIds }
 
+    /// The whole opening screen as one vertically-centred group — hero,
+    /// suggestions, and the composer itself. See `body` for why the composer
+    /// belongs here rather than pinned to the window's bottom edge.
+    private var openingComposition: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: Space.xl)
+            emptyState
+            composerCard
+                .frame(maxWidth: readingColumnWidth)
+                .padding(.top, Space.section)
+            composerFootnote
+                .frame(maxWidth: readingColumnWidth)
+                .padding(.top, Space.lg)
+            Spacer(minLength: Space.xl)
+        }
+        .padding(.horizontal, Space.xl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     @ViewBuilder
     private var transcript: some View {
-        if visibleLaneIds.isEmpty {
-            // Optically centred in the available canvas. Bottom-anchoring
-            // this was an earlier attempt at the same problem (a large,
-            // unexplained void above a small huddle of controls) — measured
-            // on screen, it just moved the void to the TOP ~40% of the
-            // canvas instead of removing it, which reads as "hanging in the
-            // lower half," not "considered." Centring plus the now-larger,
-            // more substantial composition below (`emptyState`'s doc
-            // comment) is what actually closes the gap.
-            emptyState
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        } else if controller.mode.isMultiLane && laneOrder.count > 1 {
+        if controller.mode.isMultiLane && laneOrder.count > 1 {
             // Fan-out: one column per lane, so answers are compared, not scrolled.
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: Space.md) {
@@ -165,20 +190,19 @@ struct ConversationView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    // 24pt between turns, not `Space.lg` (12pt) — that scale is
-                    // HIG's WITHIN-a-control-group spacing; reusing it between
-                    // whole turns is what made the transcript read as a solid
-                    // wall of text rather than a sequence of distinct answers.
-                    LazyVStack(alignment: .leading, spacing: 24) {
+                    // `Space.turn` (34pt) between turns. A turn boundary is
+                    // the largest structural break the transcript has and has
+                    // to outrank every gap inside a turn by a clear margin;
+                    // the old 24pt sat too close to the 12pt used within a
+                    // turn for the eye to read the difference as hierarchy.
+                    LazyVStack(alignment: .leading, spacing: Space.turn) {
                         ForEach(visibleLaneIds, id: \.self) { laneId in
                             ForEach(controller.view.timeline(forLane: laneId)) { entry in
                                 switch entry {
                                 case .turn(let turn, let isLive):
-                                    TurnView(
-                                        turn: turn, showsReasoning: showsReasoning, isStreaming: isLive,
-                                        currentProvider: controller.view.session?.provider
-                                    )
-                                    .id(turn.id)
+                                    TurnView(turn: turn, showsReasoning: showsReasoning, isStreaming: isLive)
+                                        .id(turn.id)
+                                        .transition(.opacity.combined(with: .offset(y: Motion.enterOffset)))
                                 case .providerSwitch(let receipt):
                                     SwitchReceiptView(receipt: receipt)
                                         .id(receipt.id)
@@ -186,12 +210,15 @@ struct ConversationView: View {
                             }
                         }
                     }
-                    .padding(Space.xl)
-                    // Capped and centered instead of stretched edge-to-edge —
-                    // past roughly 70 characters a line gets hard to track
-                    // back to its own start on a wide window, the "comfortable
-                    // measure" every typographic source agrees on regardless
-                    // of house style.
+                    .padding(.horizontal, Space.xl)
+                    .padding(.top, Space.section)
+                    .padding(.bottom, Space.xxl)
+                    // Capped and centred instead of stretched edge to edge.
+                    // 720pt, raised from 660: measured against the tools this
+                    // competes with, Claude and ChatGPT both run ~768 and
+                    // Perplexity ~720, and 660 at 15pt prose was landing under
+                    // 60 characters a line — short enough that paragraphs
+                    // fragment and the column looks starved on a wide window.
                     .frame(maxWidth: readingColumnWidth, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }

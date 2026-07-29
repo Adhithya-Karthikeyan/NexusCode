@@ -293,10 +293,9 @@ describe("nexus chat --persistent — switch control line, live-probed (non-cura
  * these two providers, not just the ones a curated list happened to omit —
  * which is why an owner with only anthropic/codex/claude-code credentials
  * could not switch to codex OR claude-code in either direction. Proven here
- * against the SAME fake `claude`/`codex` binaries
- * `packages/providers/*/test/list-models.test.ts` already use for live
- * model discovery (`claude -p "/model"`, `codex doctor --json`) — never the
- * real vendor CLIs.
+ * against the SAME fake `claude`/`codex` binaries each provider package's own
+ * `list-models.test.ts` already uses for live model discovery
+ * (`claude -p "/model"`, `codex doctor --json`) — never the real vendor CLIs.
  */
 describe("nexus chat --persistent — switch control line, CLI-delegate providers (claude-code / codex)", () => {
   const FAKE_CLAUDE = fileURLToPath(
