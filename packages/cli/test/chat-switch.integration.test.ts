@@ -16,12 +16,15 @@
  * a real switch between two real providers, fully offline.
  */
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { spawnCli } from "./helpers/spawn-cli.js";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const CONFIG_DIR = join(mkdtempSync(join(tmpdir(), "nx-chatswitch-cfg-")), "cfg");
@@ -171,5 +174,112 @@ describe("nexus chat --persistent — switch control line", () => {
     expect(events.some((e) => e.t === "switch")).toBe(false);
     const textDeltas = events.filter((e) => e.t === "text").map((e) => e.delta ?? "").join("");
     expect(textDeltas).toContain("please switch topics to gardening");
+  }, 30_000);
+});
+
+/**
+ * The bug this section exists to catch: switching to a provider whose REAL
+ * model catalog is live-probed, not static (codex/gemini/anthropic — see
+ * `listModelsForProvider`'s doc, `../src/runtime.ts`), used to be rejected
+ * with "model … is not advertised by …" for every model that only the live
+ * probe knew about, because `performSwitch` validated against
+ * `capabilitiesOf`'s CURATED snapshot alone. Reproduced here with a small
+ * `openai-compat` provider whose curated `models` config and its live `GET
+ * /models` response are deliberately DISJOINT — exactly the codex shape
+ * (`nexus models -p codex -o json` returns ids `capabilities().models` has
+ * never heard of), fully offline via a local HTTP server.
+ */
+describe("nexus chat --persistent — switch control line, live-probed (non-curated) model", () => {
+  const LIVE_CONFIG_DIR = join(mkdtempSync(join(tmpdir(), "nx-chatswitch-live-cfg-")), "cfg");
+  const LIVE_DATA_DIR = join(mkdtempSync(join(tmpdir(), "nx-chatswitch-live-data-")), "data");
+  const LIVE_WORK_DIR = mkdtempSync(join(tmpdir(), "nx-chatswitch-live-cwd-"));
+  let server: Server;
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      if (req.method !== "POST") {
+        // The provider's REAL model catalog — disjoint from the curated
+        // `models: ["curated-only"]` config below, mirroring codex's live
+        // `doctor`-probed catalog vs. its static curated snapshot.
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ object: "list", data: [{ id: "live-only-model", object: "model" }] }));
+        return;
+      }
+      // Never exercised by these tests (both assert on the `switch` event
+      // itself, before any turn dispatches to the new target) but present so
+      // a POST never hangs the child process if that ever changes.
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "1",
+          object: "chat.completion",
+          choices: [{ index: 0, message: { role: "assistant", content: "noted" }, finish_reason: "stop" }],
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+
+    mkdirSync(LIVE_CONFIG_DIR, { recursive: true });
+    writeFileSync(
+      join(LIVE_CONFIG_DIR, "config.json"),
+      JSON.stringify({
+        defaultProvider: "mock",
+        providers: [
+          {
+            id: "live-probe",
+            kind: "openai-compat",
+            adapter: "@nexuscode/provider-openai",
+            baseUrl: `http://127.0.0.1:${port}/v1`,
+            apiKeyEnv: "LIVE_PROBE_API_KEY",
+            models: ["curated-only"],
+          },
+        ],
+      }),
+    );
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  function runLiveProbeChat(lines: string[]): ReturnType<typeof spawnCli> {
+    return spawnCli(BIN, ["chat", "--persistent", "-p", "mock", "-m", "mock-fast", "-o", "ndjson"], {
+      cwd: LIVE_WORK_DIR,
+      input: lines.map((line) => `${line}\n`).join(""),
+      env: {
+        ...process.env,
+        NEXUS_CONFIG_DIR: LIVE_CONFIG_DIR,
+        NEXUS_DATA_DIR: LIVE_DATA_DIR,
+        NEXUS_HISTORY_DISABLED: "1",
+        LIVE_PROBE_API_KEY: "test-key",
+      },
+    });
+  }
+
+  it("ACCEPTS a switch to a model the live probe advertises but the curated snapshot never listed", async () => {
+    const r = await runLiveProbeChat([
+      JSON.stringify({ type: "switch", provider: "live-probe", model: "live-only-model" }),
+    ]);
+    expect(r.code).toBe(0);
+    const events = parseNdjson(r.stdout);
+    const sw = events.find((e) => e.t === "switch");
+    expect(sw).toBeDefined();
+    expect(sw!.accepted, `blockers: ${JSON.stringify(sw!.blockers)}`).toBe(true);
+    expect(sw!.to).toEqual({ providerId: "live-probe", modelId: "live-only-model" });
+  }, 30_000);
+
+  it("still REJECTS a model neither the live probe nor the curated snapshot advertises — the check stays real", async () => {
+    const r = await runLiveProbeChat([
+      JSON.stringify({ type: "switch", provider: "live-probe", model: "totally-bogus-model-xyz" }),
+    ]);
+    expect(r.code).toBe(0);
+    const events = parseNdjson(r.stdout);
+    const sw = events.find((e) => e.t === "switch");
+    expect(sw).toBeDefined();
+    expect(sw!.accepted).toBe(false);
+    expect(sw!.blockers && sw!.blockers.length).toBeGreaterThan(0);
+    expect(sw!.blockers!.join(" ")).toContain("totally-bogus-model-xyz");
+    expect(sw!.blockers!.join(" ")).toContain("not advertised");
   }, 30_000);
 });
