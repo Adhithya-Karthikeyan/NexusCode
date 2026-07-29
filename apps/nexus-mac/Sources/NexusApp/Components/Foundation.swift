@@ -54,7 +54,8 @@ import NexusKit
 /// A complete text style — face, tracking and leading in one value.
 ///
 /// Tracking and line spacing are the two properties the previous system had
-/// no way to express: `Kind` handed back a bare `Font`, so every call site got
+/// no way to express: the previous ramp (`Kind`, now deleted) handed back a
+/// bare `Font`, so every call site got
 /// SwiftUI's defaults, and default tracking at 28pt is the difference between
 /// "a headline" and "some big text". Bundling all three means a style is
 /// applied as one decision instead of three that drift apart.
