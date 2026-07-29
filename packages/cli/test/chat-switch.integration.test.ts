@@ -20,7 +20,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -282,4 +282,160 @@ describe("nexus chat --persistent — switch control line, live-probed (non-cura
     expect(sw!.blockers!.join(" ")).toContain("totally-bogus-model-xyz");
     expect(sw!.blockers!.join(" ")).toContain("not advertised");
   }, 30_000);
+});
+
+/**
+ * The bug's real blast radius: `claude-code` and `codex` are BOTH
+ * `cli-subprocess` adapters whose curated `capabilities().models` is
+ * `buildModelInfos(cfg.modelMap)` — EMPTY by default (see each provider's
+ * `src/index.ts`), never a partial curated snapshot. So before the
+ * registry-merge fix, EVERY model was rejected as "not advertised" for
+ * these two providers, not just the ones a curated list happened to omit —
+ * which is why an owner with only anthropic/codex/claude-code credentials
+ * could not switch to codex OR claude-code in either direction. Proven here
+ * against the SAME fake `claude`/`codex` binaries
+ * `packages/providers/*/test/list-models.test.ts` already use for live
+ * model discovery (`claude -p "/model"`, `codex doctor --json`) — never the
+ * real vendor CLIs.
+ */
+describe("nexus chat --persistent — switch control line, CLI-delegate providers (claude-code / codex)", () => {
+  const FAKE_CLAUDE = fileURLToPath(
+    new URL("../../providers/claude-code/test/fixtures/fake-claude.mjs", import.meta.url),
+  );
+  const FAKE_CODEX = fileURLToPath(new URL("../../providers/codex/test/fixtures/fake-codex.mjs", import.meta.url));
+
+  beforeAll(() => {
+    chmodSync(FAKE_CLAUDE, 0o755);
+    chmodSync(FAKE_CODEX, 0o755);
+  });
+
+  function runDelegateChat(
+    startArgs: string[],
+    lines: string[],
+    extraEnv: Record<string, string> = {},
+  ): ReturnType<typeof spawnCli> {
+    return spawnCli(BIN, ["chat", "--persistent", ...startArgs, "-o", "ndjson"], {
+      cwd: WORK_DIR,
+      input: lines.map((line) => `${line}\n`).join(""),
+      env: {
+        ...process.env,
+        NEXUS_CONFIG_DIR: CONFIG_DIR,
+        NEXUS_DATA_DIR: DATA_DIR,
+        NEXUS_HISTORY_DISABLED: "1",
+        ...extraEnv,
+      },
+    });
+  }
+
+  it('ACCEPTS anthropic(mock) → claude-code/sonnet — "sonnet" is live-probed (`claude -p "/model"`), never in the curated (empty) snapshot', async () => {
+    const r = await runDelegateChat(
+      ["-p", "mock", "-m", "mock-fast"],
+      [JSON.stringify({ type: "switch", provider: "claude-code", model: "sonnet" })],
+      { NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE },
+    );
+    expect(r.code, r.stderr).toBe(0);
+    const events = parseNdjson(r.stdout);
+    const sw = events.find((e) => e.t === "switch");
+    expect(sw, r.stderr).toBeDefined();
+    expect(sw!.accepted, `blockers: ${JSON.stringify(sw!.blockers)}`).toBe(true);
+    expect(sw!.to).toEqual({ providerId: "claude-code", modelId: "sonnet" });
+  }, 30_000);
+
+  it("ACCEPTS anthropic(mock) → codex/gpt-5.6-fake — live-probed by `codex doctor --json`, never in the curated (empty) snapshot", async () => {
+    const r = await runDelegateChat(
+      ["-p", "mock", "-m", "mock-fast"],
+      [JSON.stringify({ type: "switch", provider: "codex", model: "gpt-5.6-fake" })],
+      { NEXUS_CODEX_BIN: FAKE_CODEX },
+    );
+    expect(r.code, r.stderr).toBe(0);
+    const events = parseNdjson(r.stdout);
+    const sw = events.find((e) => e.t === "switch");
+    expect(sw, r.stderr).toBeDefined();
+    expect(sw!.accepted, `blockers: ${JSON.stringify(sw!.blockers)}`).toBe(true);
+    expect(sw!.to).toEqual({ providerId: "codex", modelId: "gpt-5.6-fake" });
+  }, 30_000);
+
+  it("ACCEPTS the pure live-probe-to-live-probe case: claude-code → codex", async () => {
+    const r = await runDelegateChat(
+      ["-p", "claude-code", "-m", "sonnet"],
+      [JSON.stringify({ type: "switch", provider: "codex", model: "gpt-5.6-fake" })],
+      { NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE, NEXUS_CODEX_BIN: FAKE_CODEX },
+    );
+    expect(r.code, r.stderr).toBe(0);
+    const events = parseNdjson(r.stdout);
+    const sw = events.find((e) => e.t === "switch");
+    expect(sw, r.stderr).toBeDefined();
+    expect(sw!.accepted, `blockers: ${JSON.stringify(sw!.blockers)}`).toBe(true);
+    expect(sw!.from).toEqual({ providerId: "claude-code", modelId: "sonnet" });
+    expect(sw!.to).toEqual({ providerId: "codex", modelId: "gpt-5.6-fake" });
+  }, 30_000);
+
+  it("ACCEPTS the pure live-probe-to-live-probe case, the other direction: codex → claude-code", async () => {
+    const r = await runDelegateChat(
+      ["-p", "codex", "-m", "gpt-5.6-fake"],
+      [JSON.stringify({ type: "switch", provider: "claude-code", model: "opus" })],
+      { NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE, NEXUS_CODEX_BIN: FAKE_CODEX },
+    );
+    expect(r.code, r.stderr).toBe(0);
+    const events = parseNdjson(r.stdout);
+    const sw = events.find((e) => e.t === "switch");
+    expect(sw, r.stderr).toBeDefined();
+    expect(sw!.accepted, `blockers: ${JSON.stringify(sw!.blockers)}`).toBe(true);
+    expect(sw!.from).toEqual({ providerId: "codex", modelId: "gpt-5.6-fake" });
+    expect(sw!.to).toEqual({ providerId: "claude-code", modelId: "opus" });
+  }, 30_000);
+
+  it("still REJECTS a bogus model for claude-code — the check stays real, not vacuous", async () => {
+    const r = await runDelegateChat(
+      ["-p", "mock", "-m", "mock-fast"],
+      [JSON.stringify({ type: "switch", provider: "claude-code", model: "totally-bogus-model-xyz" })],
+      { NEXUS_CLAUDE_CODE_BIN: FAKE_CLAUDE },
+    );
+    expect(r.code, r.stderr).toBe(0);
+    const events = parseNdjson(r.stdout);
+    const sw = events.find((e) => e.t === "switch");
+    expect(sw).toBeDefined();
+    expect(sw!.accepted).toBe(false);
+    expect(sw!.blockers!.join(" ")).toContain("not advertised");
+  }, 30_000);
+
+  it("still REJECTS a bogus model for codex — the check stays real, not vacuous", async () => {
+    const r = await runDelegateChat(
+      ["-p", "mock", "-m", "mock-fast"],
+      [JSON.stringify({ type: "switch", provider: "codex", model: "totally-bogus-model-xyz" })],
+      { NEXUS_CODEX_BIN: FAKE_CODEX },
+    );
+    expect(r.code, r.stderr).toBe(0);
+    const events = parseNdjson(r.stdout);
+    const sw = events.find((e) => e.t === "switch");
+    expect(sw).toBeDefined();
+    expect(sw!.accepted).toBe(false);
+    expect(sw!.blockers!.join(" ")).toContain("not advertised");
+  }, 30_000);
+});
+
+/**
+ * The other half of the fix's obligation: a provider with NO usable
+ * credential must keep failing for the CREDENTIAL reason — never silently
+ * become acceptable, and never get relabeled as a model problem now that
+ * model validation consults a live probe. `performSwitch` checks
+ * `isProviderUsable` BEFORE any live model probe runs (`commands.ts`), so
+ * these three never even reach the new code path.
+ */
+describe("nexus chat --persistent — switch control line, credential blocks stay intact", () => {
+  for (const targetProvider of ["gemini", "openai", "ollama"]) {
+    it(`switching to ${targetProvider} with no usable credential still fails for the CREDENTIAL reason, never "not advertised"`, async () => {
+      const r = await runPersistentChat([
+        JSON.stringify({ type: "switch", provider: targetProvider, model: "whatever" }),
+      ]);
+      expect(r.code, r.stderr).toBe(0);
+      const events = parseNdjson(r.stdout);
+      const sw = events.find((e) => e.t === "switch");
+      expect(sw, r.stderr).toBeDefined();
+      expect(sw!.accepted).toBe(false);
+      const blockerText = sw!.blockers!.join(" ");
+      expect(blockerText).not.toContain("is not advertised by");
+      expect(blockerText).toContain("is not available (no usable credential)");
+    }, 30_000);
+  }
 });

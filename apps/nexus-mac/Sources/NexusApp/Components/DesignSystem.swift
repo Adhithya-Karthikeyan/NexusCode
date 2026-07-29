@@ -1,89 +1,46 @@
 import SwiftUI
 import NexusKit
 
-/// The design system.
+/// The shared components, built on the language in `Foundation.swift`.
 ///
-/// The first pass had no scales — every view picked its own padding, font size
-/// and radius, which is exactly why it read as flat and unfinished. Sizes here
-/// are a deliberate ramp rather than arbitrary numbers, so density is consistent
-/// and hierarchy is legible at a glance.
+/// Scales (`Space`, `Radius`), the type ramp (`Type`) and the depth model
+/// (`Depth`, `SurfaceStyle`) live in that file; this one holds the widgets
+/// every screen composes from.
 
-/// Spacing, on the AppKit HIG baseline: 6pt within a group, 8pt between
-/// groups, 20pt window margins. The first pass invented its own ramp (4/8/12/
-/// 18/26/44), which is why density never matched native chrome.
-enum Space {
-    /// Hairline gaps inside a control.
-    static let xs: CGFloat = 4
-    /// Between stacked controls in the same group (HIG: 6pt).
-    static let sm: CGFloat = 6
-    /// Between distinct control groups (HIG: 8pt).
-    static let md: CGFloat = 8
-    /// Inside a card.
-    static let lg: CGFloat = 12
-    /// Window margin (HIG: 20pt).
-    static let xl: CGFloat = 20
-    /// Around hero states.
-    static let xxl: CGFloat = 32
-}
-
-enum Radius {
-    /// Buttons, fields.
-    static let control: CGFloat = 6
-    /// Cards, panels.
-    static let card: CGFloat = 10
-    /// Sheets, popovers, and `CanvasPanel` — the one large framing element per
-    /// screen, so it reads as a single deliberate sheet rather than a bigger
-    /// card.
-    static let panel: CGFloat = 14
-    static let pill: CGFloat = 999
-}
-
-/// The macOS system type scale.
+/// The previous type ramp, kept as a bridge while each screen migrates to
+/// `Type`.
 ///
-/// macOS has FIXED text styles (no Dynamic Type), and the real metrics are
-/// Body 13/16, Headline 13 bold, Title3 15, Title2 17, Title1 22, LargeTitle 26,
-/// with 10pt the readable floor. The first pass used invented sizes, which is
-/// why nothing sat right next to native controls.
-///
-/// `hero`/`title` sit at the BOLD end of that real scale on purpose (Large
-/// Title's own weight range, and Title2's exact 17pt rather than Title3's
-/// 15) rather than the middle of it: a type scale that never actually uses
-/// its own range is the "nearly everything renders at Kind.body" problem
-/// `DESIGN.md` names directly — every screen gets exactly one `.hero`/
-/// `.title` moment, and it needs to read as one at a glance, not merely
-/// technically differ from body text. Timidity here was the documented
-/// failure mode of every earlier pass.
+/// `Kind` handed back a bare `Font`, which is precisely why nothing in the app
+/// had tracking or considered leading — the token had no way to carry them.
+/// Every entry here now resolves to the corresponding `Type` style's face, so
+/// a screen that has not been rebuilt yet still picks up the new sizes and
+/// weights immediately, and migrating it to `.textStyle(Type.x)` afterwards
+/// only adds the tracking and leading. Delete this once no call sites remain.
 enum Kind {
-    static let hero = Font.system(size: 28, weight: .bold)
-    static let title = Font.system(size: 17, weight: .semibold)
-    static let headline = Font.system(size: 13, weight: .semibold)
-    static let section = Font.system(size: 11, weight: .semibold)
-    static let body = Font.system(size: 13, weight: .regular)
-    static let bodyEmphasis = Font.system(size: 13, weight: .medium)
-    static let caption = Font.system(size: 11, weight: .regular)
-    /// 10pt is the documented minimum readable size on macOS — never go below.
-    static let micro = Font.system(size: 10, weight: .semibold)
-    static let mono = Font.system(size: 12, design: .monospaced)
-    static let monoSmall = Font.system(size: 10.5, design: .monospaced)
+    static let hero = Type.display.font
+    static let title = Type.title.font
+    static let headline = Type.heading.font
+    static let section = Type.eyebrow.font
+    static let body = Type.body.font
+    static let bodyEmphasis = Type.bodyStrong.font
+    static let caption = Type.caption.font
+    static let micro = Type.monoMicro.font
+    static let mono = Type.mono.font
+    static let monoSmall = Type.monoMicro.font
+}
+
+extension Type {
+    /// 13pt medium — a row label or an emphasised line of body text. Distinct
+    /// from `label` (12pt) which is for a CONTROL's own name.
+    static let bodyStrong = TextStyle(font: .system(size: 13, weight: .medium))
 }
 
 extension NexusTheme {
     /// The hairline that separates one surface from another.
-    ///
-    /// Depth in a dark tool UI comes from a LADDER OF SURFACE COLOURS plus a 1px
-    /// border — not from drop shadows. Shadows over a near-black canvas read as
-    /// grey smudge and are the main reason the first pass looked flat rather
-    /// than layered. A light theme still needs a slightly stronger edge to
-    /// separate two near-white surfaces.
     var hairline: Color {
-        isDark
-            ? Color.white.opacity(0.09)
-            : Color.black.opacity(0.11)
+        isDark ? Color.white.opacity(0.09) : Color.black.opacity(0.11)
     }
 
-    /// A restrained wash for the one hero moment per screen. Accent is
-    /// load-bearing (selection, focus, primary action) — it is not decoration,
-    /// so this stays subtle and is used sparingly.
     var accentGlow: RadialGradient {
         RadialGradient(
             colors: [color(\.accentDefault).opacity(isDark ? 0.10 : 0.07), .clear],
@@ -94,17 +51,9 @@ extension NexusTheme {
     }
 }
 
-/// Same two primitives, for `AppTheme` — kept in lockstep with the
-/// `NexusTheme` versions above rather than routed through the bridge, because
-/// once `\.nexusTheme` resolves to `AppTheme` directly (see
-/// `NexusKit/Theme.swift`) every call site in this file reads `theme.hairline`
-/// / `theme.accentGlow` on whichever type the environment actually hands it —
-/// and during the transition both types need to answer.
 extension AppTheme {
     var hairline: Color {
-        isDark
-            ? Color.white.opacity(0.09)
-            : Color.black.opacity(0.11)
+        isDark ? Color.white.opacity(0.09) : Color.black.opacity(0.11)
     }
 
     var accentGlow: RadialGradient {
@@ -115,94 +64,64 @@ extension AppTheme {
             endRadius: 150
         )
     }
-
 }
 
-/// Either a flat colour fill or a vibrancy material for `shape` — NEVER both
-/// layered. A `Material` blurs whatever is directly behind it; filling a
-/// shape with a flat colour and then a material on top of that (what `Card`,
-/// `Sidebar` and the composer all did on first pass) blurs the opaque
-/// colour — which renders as a flat tinted scrim, never as translucency, and
-/// is why a theme's `materials` roles did nothing visible: the material was
-/// there, it just had nothing but its own backing colour to show through.
-/// A free function rather than a `View` modifier so it drops directly into
-/// any `.background { }` closure — including one that still needs its own
-/// `.ignoresSafeArea()` or `.clipShape()` applied afterward, which a
-/// self-contained modifier can't compose with as cleanly.
+/// A vibrancy material rendered so it cannot invert the surface ladder.
+///
+/// **This is the fix for the single worst measured defect in the old build.**
+/// A material was previously drawn on its own, and `.ultraThinMaterial` over a
+/// near-black token on a bright desktop does not render near-black — it
+/// renders whatever is behind the window, lightened. Sampling the shipped app
+/// at 1440x900 (Meridian): the sidebar, whose token `surfaceSunken` (#08090D)
+/// makes it the DARKEST surface in the theme, measured at relative luminance
+/// 0.0244 — twice the canvas panel it is supposed to sit beneath (0.0123) and
+/// five times the window floor (0.0048). The intended depth order was exactly
+/// backwards on screen, which is why the eye went to the chrome and the
+/// content read as a hole. No token was wrong; the material was overruling
+/// all of them.
+///
+/// The fix keeps translucency without letting it govern value: draw the
+/// material for its texture and movement, then lay the surface's own colour
+/// back over it at `materialTint`. What survives is the subtle parallax and
+/// desktop pickup that makes a Mac app feel native; what does not survive is
+/// the material deciding how light the surface is. That belongs to the theme.
+///
+/// A light theme needs far less correction — a light material over a light
+/// token is already close to the intended value — so the tint is scaled down
+/// there rather than muddying an already-correct surface.
 @ViewBuilder
-func themedFill<S: Shape>(_ color: Color, treatment: SurfaceTreatment, in shape: S) -> some View {
+func themedFill<S: Shape>(_ color: Color, treatment: SurfaceTreatment, in shape: S, isDark: Bool = true) -> some View {
     if let material = treatment.material {
-        shape.fill(material)
+        ZStack {
+            shape.fill(material)
+            shape.fill(color.opacity(isDark ? 0.82 : 0.55))
+        }
     } else {
         shape.fill(color)
     }
 }
 
-/// A raised card. The single elevation primitive — views should not roll their
-/// own background+border+shadow combinations.
+/// A raised card — one background+border+shadow decision, never rolled by hand.
 ///
-/// Backed by `AppTheme.elevation` rather than picking a surface token by
-/// hand: `elevated` selects level 2 (an overlay-like surface — a card that
-/// must float above an already-raised one, such as a popover's content) over
-/// level 1 (a card resting directly on the base surface). Level 2 also picks
-/// up that theme's `materials.overlay` treatment and its per-level shadow.
-///
-/// Shadow is guarded on `shadowOpacity > 0` rather than trusted to degrade
-/// gracefully at `opacity(0)`: the house rule above (`hairline`'s doc
-/// comment) is that depth on a near-black canvas comes from the surface
-/// ladder and a border, NOT a shadow — a shadow there reads as grey smudge.
-/// The 16 terminal-generated themes were never designed with shadow in mind
-/// at all, so `NexusTheme.appTheme`'s generic bridge (`AppTheme.swift`) gives
-/// every one of them `shadowOpacity: 0` at every level when dark, full stop.
-/// Some of the seven HAND-designed themes here choose non-zero shadow on a
-/// dark base anyway — Cinder and Nightfall specifically, both explicitly
-/// "glass-forward, showcase" themes where a soft shadow under real material
-/// reads as depth rather than smudge (verified by rendering both through the
-/// headless harness, not assumed). Basalt and Vantage, by contrast, chose
-/// `shadowOpacity: 0` at every level on purpose — this file makes neither
-/// choice; the theme does.
+/// Now backed by `SurfaceStyle`, so it picks up the specular top edge every
+/// other raised surface has. `elevated` selects level 2 (a card that must
+/// float above an already-raised one, e.g. a popover's content) over level 1
+/// (a card resting on the base surface).
 struct Card<Content: View>: View {
-    @Environment(\.nexusTheme) private var theme
     var padding: CGFloat = Space.lg
     var radius: CGFloat = Radius.card
     var elevated = false
     @ViewBuilder var content: Content
 
-    private var step: ElevationStep { theme.elevation.step(elevated ? 2 : 1) }
-    private var treatment: SurfaceTreatment { elevated ? theme.materials.overlay : .solid }
-
     var body: some View {
         content
             .padding(padding)
-            .background {
-                // `.continuous` curvature: the squircle every native control
-                // uses. A plain `cornerRadius` reads subtly wrong beside system
-                // chrome.
-                themedFill(step.surfaceColor, treatment: treatment, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            }
-            .overlay {
-                // Full-strength, level-specific `chromeBorder*` rather than a
-                // single flat `hairline` — level 2's border is deliberately
-                // stronger than level 1's, which is the ONLY depth cue a
-                // shadow-free theme (Basalt, Vantage) has to distinguish the
-                // two. `opacity(0.85)` restores hairline's "blends with
-                // whatever's around it" quality without collapsing that
-                // per-level distinction back to one flat line.
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(step.borderColor.opacity(0.85), lineWidth: 1)
-            }
-            .shadow(color: shadow.color, radius: shadow.radius, y: shadow.y)
-    }
-
-    /// Guarded on `shadowOpacity > 0` rather than trusted to draw nothing at
-    /// `opacity(0)` — an explicit `.clear`/zero-radius no-op, not an assumed one.
-    private var shadow: (color: Color, radius: CGFloat, y: CGFloat) {
-        guard step.shadowOpacity > 0 else { return (.clear, 0, 0) }
-        return (.black.opacity(step.shadowOpacity), step.shadowRadius, step.shadowRadius * 0.3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .surface(elevated ? 2 : 1, radius: radius, specular: elevated ? 1 : 0.7)
     }
 }
 
-/// A section heading with an optional trailing count.
+/// A section heading with an optional trailing accessory.
 struct SectionHeader: View {
     @Environment(\.nexusTheme) private var theme
     let title: String
@@ -215,21 +134,20 @@ struct SectionHeader: View {
         self.accessory = accessory
     }
 
-    /// Typography intent is the one theme dimension that isn't a colour:
-    /// a tool-forged theme (Basalt, Vantage) reads tighter and leans
-    /// monospaced for scanability; an editorial theme (Daylight, Nightfall)
-    /// opens up a little. Neutral keeps the number this file always used.
+    /// Typography intent is the one theme dimension that is not a colour: a
+    /// tool-forged theme (Basalt, Vantage) leans monospaced for scanability,
+    /// an editorial theme (Daylight, Nightfall) opens the tracking up.
     private var font: Font {
         theme.typography == .toolForged
-            ? .system(size: 11, weight: .semibold, design: .monospaced)
-            : Kind.section
+            ? .system(size: 10.5, weight: .semibold, design: .monospaced)
+            : Type.eyebrow.font
     }
 
     private var tracking: Double {
         switch theme.typography {
-        case .toolForged: return 0.4
-        case .neutral: return 0.7
-        case .editorial: return 1.0
+        case .toolForged: return 0.5
+        case .neutral: return 0.8
+        case .editorial: return 1.1
         }
     }
 
@@ -242,7 +160,7 @@ struct SectionHeader: View {
                     .foregroundStyle(theme.color(\.textMuted))
                 if let subtitle {
                     Text(subtitle)
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted).opacity(0.75))
                 }
             }
@@ -252,16 +170,8 @@ struct SectionHeader: View {
     }
 }
 
-/// The one title moment at the top of an entire screen — distinct from
-/// `SectionHeader`, which labels a GROUP *within* a screen.
-///
-/// Integrations, Git, Tasks and Sessions each opened with a `SectionHeader`
-/// as their page identity, and Agents and Accounts had no page title at all
-/// — both are the exact "nearly everything renders at section-label size"
-/// problem `DESIGN.md` calls out: a whole screen's own name, styled
-/// identically to "TRY ASKING" or "WORK," is not a title, it's another
-/// subsection label. `Kind.title` here is the one deliberate size/weight
-/// jump every screen gets, once.
+/// The one title moment at the top of a screen — distinct from
+/// `SectionHeader`, which labels a GROUP within a screen.
 struct PageHeader: View {
     @Environment(\.nexusTheme) private var theme
     let title: String
@@ -275,15 +185,16 @@ struct PageHeader: View {
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+        HStack(alignment: .firstTextBaseline, spacing: Space.lg) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(Kind.title)
+                    .textStyle(Type.title)
                     .foregroundStyle(theme.color(\.textPrimary))
                 if let subtitle {
                     Text(subtitle)
-                        .font(Kind.caption)
+                        .textStyle(Type.caption)
                         .foregroundStyle(theme.color(\.textMuted))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
@@ -303,13 +214,9 @@ struct CountPill: View {
     private var colors: (bg: Color, fg: Color) {
         switch tone {
         case .accent:
-            // `accentFg` was designed for text on the full-strength
-            // `accentDefault` fill, not the muted one — pairing it with
-            // `accentMuted` (a tinted wash, not a text/background pair) is
-            // what measured at 1.5–3.7:1 across every theme, old and new.
-            // `accentMuted` itself is unchanged — other components still get
-            // exactly the wash they were designed against — only the label
-            // colour is now computed to actually read against it.
+            // Computed, never `accentFg` — that token was designed for text on
+            // the full-strength accent fill, not on the muted wash, and
+            // pairing the two measured 1.5–3.7:1 across every theme.
             let fg = Color.readableText(on: theme.tokens.accentMuted, preferring: theme.tokens.textPrimary, otherwise: theme.tokens.textInverse)
             return (theme.color(\.accentMuted), fg)
         case .neutral: return (theme.color(\.surfaceOverlay), theme.color(\.textSecondary))
@@ -320,7 +227,8 @@ struct CountPill: View {
 
     var body: some View {
         Text(text)
-            .font(Kind.micro)
+            .textStyle(Type.monoMicro)
+            .monospacedDigit()
             .padding(.horizontal, 7)
             .padding(.vertical, 2.5)
             .background(colors.bg, in: Capsule())
@@ -328,8 +236,8 @@ struct CountPill: View {
     }
 }
 
-/// The animated activity dot. Pulses only while genuinely running, so motion
-/// always means something.
+/// The activity dot. Pulses only while genuinely running, so motion always
+/// means something.
 struct StatusDot: View {
     @Environment(\.nexusTheme) private var theme
     let isRunning: Bool
@@ -348,7 +256,6 @@ struct StatusDot: View {
         Circle()
             .fill(color)
             .frame(width: size, height: size)
-            .shadow(color: isRunning ? color.opacity(0.7) : .clear, radius: 5)
             .overlay {
                 if isRunning && animate {
                     Circle()
@@ -373,10 +280,9 @@ struct Metric: View {
     let label: String
     let value: String
     var emphasis = false
-    /// Uses the theme's second accent (`AccentSystem.secondary`) instead of
-    /// its primary one — for a readout that must stand out from an
-    /// `emphasis: true` metric already on screen (e.g. a live counter next to
-    /// a cost total) without the two competing for the same colour.
+    /// Uses the theme's second accent — for a readout that must stand out
+    /// from an `emphasis: true` metric already on screen without the two
+    /// competing for one colour.
     var secondary = false
 
     private var valueColor: Color {
@@ -387,11 +293,10 @@ struct Metric: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(label.uppercased())
-                .font(Kind.micro)
-                .tracking(0.5)
+                .textStyle(Type.eyebrow)
                 .foregroundStyle(theme.color(\.textMuted).opacity(0.8))
             Text(value)
-                .font(Kind.monoSmall)
+                .textStyle(Type.monoMicro)
                 .foregroundStyle(valueColor)
                 .monospacedDigit()
         }
@@ -400,14 +305,7 @@ struct Metric: View {
 }
 
 /// A button that reads as a real control: hover feedback, pressed state, and a
-/// focus-visible border. The first pass used `.buttonStyle(.plain)` everywhere,
-/// which is why nothing felt clickable.
-///
-/// The hover/pressed opacities used to be two numbers picked by eye (`0.82`,
-/// `0.85`) with nothing behind them. They now come from `AppTheme.stateLayers`
-/// — a light theme wants a much lighter overlay than a near-black one, or a
-/// hover state turns the surface muddy, and that tuning lives with the theme
-/// instead of guessed here.
+/// focus-visible border.
 struct SoftButton: ButtonStyle {
     @Environment(\.nexusTheme) private var theme
     var tone: Tone = .neutral
@@ -417,12 +315,6 @@ struct SoftButton: ButtonStyle {
     enum Size { case compact, regular }
 
     @State private var hovering = false
-    // Every `Button` is inherently focusable on macOS, so no explicit
-    // `.focusable()` is needed to make this read from the environment —
-    // reading it is what was missing. Without it, keyboard focus was
-    // invisible on every `SoftButton` outside the composer (which tracks its
-    // own focus via `@FocusState` instead, since a `TextField` isn't a
-    // `ButtonStyle`).
     @Environment(\.isFocused) private var isFocused
 
     private var background: Color {
@@ -441,29 +333,44 @@ struct SoftButton: ButtonStyle {
         }
     }
 
+    /// The accent tone is the one primary action on screen and is the only
+    /// tone that gets a specular edge — a filled accent button is the most
+    /// "physical" control in the app and reads as a real, pressable object
+    /// with it. Neutral keeps a plain hairline so a tray of secondary buttons
+    /// stays quiet.
+    @ViewBuilder
+    private var border: some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+        if isFocused {
+            shape.strokeBorder(theme.color(\.chromeBorderFocus), lineWidth: 2)
+        } else if tone == .accent && theme.isDark {
+            shape.strokeBorder(
+                LinearGradient(
+                    colors: [.white.opacity(0.28), .white.opacity(0.04)],
+                    startPoint: .top, endPoint: .bottom
+                ),
+                lineWidth: 1
+            )
+        } else if tone == .neutral {
+            shape.strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+        }
+    }
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(size == .compact ? Kind.caption : Kind.bodyEmphasis)
-            .padding(.horizontal, size == .compact ? Space.sm : Space.md)
+            .textStyle(size == .compact ? Type.caption : Type.bodyStrong)
+            .padding(.horizontal, size == .compact ? Space.md : Space.lg)
             .padding(.vertical, size == .compact ? 5 : 7)
             .background(
                 background.opacity(hovering ? 1 : 1 - theme.stateLayers.hover),
                 in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
             )
             .foregroundStyle(foreground)
-            .overlay {
-                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                    .strokeBorder(
-                        isFocused
-                            ? theme.color(\.chromeBorderFocus)
-                            : (tone == .neutral ? theme.color(\.chromeBorderSubtle) : .clear),
-                        lineWidth: isFocused ? 2 : 1
-                    )
-            }
+            .overlay { border }
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(configuration.isPressed ? 1 - theme.stateLayers.pressed : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-            .animation(.easeOut(duration: 0.12), value: hovering)
+            .animation(Motion.state, value: configuration.isPressed)
+            .animation(Motion.state, value: hovering)
             .onHover { hovering = $0 }
     }
 }
@@ -474,7 +381,7 @@ struct CodeBlock: View {
     @Environment(\.nexusTheme) private var theme
     let text: String
     var isDiff = false
-    var maxHeight: CGFloat? = 260
+    var maxHeight: CGFloat? = 300
 
     private var lines: [(offset: Int, element: String)] {
         Array(text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).enumerated())
@@ -482,22 +389,23 @@ struct CodeBlock: View {
 
     var body: some View {
         ScrollView([.horizontal, .vertical], showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 1.5) {
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(lines, id: \.offset) { line in
                     Text(line.element.isEmpty ? " " : line.element)
-                        .font(Kind.monoSmall)
+                        .textStyle(Type.mono)
                         .foregroundStyle(color(for: line.element))
                         .textSelection(.enabled)
                 }
             }
-            .padding(Space.md)
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxHeight: maxHeight)
         .background(theme.color(\.surfaceInset), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                .strokeBorder(theme.color(\.chromeBorderSubtle).opacity(0.6), lineWidth: 1)
+                .strokeBorder(theme.color(\.chromeBorderSubtle).opacity(0.7), lineWidth: 1)
         }
     }
 
@@ -510,96 +418,109 @@ struct CodeBlock: View {
     }
 }
 
-/// Empty states get a real hero treatment rather than a lonely glyph in a void.
+/// The shared "nothing here yet" composition.
+///
+/// The old version was a 34pt glyph inside a 190pt radial glow above a 28pt
+/// headline and three lines of centred grey text — the single most
+/// template-looking element in the app, and identical on six screens. What
+/// replaced the glow is a **mark plate**: the glyph on a real level-2 surface
+/// with a specular edge, at a size that reads as an object rather than a
+/// watermark. It is the same shape language as everything else on screen
+/// instead of a decorative special case, and it gives the composition a
+/// definite top edge to hang from, which is what the floating glow never did.
 struct HeroEmptyState<Actions: View>: View {
     @Environment(\.nexusTheme) private var theme
     let icon: String
     let title: String
     let message: String
+    /// A short all-caps line above the title naming what this screen is.
+    /// Optional because not every empty state has a second thing worth saying.
+    var eyebrow: String?
     @ViewBuilder var actions: Actions
 
     var body: some View {
-        VStack(spacing: Space.md) {
-            ZStack {
-                Circle()
-                    .fill(theme.accentGlow)
-                    .frame(width: 190, height: 190)
-                // The one moment per screen that earns the theme's brand
-                // gradient rather than its flat accent colour — a hero glyph
-                // is exactly the "primary CTA / hero glow" case
-                // `GradientSet.accentGradient` exists for.
-                Image(systemName: icon)
-                    .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(theme.accentGradient)
+        VStack(spacing: 0) {
+            MarkPlate(icon: icon)
+                .padding(.bottom, Space.xl)
+
+            if let eyebrow {
+                Text(eyebrow.uppercased())
+                    .textStyle(Type.eyebrow)
+                    .foregroundStyle(theme.color(\.textMuted))
+                    .padding(.bottom, Space.md)
             }
-            .frame(height: 150)
 
             Text(title)
-                .font(Kind.hero)
+                .textStyle(Type.display)
                 .foregroundStyle(theme.color(\.textPrimary))
+                .padding(.bottom, Space.lg)
 
             Text(message)
-                .font(Kind.body)
+                .textStyle(Type.body)
                 .foregroundStyle(theme.color(\.textMuted))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 430)
+                .frame(maxWidth: 420)
                 .fixedSize(horizontal: false, vertical: true)
 
-            actions.padding(.top, Space.sm)
+            actions.padding(.top, Space.xl)
         }
-        // Padding BEFORE the flexible frame, never after. `.frame(maxHeight:
-        // .infinity).padding(44)` asks for all available space *plus* 88pt,
-        // which overflows the enclosing VStack and silently clips its siblings
-        // out of the window — that is what made the sidebar, control strip,
-        // composer and status bar disappear.
+        // Padding BEFORE the flexible frame, never after: `.frame(maxHeight:
+        // .infinity).padding(n)` asks for all available space PLUS 2n, which
+        // overflows the enclosing stack and silently clips its siblings out of
+        // the window — that is what once made the sidebar, control strip and
+        // composer disappear.
         .padding(Space.xxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 extension HeroEmptyState where Actions == EmptyView {
-    init(icon: String, title: String, message: String) {
-        self.init(icon: icon, title: title, message: message) { EmptyView() }
+    init(icon: String, title: String, message: String, eyebrow: String? = nil) {
+        self.init(icon: icon, title: title, message: message, eyebrow: eyebrow) { EmptyView() }
+    }
+}
+
+/// A glyph on a real raised plate — the replacement for the radial-glow circle.
+struct MarkPlate: View {
+    @Environment(\.nexusTheme) private var theme
+    let icon: String
+    var size: CGFloat = 60
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: size * 0.42, weight: .regular))
+            .foregroundStyle(theme.color(\.textSecondary))
+            .frame(width: size, height: size)
+            .surface(2, radius: size * 0.30, specular: 1.15)
+            .accessibilityHidden(true)
     }
 }
 
 /// The "nothing to show yet, actively loading" moment.
-///
-/// Before this, four feature views (`SessionsView`, `GitView`,
-/// `IntegrationsView`, and `TasksView`) each hand-rolled the identical
-/// `ProgressView` + caption pair, differing only in the message string, and
-/// `AuthView` rolled a FIFTH, compact variant for the one spot that shares
-/// its frame with a pinned error banner rather than owning the whole screen.
-/// Same visual language either way — this is that same "waiting on a
-/// `nexus` process" moment, not a different one, so `.inline` changes
-/// layout density only, never font or colour.
 struct LoadingState: View {
     @Environment(\.nexusTheme) private var theme
     let message: String
     var style: Style = .fullPage
 
     enum Style {
-        /// Centred, fills the container — the screen's ENTIRE content
-        /// before anything has loaded. Mirrors `HeroEmptyState`'s own
-        /// full-page convention so a screen never has to pick between two
-        /// different "nothing here" idioms depending on why there's nothing.
+        /// Centred, fills the container — a screen's entire content before
+        /// anything has loaded.
         case fullPage
         /// A compact single row for a spot already sharing space with other
-        /// chrome (e.g. pinned below an `InlineBanner`) — no `Spacer`s
-        /// claiming the whole frame.
+        /// chrome (e.g. pinned below an `InlineBanner`).
         case inline
     }
 
     private var caption: some View {
         Text(message)
-            .font(Kind.caption)
+            .textStyle(Type.caption)
             .foregroundStyle(theme.color(\.textMuted))
     }
 
     var body: some View {
         switch style {
         case .fullPage:
-            VStack(spacing: Space.sm) {
+            VStack(spacing: Space.lg) {
                 ProgressView()
                 caption
             }
@@ -614,24 +535,12 @@ struct LoadingState: View {
 }
 
 /// A caveat shown ABOVE still-usable content — never instead of it. The one
-/// shared shape for "something didn't work, but here's what's still true": a
-/// background refresh that failed, an add/save/sign-out that didn't take.
+/// shared shape for "something didn't work, but here's what's still true".
 ///
-/// Before this, four feature views each rolled their own version — three
-/// `warning`-toned, one (`AuthView`) `error`-toned for what was functionally
-/// the identical situation, and only one of the four had a dismiss control
-/// at all. `IntegrationsView` even said outright it was duplicating
-/// `TasksView`'s copy "rather than adding a shared type this task isn't
-/// scoped to touch" — this is that type.
-///
-/// `onDismiss` is REQUIRED, not optional: every real call site this replaces
-/// is the same "informational, retryable" shape — real content is already on
-/// screen underneath, so nothing is ever blocked on this banner, and leaving
-/// dismiss optional is exactly how three of the four call sites quietly
-/// ended up without one. A state that genuinely blocks the user (nothing
-/// loaded at all) is a structurally different shape — see `ErrorState`
-/// below, which has no dismiss because there is nothing left to reveal by
-/// dismissing it.
+/// `onDismiss` is required, not optional: every call site this replaces has
+/// real content on screen underneath, so nothing is ever blocked on this
+/// banner. A state that genuinely blocks the user is `ErrorState` below, which
+/// has no dismiss because there is nothing left to reveal by dismissing it.
 struct InlineBanner: View {
     @Environment(\.nexusTheme) private var theme
     let message: String
@@ -640,65 +549,63 @@ struct InlineBanner: View {
 
     enum Tone { case warning, error }
 
-    private var colors: (fg: Color, bg: Color) {
+    private var colors: (fg: Color, bg: Color, border: Color) {
         switch tone {
-        case .warning: return (theme.color(\.warningFg), theme.color(\.warningBg))
-        case .error: return (theme.color(\.errorFg), theme.color(\.errorBg))
+        case .warning: return (theme.color(\.warningFg), theme.color(\.warningBg), theme.color(\.warningBorder))
+        case .error: return (theme.color(\.errorFg), theme.color(\.errorBg), theme.color(\.errorBorder))
         }
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: Space.sm) {
-            Image(systemName: "exclamationmark.triangle")
+        HStack(alignment: .top, spacing: Space.md) {
+            Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
                 .accessibilityHidden(true)
             Text(message)
-                .font(Kind.caption)
+                .textStyle(Type.caption)
                 .lineLimit(2)
             Spacer(minLength: Space.sm)
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 9, weight: .semibold))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")
         }
         .foregroundStyle(colors.fg)
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm)
-        .background(colors.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.md)
+        .background(colors.bg.opacity(0.7), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(colors.border.opacity(0.5), lineWidth: 1)
+        }
     }
 }
 
 /// The "nothing loaded at all, and here's why" moment — replaces a screen's
-/// ENTIRE content when the very first load failed. Unlike `InlineBanner`
-/// there is no other content underneath to look at, so unlike that type this
-/// is STICKY by construction, not a policy choice: dismissing a blank page
-/// would just leave a blanker one. Resolved only by `retry` succeeding.
-///
-/// Before this, `TasksView` and `SessionsView` each hand-rolled the identical
-/// icon + message + Retry button, one of the two missing the hero padding
-/// `HeroEmptyState` (the state this sits beside, for the same "nothing to
-/// show" moment for a different reason) already uses.
+/// ENTIRE content when the first load failed. Sticky by construction: there is
+/// no other content underneath, so dismissing a blank page would leave a
+/// blanker one. Resolved only by `retry` succeeding.
 struct ErrorState: View {
     @Environment(\.nexusTheme) private var theme
     let message: String
     let retry: () -> Void
 
     var body: some View {
-        VStack(spacing: Space.sm) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 26, weight: .light))
+        VStack(spacing: Space.lg) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 22))
                 .foregroundStyle(theme.color(\.errorFg))
-                // The message text right below already says what's wrong —
-                // this glyph is decoration, not a second, unlabeled thing to
-                // announce.
+                // The message right below already says what's wrong — this
+                // glyph is decoration, not a second thing to announce.
                 .accessibilityHidden(true)
             Text(message)
-                .font(Kind.body)
+                .textStyle(Type.body)
                 .foregroundStyle(theme.color(\.textSecondary))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)
+                .fixedSize(horizontal: false, vertical: true)
             Button("Retry", action: retry)
                 .buttonStyle(SoftButton(tone: .accent))
         }
@@ -707,20 +614,17 @@ struct ErrorState: View {
     }
 }
 
-/// The standard page shell: a header that never scrolls away, and a body
-/// that fills every bit of the remaining height.
+/// The standard page shell: a header that never scrolls away, and a body that
+/// fills every bit of the remaining height.
 ///
-/// Every list-style screen in this app used to stack its header and content
-/// inside ONE `ScrollView`. A `ScrollView` always top-aligns its content, so
-/// a short empty state or a two-item list renders correctly at the top and
-/// then leaves a dead void for the rest of the window — that one missing
-/// rule about vertical composition is why every screen with little content
-/// read as unfinished. `PageScaffold` fixes it at the root instead of
-/// per-view: `content` decides for itself whether it needs to scroll (return
-/// a `ScrollView` when there is real data) or should fill and centre (return
-/// a `HeroEmptyState`, or a loading/error state, unwrapped) — either way the
-/// outer `.frame(maxHeight: .infinity)` here is what makes that choice
-/// actually take up the window instead of floating in its top third.
+/// Every list screen used to stack header and content inside ONE `ScrollView`.
+/// A `ScrollView` top-aligns its content, so a short empty state renders at the
+/// top and leaves a dead void for the rest of the window — that one missing
+/// rule about vertical composition is why every sparse screen read as
+/// unfinished. `content` decides for itself whether to scroll (return a
+/// `ScrollView` when there is real data) or fill and centre (return an empty /
+/// loading / error state unwrapped); the outer flexible frame here is what
+/// makes that choice occupy the window instead of floating in its top third.
 struct PageScaffold<Header: View, Content: View>: View {
     @ViewBuilder var header: Header
     @ViewBuilder var content: Content
@@ -740,63 +644,6 @@ extension PageScaffold where Header == EmptyView {
     }
 }
 
-/// The instrument frame every screen renders inside — level-1 surface, a
-/// hairline border on all four sides, inset from the window's own chrome.
-///
-/// See `DESIGN.md`'s "surface ladder": before this, every screen (chat,
-/// agents, sessions, settings…) rendered its content directly on the
-/// window's level-0 floor colour, with no edge of its own — which is exactly
-/// why wide windows read as text floating in a black void rather than a
-/// panel inside an instrument. `RootView` wraps its whole content region in
-/// this ONE place, so every screen gets the frame for free without each
-/// screen's own view needing to know about it.
-///
-/// `content` is expected to already fill available space (every screen here
-/// does, via its own `.frame(maxWidth: .infinity, maxHeight: .infinity)` /
-/// `PageScaffold`) — this view supplies the bounded, finite proposal for it
-/// to fill, in place of the window's own unbounded column. `PageScaffold`'s
-/// header/content split still lives INSIDE this panel; the panel is the
-/// frame, not a second layout region competing with it.
-///
-/// Modifier order matters and mirrors `HeroEmptyState`'s documented rule:
-/// background/border/clip wrap `content` FIRST (sized to whatever `content`
-/// fills), `.padding` adds the margin next, and `.frame(maxWidth: .infinity,
-/// maxHeight: .infinity)` is OUTERMOST so it claims the full column from
-/// `RootView` and hands `content` a reduced-but-still-finite proposal — the
-/// same "padding before the flexible frame" shape as `ErrorState`, never
-/// padding piled on top of an already-infinite frame.
-struct CanvasPanel<Content: View>: View {
-    @Environment(\.nexusTheme) private var theme
-    @ViewBuilder var content: Content
-
-    private var step: ElevationStep { theme.elevation.step(1) }
-
-    var body: some View {
-        content
-            .background {
-                RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
-                    .fill(step.surfaceColor)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
-                    .strokeBorder(step.borderColor, lineWidth: 1)
-            }
-            .shadow(color: shadow.color, radius: shadow.radius, y: shadow.y)
-            .padding(Space.lg)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// Same guarded convention as `Card`'s shadow: zero at `shadowOpacity ==
-    /// 0` rather than trusted to degrade gracefully — depth here comes from
-    /// the surface ladder and the hairline border, not a shadow, for every
-    /// theme except the two (Cinder, Nightfall) that opted into one on purpose.
-    private var shadow: (color: Color, radius: CGFloat, y: CGFloat) {
-        guard step.shadowOpacity > 0 else { return (.clear, 0, 0) }
-        return (.black.opacity(step.shadowOpacity), step.shadowRadius, step.shadowRadius * 0.3)
-    }
-}
-
 /// A keyboard-shortcut hint.
 struct KeyHint: View {
     @Environment(\.nexusTheme) private var theme
@@ -806,13 +653,17 @@ struct KeyHint: View {
     var body: some View {
         HStack(spacing: Space.xs) {
             Text(keys)
-                .font(Kind.micro)
+                .textStyle(Type.monoMicro)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 2)
-                .background(theme.color(\.surfaceOverlay), in: RoundedRectangle(cornerRadius: 4))
+                .background(theme.color(\.surfaceOverlay), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+                }
                 .foregroundStyle(theme.color(\.textSecondary))
             Text(label)
-                .font(Kind.caption)
+                .textStyle(Type.caption)
                 .foregroundStyle(theme.color(\.textMuted))
         }
     }

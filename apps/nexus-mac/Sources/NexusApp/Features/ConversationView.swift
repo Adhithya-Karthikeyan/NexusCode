@@ -1483,27 +1483,17 @@ struct TurnView: View {
         !turn.text.isEmpty || !turn.tools.isEmpty || !turn.diffs.isEmpty || turn.error != nil || isStreaming
     }
 
-    /// Whether this turn is worth labelling — only when it answered from a
-    /// DIFFERENT provider than the one the conversation is currently on.
-    /// Every turn of an ordinary, single-provider conversation must render
-    /// identically to before this existed: badging every turn regardless
-    /// would bury the one piece of information that is actually new here.
-    private var showsProviderBadge: Bool {
-        guard let turnProvider = turn.provider, let currentProvider else { return false }
-        return turnProvider != currentProvider
-    }
-
     /// `"provider/model"`, or bare `provider` when no model was recorded —
-    /// same shape as `UiEvent.Switch.Target.label`, so this reads as the
-    /// same vocabulary as the switch receipt just above it in the
-    /// transcript rather than a second, differently-worded convention.
-    private var providerBadgeLabel: String {
-        guard let turnProvider = turn.provider else { return "" }
+    /// same shape as `UiEvent.Switch.Target.label`, so this reads as the same
+    /// vocabulary as a switch receipt elsewhere in the transcript rather than
+    /// a second, differently-worded convention.
+    private var attributionLabel: String {
+        guard let turnProvider = turn.provider else { return "assistant" }
         return turn.model.map { "\(turnProvider)/\($0)" } ?? turnProvider
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? Space.sm : Space.lg) {
+        VStack(alignment: .leading, spacing: compact ? Space.md : Space.xl) {
             if let prompt = turn.prompt, !compact {
                 promptBlock(prompt)
             }
@@ -1518,47 +1508,44 @@ struct TurnView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// The user's own turn: a slab, inset from the leading edge and filled at
+    /// level 2.
+    ///
+    /// It is deliberately NOT a bubble — no tail, no capsule, no saturated
+    /// fill. Round coloured bubbles read as casual texting and undercut the
+    /// tool framing, which is the one judgement the previous thesis got right
+    /// and this keeps. But the previous treatment (bold 13pt body text, no
+    /// container at all) failed the other half: with the assistant's answer
+    /// set in the same 13pt a few points below it, the only thing telling the
+    /// two apart was font weight, so the transcript read as one undifferentiated
+    /// column. A filled, inset slab makes the alternation structural — you can
+    /// see the shape of the conversation from across the room without reading
+    /// a word of it, which is what "the transcript has rhythm" actually means.
+    ///
+    /// Inset from the leading edge rather than right-aligned to the measure:
+    /// the answer below it starts at the column's left edge, and a prompt that
+    /// began there too would give the eye no reason to register a new speaker.
     @ViewBuilder
     private func promptBlock(_ prompt: String) -> some View {
-        Text(prompt)
-            .font(Kind.bodyEmphasis)
-            .foregroundStyle(theme.color(\.textPrimary))
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 0) {
+            Spacer(minLength: Space.xxl)
+            Text(prompt)
+                .textStyle(Type.prose)
+                .foregroundStyle(theme.color(\.textPrimary))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(alignment: .leading)
+                .padding(.horizontal, Space.xl)
+                .padding(.vertical, Space.lg)
+                .surface(2, radius: Radius.card, specular: 0.9)
+        }
     }
 
     @ViewBuilder
     private var answerBlock: some View {
-        // The copy button used to sit in a `.topTrailing` overlay, which
-        // worked while the card's own `Space.md` padding kept it clear of
-        // the text. Now that the card is gone, that overlay had nothing to
-        // hold it off the corner and it landed directly on top of the first
-        // line — an H1 or a long opening sentence would run right under it.
-        // A hover-revealed row below the content, not an overlay on top of
-        // it, can never occlude a glyph, at the cost of a small reflow when
-        // it appears — an accepted trade for "never covers real text".
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Space.lg) {
+            attributionRow
             innerContent
-                .padding(.leading, Space.md)
-                // The one differentiator: a quiet NEUTRAL rule in the left
-                // gutter, present only on the assistant's answer — never a
-                // card, never an avatar. Not accent: this marker is always
-                // present on every answer, which is exactly what accent is
-                // NOT for (see `DESIGN.md` — rationed to selection, the one
-                // primary action, and live state only).
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(theme.color(\.chromeBorderStrong).opacity(0.6))
-                        .frame(width: 2)
-                }
-
-            if hoveringAnswer && !turn.text.isEmpty {
-                HStack {
-                    Spacer(minLength: 0)
-                    copyButton
-                }
-            }
         }
         .onHover { hovering in
             hoveringAnswer = hovering
@@ -1567,46 +1554,75 @@ struct TurnView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Who answered — the app's signature line, and the assistant turn's
+    /// entire role marker.
+    ///
+    /// This replaces a 2px grey rule in the left gutter. That rule was the
+    /// only thing distinguishing an answer from a prompt, and it failed twice
+    /// over: it carried no information (it was identical on every turn) and
+    /// it was too quiet to read as deliberate, so the transcript looked like
+    /// plain paragraphs with a stray line beside them.
+    ///
+    /// Attribution is shown on EVERY turn, not only when the provider changed
+    /// mid-conversation as before. That earlier rule optimised for suppressing
+    /// repetition, but repetition is exactly what a transcript needs: a
+    /// recurring anchor at a fixed rhythm is what lets the eye find turn
+    /// boundaries while scrolling. It also puts the product's whole premise —
+    /// many interchangeable backends, always labelled — on the surface the
+    /// user actually looks at, instead of only in the status bar.
+    ///
+    /// The copy control lives here rather than in an overlay on the prose or
+    /// in a hover-revealed row beneath it. An overlay landed on top of the
+    /// first line of text; a row beneath reflowed the answer every time the
+    /// pointer entered. A dedicated row above the content can do neither.
+    private var attributionRow: some View {
+        HStack(spacing: Space.sm) {
+            ProviderDot(provider: turn.provider, size: 7)
+            Text(attributionLabel)
+                .textStyle(Type.monoMicro)
+                .foregroundStyle(theme.color(\.textSecondary))
+            if turn.cacheHit == true {
+                // A cache hit emits no `usage` event at all, so without this
+                // the turn is indistinguishable from one whose cost tracking
+                // failed. Saying so is the difference between "$0.00,
+                // confirmed" and "cost unknown".
+                Text("cached")
+                    .textStyle(Type.monoMicro)
+                    .foregroundStyle(theme.color(\.successFg))
+            }
+            Spacer(minLength: Space.sm)
+            if hoveringAnswer && !turn.text.isEmpty {
+                copyButton
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Answer from \(attributionLabel)")
+    }
+
     private var copyButton: some View {
         Button {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(turn.text, forType: .string)
             copied = true
         } label: {
-            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 10, weight: .semibold))
+            HStack(spacing: Space.xs) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(copied ? "Copied" : "Copy")
+            }
         }
         .buttonStyle(SoftButton(tone: .neutral, size: .compact))
         .help("Copy answer")
-        .padding(6)
-    }
-
-    /// The "this answer came from somewhere else" tell — quiet, inline,
-    /// deliberately unlike a colored `CountPill`: this is provenance, not a
-    /// status to call attention to. Reuses the same icon
-    /// `SwitchReceiptView.acceptedRow` uses for the switch that likely
-    /// produced this turn, so the two read as one vocabulary.
-    @ViewBuilder
-    private var providerBadge: some View {
-        if showsProviderBadge {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 8))
-                Text(providerBadgeLabel)
-            }
-            .font(Kind.micro)
-            .foregroundStyle(theme.color(\.textMuted))
-        }
     }
 
     @ViewBuilder
     private var innerContent: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            providerBadge
-
+        VStack(alignment: .leading, spacing: Space.lg) {
             if showsReasoning && !turn.reasoning.isEmpty {
                 Text(turn.reasoning)
-                    .font(Kind.caption.italic())
+                    .font(Type.caption.font.italic())
+                    .lineSpacing(3)
                     .foregroundStyle(theme.color(\.streamThinking))
                     .textSelection(.enabled)
             }
@@ -1627,9 +1643,9 @@ struct TurnView: View {
             }
 
             ForEach(Array(turn.diffs.enumerated()), id: \.offset) { _, diff in
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Space.sm) {
                     Text(diff.path)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .textStyle(Type.monoMicro)
                         .foregroundStyle(theme.color(\.textLink))
                     CodeBlock(text: diff.patch, isDiff: true)
                 }
@@ -1641,28 +1657,39 @@ struct TurnView: View {
         }
     }
 
+    /// A failed turn. Bordered as well as filled, unlike the old fill-only
+    /// treatment: `errorBg` is a very dark wash on most themes, so on its own
+    /// it barely separated from the canvas and a failure could be scrolled
+    /// past without registering.
     @ViewBuilder
     private func errorBlock(_ error: TurnError) -> some View {
-        HStack(alignment: .top, spacing: Space.sm) {
+        HStack(alignment: .top, spacing: Space.md) {
             Image(systemName: "exclamationmark.octagon.fill")
                 .foregroundStyle(theme.color(\.errorFg))
-                .font(.system(size: 11))
-            VStack(alignment: .leading, spacing: 2) {
+                .font(.system(size: 12))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(error.code)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .textStyle(Type.monoMicro)
                 Text(error.message)
-                    .font(Kind.caption)
+                    .textStyle(Type.caption)
+                    .fixedSize(horizontal: false, vertical: true)
                 if error.retryable {
                     Text("retryable")
-                        .font(Kind.micro)
+                        .textStyle(Type.monoMicro)
                         .foregroundStyle(theme.color(\.warningFg))
+                        .padding(.top, 1)
                 }
             }
             .foregroundStyle(theme.color(\.errorFg))
+            Spacer(minLength: 0)
         }
-        .padding(Space.sm)
-        .background(theme.color(\.errorBg))
-        .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .padding(Space.lg)
+        .background(theme.color(\.errorBg), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(theme.color(\.errorBorder).opacity(0.55), lineWidth: 1)
+        }
     }
 }
 

@@ -35,7 +35,13 @@ export interface SamplingParams {
   maxTokens?: number;
   temperature?: number;
   system?: string;
-  reasoning?: { enabled: boolean; budgetTokens?: number; effort?: "low" | "medium" | "high" };
+  /**
+   * `effort` is a plain `string` (provider-native level name, e.g. `"xhigh"`)
+   * — see `ReasoningOptions` (`@nexuscode/shared`) for why this is not a
+   * closed union. `specToRequest` copies this verbatim onto
+   * `ChatRequest.reasoning`.
+   */
+  reasoning?: { enabled: boolean; budgetTokens?: number; effort?: string };
 }
 
 export interface RunSpec {

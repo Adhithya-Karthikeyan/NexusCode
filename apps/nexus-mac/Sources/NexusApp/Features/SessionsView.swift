@@ -183,7 +183,7 @@ struct SessionsView: View {
     /// user sends builds on it via `--resume`.
     private func resume(_ session: NexusSession) {
         guard let conversation = workspace.conversation else { return }
-        conversation.reopen(sessionId: session.sessionId)
+        conversation.reopen(sessionId: session.sessionId, provider: session.provider, model: session.model)
         workspace.tab = .chat
     }
 
@@ -194,7 +194,7 @@ struct SessionsView: View {
         guard let conversation = workspace.conversation else { return }
         isReplaying = true
         defer { isReplaying = false }
-        conversation.reopen(sessionId: session.sessionId)
+        conversation.reopen(sessionId: session.sessionId, provider: session.provider, model: session.model)
         let events = await controller.replayEvents(for: session.sessionId)
         conversation.ingest(events)
         workspace.tab = .chat

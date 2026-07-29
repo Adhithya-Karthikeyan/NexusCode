@@ -11,6 +11,7 @@
 import type {
   Capabilities,
   ChatRequest,
+  EffortListResult,
   FinishReason,
   Message,
   ModelInfo,
@@ -130,6 +131,29 @@ export interface ProviderAdapter {
    * either way.
    */
   listModelsWithSource?(ctx?: CallContext): Promise<ModelListResult>;
+
+  /**
+   * Optional real reasoning-EFFORT discovery, WITH provenance — the effort
+   * analog of {@link listModelsWithSource}. Present only on an adapter that
+   * has a genuine live-vs-fallback distinction to report: a wrapped coding
+   * CLI with its own effort vocabulary (claude-code's `/effort`, codex's
+   * `model_reasoning_effort`, model-dependent) probes the vendor CLI itself,
+   * the same way {@link listModelsWithSource} probes `/model`/`doctor`.
+   *
+   * Additive & optional: `undefined` means "this adapter has no live
+   * per-provider scale to report" — the caller falls back to whatever
+   * static capability description it already has (e.g. the token-budget
+   * `low`/`medium`/`high` family's `EFFORT_BUDGET_TOKENS`, which needs no
+   * live probe because NexusCode itself defines that scale).
+   *
+   * MUST NOT throw: any failure (spawn error, timeout, unparseable reply)
+   * degrades to `{ levels: [], source: "fallback" }` or, when the adapter
+   * can determine at least the value it is currently configured to use
+   * without a live probe, `{ levels: [{id: configuredValue}], source:
+   * "fallback" }` — never a guessed/fabricated level name. The result MAY
+   * be cached briefly per adapter, mirroring `listModelsWithSource`.
+   */
+  listReasoningLevels?(ctx?: CallContext): Promise<EffortListResult>;
 
   /** Optional cheap readiness probe: keys present, daemon up, CLI on PATH. */
   health?(ctx: CallContext): Promise<HealthStatus>;

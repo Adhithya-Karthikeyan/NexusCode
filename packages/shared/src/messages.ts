@@ -35,7 +35,19 @@ export type ToolChoice = "auto" | "none" | "required" | { name: string };
 export interface ReasoningOptions {
   enabled: boolean;
   budgetTokens?: number;
-  effort?: "low" | "medium" | "high";
+  /**
+   * Provider-NATIVE effort level name, sent verbatim (e.g. `"high"`,
+   * `"xhigh"`, `"ultracode"`). Deliberately a plain `string`, not a closed
+   * union: each provider defines its own vocabulary (see
+   * `EffortListResult`/`listReasoningLevels` in `@nexuscode/core`) —
+   * claude-code alone accepts seven levels NexusCode's own `low|medium|high`
+   * budget-token family does not share. An adapter that only understands
+   * `budgetTokens` (the token-budget family: anthropic/gemini/vertex/bedrock)
+   * ignores this field; one that reads a native effort string (claude-code's
+   * `--effort`, codex's `model_reasoning_effort`, Azure's `reasoning_effort`)
+   * ignores `budgetTokens` — see each adapter's `toNativeRequest`/`buildArgs`.
+   */
+  effort?: string;
 }
 
 export interface ResponseFormat {

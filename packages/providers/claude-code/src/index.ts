@@ -33,13 +33,14 @@ import type {
   Capabilities,
   ChatRequest,
   ContentBlock,
+  EffortListResult,
   ModelInfo,
   ModelListResult,
   StreamChunk,
   Usage,
 } from "@nexuscode/shared";
 import { textOf } from "@nexuscode/shared";
-import { createModelListCache, type ModelListCache } from "@nexuscode/shared";
+import { createEffortListCache, createModelListCache, type EffortListCache, type ModelListCache } from "@nexuscode/shared";
 import {
   createSubprocessAdapter,
   replaceDiff,
@@ -112,6 +113,19 @@ function buildArgs(cfg: ClaudeCodeConfig, req: ChatRequest, ctx?: CallContext): 
   if (cfg.allowedTools?.length) args.push("--allowedTools", cfg.allowedTools.join(","));
   if (cfg.disallowedTools?.length) args.push("--disallowedTools", cfg.disallowedTools.join(","));
   if (cfg.maxTurns != null) args.push("--max-turns", String(cfg.maxTurns));
+  // Real wire path for reasoning effort: `claude --help` documents a genuine
+  // `--effort <level>` flag ("Effort level for the current session"),
+  // verified live against claude-cli 2.1.220. `req.reasoning.effort` carries
+  // whatever provider-native level name `--effort`/`applyEffort`
+  // (`packages/cli/src/commands.ts`) resolved via THIS adapter's own
+  // `listReasoningLevels` (see `probeClaudeCodeEffort` below) — sent
+  // verbatim, never translated. `enabled: false` (the CLI's explicit "off")
+  // omits the flag entirely so the session falls back to whatever effort the
+  // user already has configured in `claude` itself, exactly like omitting
+  // `--model` falls back to the CLI's own default.
+  if (req.reasoning?.enabled && req.reasoning.effort) {
+    args.push("--effort", req.reasoning.effort);
+  }
   if (req.system) args.push("--append-system-prompt", req.system);
   for (const d of cfg.addDirs ?? []) args.push("--add-dir", d);
   if (cfg.mcpConfig) args.push("--mcp-config", cfg.mcpConfig);
@@ -426,6 +440,73 @@ async function probeClaudeCodeModels(cfg: ClaudeCodeConfig): Promise<string[]> {
   return ids;
 }
 
+// ── Real reasoning-effort discovery ──────────────────────────────────────────
+
+/**
+ * Matches the `Usage:` clause of the `claude` CLI's own `/effort` reply, e.g.
+ * (real output, `claude -p "/effort" --output-format json`, claude-cli
+ * 2.1.220): `"Usage: /effort <low|medium|high|xhigh|max|ultracode|auto>"`.
+ *
+ * `claude --help`'s own `--effort <level>` documentation lists only five of
+ * these seven (`low, medium, high, xhigh, max`) — proof this vocabulary
+ * cannot be safely hardcoded even from the CLI's own static help text, only
+ * from asking `/effort` directly, exactly the discipline `AVAILABLE_RE`
+ * already established for `/model`.
+ */
+const EFFORT_USAGE_RE = /Usage:\s*\/effort\s*<([^>]+)>/;
+
+/**
+ * Parse the `claude -p "/effort"` reply text into the exact set of level
+ * names the CLI itself accepts. Pure and exported for direct (offline) unit
+ * coverage, mirroring {@link parseClaudeModelReply}.
+ */
+export function parseClaudeEffortReply(replyText: string): string[] {
+  const m = EFFORT_USAGE_RE.exec(replyText.trim());
+  const captured = m?.[1];
+  if (!captured) return [];
+  return captured
+    .split("|")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Real reasoning-effort discovery for the `claude` CLI: run its own
+ * `/effort` command (`claude -p "/effort" --output-format json`) and parse
+ * the `Usage:` clause it reports back — same zero-API-cost, locally-answered
+ * slash command as `/model` (a real run reports `total_cost_usd:0`,
+ * `duration_ms` in single digits), so this is safe to run on every uncached
+ * `listReasoningLevels()` call. Bounded by `cfg.listModelsTimeoutMs`
+ * (reused rather than a new config knob — same probe class as `/model`).
+ * THROWS on any failure (timeout, spawn error, unparseable/empty reply) so
+ * the caller can fall back to "we could not ask" instead of guessing.
+ */
+async function probeClaudeCodeEffort(cfg: ClaudeCodeConfig): Promise<string[]> {
+  const bin = cfg.bin ?? claudeCodeSpec.defaultBin;
+  const probe = await runBoundedCapture({
+    bin,
+    args: ["-p", "/effort", "--output-format", "json"],
+    ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}),
+    ...(cfg.resolveEnv ? { resolveEnv: cfg.resolveEnv } : {}),
+    ...(cfg.spawn ? { spawn: cfg.spawn } : {}),
+    timeoutMs: cfg.listModelsTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  });
+  if (probe.spawnError) throw new Error(`${bin} not available: ${probe.spawnError.message}`);
+  if (probe.timedOut) throw new Error(`${bin} -p "/effort" timed out — unknown, not empty`);
+  if (probe.exitCode !== 0) throw new Error(`${bin} -p "/effort" exited ${probe.exitCode}`);
+
+  let parsed: ClaudeModelProbeReply;
+  try {
+    parsed = JSON.parse(probe.stdout) as ClaudeModelProbeReply;
+  } catch {
+    throw new Error(`${bin} -p "/effort" returned unparseable output`);
+  }
+  const text = typeof parsed.result === "string" ? parsed.result : "";
+  const levels = parseClaudeEffortReply(text);
+  if (levels.length === 0) throw new Error(`${bin} -p "/effort" reply had no parseable "Usage:" list`);
+  return levels;
+}
+
 // ── Spec + factory ────────────────────────────────────────────────────────────
 
 const claudeCodeSpec: CliSpec<ClaudeCodeConfig> = {
@@ -479,6 +560,7 @@ const claudeCodeSpec: CliSpec<ClaudeCodeConfig> = {
  */
 export function createClaudeCodeAdapter(cfg: ClaudeCodeConfig = {}): ProviderAdapter {
   const modelCache: ModelListCache = createModelListCache();
+  const effortCache: EffortListCache = createEffortListCache();
   const spec: CliSpec<ClaudeCodeConfig> = {
     ...claudeCodeSpec,
     listModels: (c): Promise<ModelListResult> =>
@@ -492,7 +574,28 @@ export function createClaudeCodeAdapter(cfg: ClaudeCodeConfig = {}): ProviderAda
         }
       }),
   };
-  return createSubprocessAdapter(cfg, spec);
+  const adapter = createSubprocessAdapter(cfg, spec);
+  // `listReasoningLevels` gets its OWN cache instance for the same reason
+  // `modelCache` does — a module-level cache would leak across adapters built
+  // with different `bin`/`cfg` (the real CLI vs. a test's fake one). On any
+  // probe failure this degrades to an EMPTY list tagged `"fallback"` rather
+  // than a guess: `reasoningSupportedFor`/`applyEffort`
+  // (`packages/cli/src/commands.ts`) already treat "adapter implements this
+  // method" as "reasoning effort is real here" (see that function's doc), so
+  // silently returning nothing on a failed probe — not throwing — is what
+  // keeps a transient probe hiccup from turning into a hard command failure;
+  // the caller just sees an empty scale and can choose not to render a
+  // control for it, or to fall back to `--effort` unvalidated.
+  adapter.listReasoningLevels = (): Promise<EffortListResult> =>
+    effortCache.get(async () => {
+      try {
+        const levels = await probeClaudeCodeEffort(cfg);
+        return { levels: levels.map((id) => ({ id })), source: "provider" };
+      } catch {
+        return { levels: [], source: "fallback" };
+      }
+    });
+  return adapter;
 }
 
 // Re-export types callers commonly need alongside the factory.
