@@ -100,14 +100,21 @@ export interface SlashCommandDeps {
   onPickEffort?: (effort: string) => void;
   /**
    * Live, provider-scoped reasoning-effort levels for the ACTIVE provider —
-   * mirrors `listModelsForProvider`'s contract exactly: each provider defines
-   * its OWN scale (claude-code's seven levels are nothing like the generic
-   * token-budget family's three), so `/effort` must ask for THIS provider's
-   * real options rather than offering one fixed list to every provider.
-   * Additive: omit to keep the generic `off/low/medium/high` fallback below —
-   * `"off"` is always prepended by the picker itself, never included here.
+   * mirrors `listModelsForProvider`'s contract, plus ONE thing model
+   * discovery never needed: whether "off" is even a truthful option.
+   * Each provider defines its OWN scale (claude-code's seven levels are
+   * nothing like the generic token-budget family's three), so `/effort`
+   * must ask for THIS provider's real options rather than offering one
+   * fixed list to every provider. `offDisablesReasoning: false` (claude-code,
+   * codex — both already reason by their own default with no flag that
+   * would turn it off) means the picker must NOT offer "off" as a level at
+   * all, never merely mislabel it — see `EffortListResult`'s doc,
+   * `@nexuscode/shared`. Additive: omit to keep the generic
+   * `off/low/medium/high` fallback below.
    */
-  listEffortLevelsForProvider?: (providerId: string) => Promise<readonly { id: string; hint?: string }[]>;
+  listEffortLevelsForProvider?: (
+    providerId: string,
+  ) => Promise<{ levels: readonly { id: string; hint?: string }[]; offDisablesReasoning: boolean }>;
 
   /** Live session facts surfaced by the read-only info commands. */
   info?: {
@@ -240,21 +247,34 @@ export function buildSlashCommands(deps: SlashCommandDeps): SlashCommandSpec[] {
         // or it returns nothing — never a hard failure, same degrade
         // discipline as `/model`'s `listModelsForProvider`.
         let levels: readonly { id: string; hint?: string }[] = [];
+        // `true` (the safe default when nothing is wired/known) means the
+        // generic off/low/medium/high behavior below — an actual answer from
+        // `listEffortLevelsForProvider` can override it to `false`.
+        let offDisablesReasoning = true;
         if (deps.listEffortLevelsForProvider && provider) {
           try {
-            levels = await deps.listEffortLevelsForProvider(provider);
+            const result = await deps.listEffortLevelsForProvider(provider);
+            levels = result.levels;
+            offDisablesReasoning = result.offDisablesReasoning;
           } catch {
             levels = [];
           }
         }
-        if (levels.length === 0) {
+        if (levels.length === 0 && offDisablesReasoning) {
           levels = [
             { id: "low", hint: "brief thinking" },
             { id: "medium", hint: "balanced thinking" },
             { id: "high", hint: "deep reasoning" },
           ];
         }
-        return [{ id: "off", hint: "no extended thinking" }, ...levels].map((e) => ({
+        // "off" is a TRUTHFUL option only when picking it actually disables
+        // reasoning (see `EffortListResult.offDisablesReasoning`'s doc,
+        // `@nexuscode/shared`) — claude-code/codex already reason by their
+        // own default and have no flag that turns it off, so offering "off"
+        // there would be exactly the "shown but not real" lie this feature
+        // exists to close. Omitted entirely, not merely relabeled.
+        const withOff = offDisablesReasoning ? [{ id: "off", hint: "no extended thinking" }, ...levels] : levels;
+        return withOff.map((e) => ({
           label: e.id,
           value: e.id,
           ...(e.hint ? { hint: e.hint } : {}),

@@ -773,15 +773,32 @@ export function createCodexAdapter(cfg: CodexConfig = {}): ProviderAdapter {
   // value it is actually configured to use, tagged `"fallback"` — never an
   // invented option, per the team's explicit instruction. Only when BOTH
   // fail does this degrade to an empty list.
+  // `offDisablesReasoning: false` on EVERY branch below, success or
+  // fallback — a STATIC fact about this adapter's wire, not a probe result:
+  // verified live, codex already reasons by default (`~/.codex/config.toml`
+  // had `model_reasoning_effort = "xhigh"` configured with zero flags
+  // passed), and `buildArgs` never sends anything that WOULD turn reasoning
+  // off — omitting the `-c model_reasoning_effort=…` override just leaves
+  // whatever the user already configured in place. See
+  // `EffortListResult.offDisablesReasoning`'s doc.
   adapter.listReasoningLevels = (): Promise<EffortListResult> =>
     effortCache.get(async () => {
       try {
         const { levels, defaultLevel } = await probeCodexEffort(cfg);
-        return defaultLevel ? { levels, defaultLevel, source: "provider" } : { levels, source: "provider" };
+        return defaultLevel
+          ? { levels, defaultLevel, source: "provider", offDisablesReasoning: false }
+          : { levels, source: "provider", offDisablesReasoning: false };
       } catch {
         const configured = await readConfiguredCodexEffort(cfg);
-        if (configured) return { levels: [{ id: configured }], defaultLevel: configured, source: "fallback" };
-        return { levels: [], source: "fallback" };
+        if (configured) {
+          return {
+            levels: [{ id: configured }],
+            defaultLevel: configured,
+            source: "fallback",
+            offDisablesReasoning: false,
+          };
+        }
+        return { levels: [], source: "fallback", offDisablesReasoning: false };
       }
     });
   return adapter;

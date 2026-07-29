@@ -1145,6 +1145,22 @@ function applyEffort(
     );
     return undefined;
   }
+  // The token-budget family's `low`/`medium`/`high` is NexusCode's OWN closed
+  // scale (`EFFORT_BUDGET_TOKENS`), not something probed from the provider —
+  // so unlike a `cli-native` provider (where an unrecognized value is simply
+  // forwarded and the CLI's own real error is the honest feedback), silently
+  // accepting anything else here and falling back to a default budget would
+  // be exactly the "pretend interchangeable when it's not" bug: the caller
+  // asked for a specific level, got a DIFFERENT one applied, and no signal
+  // said so. Reject it the same way an unsupported PROVIDER is rejected —
+  // loud, not a silent substitution.
+  if (reasoningCapabilityFor(runtime, providerId).kind === "token-budget" && !(resolved in EFFORT_BUDGET_TOKENS)) {
+    io.err(
+      `nexus ${cmd}: provider "${providerId}" only accepts low|medium|high reasoning effort — ` +
+        `"--effort ${resolved}" is not one of them and is ignored for this request\n`,
+    );
+    return undefined;
+  }
   return reasoning;
 }
 
@@ -4693,24 +4709,29 @@ export async function cmdTui(args: ParsedArgs, io: Io = defaultIo): Promise<numb
    * hints, `"cli-native"` (claude-code/codex) asks the adapter's own live
    * probe via `listEffortLevelsFor`, anything else falls back to the bare
    * generic three names — the TUI's own last-resort default when this
-   * returns nothing.
+   * returns nothing. `offDisablesReasoning` tells the picker whether "off"
+   * is even a truthful thing to offer (see `EffortListResult`'s doc,
+   * `@nexuscode/shared`) — `false` for claude-code/codex, which already
+   * reason by their own default and have no flag that would turn it off.
    */
   const listEffortLevelsForActive = async (
     pid: string,
-  ): Promise<{ id: string; hint?: string }[]> => {
+  ): Promise<{ levels: { id: string; hint?: string }[]; offDisablesReasoning: boolean }> => {
     const cap = reasoningCapabilityFor(runtime, pid);
-    if (!cap.supported) return [];
+    if (!cap.supported) return { levels: [], offDisablesReasoning: true };
     if (cap.kind === "token-budget") {
-      return Object.entries(cap.levels ?? EFFORT_BUDGET_TOKENS).map(([id, tokens]) => ({
+      const levels = Object.entries(cap.levels ?? EFFORT_BUDGET_TOKENS).map(([id, tokens]) => ({
         id,
         hint: `${Math.round(tokens / 1000)}k thinking tokens`,
       }));
+      return { levels, offDisablesReasoning: true };
     }
     if (cap.kind === "cli-native") {
       const live = await listEffortLevelsFor(runtime, pid);
-      return (live?.levels ?? []).map((l) => (l.description ? { id: l.id, hint: l.description } : { id: l.id }));
+      const levels = (live?.levels ?? []).map((l) => (l.description ? { id: l.id, hint: l.description } : { id: l.id }));
+      return { levels, offDisablesReasoning: live?.offDisablesReasoning ?? false };
     }
-    return [{ id: "low" }, { id: "medium" }, { id: "high" }];
+    return { levels: [{ id: "low" }, { id: "medium" }, { id: "high" }], offDisablesReasoning: true };
   };
   // The preflight is pure (see `./model-switch.js`); these two adapters bind it to
   // the live dispatch state and commit an accepted switch exactly once, so the
@@ -5212,6 +5233,15 @@ export async function cmdEffort(args: ParsedArgs, io: Io = defaultIo): Promise<n
   let levels: EffortLevelInfo[] = [];
   let defaultLevel: string | undefined;
   let source: EffortListSource = "fallback";
+  // Whether NexusCode's "off" (no `--effort` at all) actually disables
+  // reasoning for this provider — see `EffortListResult.offDisablesReasoning`'s
+  // doc. Token-budget providers genuinely turn thinking off; a `cli-native`
+  // provider (claude-code/codex) never does — each already reasons by its
+  // OWN default and "off" only means "don't override it" — so a client MUST
+  // NOT render "off" as if it disables reasoning there. Defaults `true`
+  // (the safe assumption for "not supported at all" / the generic
+  // effort-string fallback, where NexusCode has no live signal either way).
+  let offDisablesReasoning = true;
   if (cap.supported) {
     if (cap.kind === "token-budget") {
       levels = Object.entries(cap.levels ?? EFFORT_BUDGET_TOKENS).map(([id, tokens]) => ({
@@ -5224,6 +5254,7 @@ export async function cmdEffort(args: ParsedArgs, io: Io = defaultIo): Promise<n
       levels = live?.levels ?? [];
       if (live?.defaultLevel) defaultLevel = live.defaultLevel;
       source = live?.source ?? "fallback";
+      offDisablesReasoning = live?.offDisablesReasoning ?? false;
     } else {
       levels = [{ id: "low" }, { id: "medium" }, { id: "high" }];
       source = "provider";
@@ -5238,6 +5269,7 @@ export async function cmdEffort(args: ParsedArgs, io: Io = defaultIo): Promise<n
         levels: levels.map((l) => ({ id: l.id, ...(l.description ? { description: l.description } : {}) })),
         ...(defaultLevel ? { defaultLevel } : {}),
         source,
+        offDisablesReasoning,
       })}\n`,
     );
     return 0;
@@ -5253,6 +5285,11 @@ export async function cmdEffort(args: ParsedArgs, io: Io = defaultIo): Promise<n
   }
   const provenance = source === "fallback" ? " (unverified)" : "";
   io.out(`${target}${provenance}\n`);
+  if (offDisablesReasoning) {
+    io.out(`  off  (no extended thinking)\n`);
+  } else {
+    io.out(`  (always reasons — this provider has no off; --effort selects the LEVEL, and picks up its own already-configured default when omitted)\n`);
+  }
   for (const l of levels) {
     const current = l.id === defaultLevel ? "  ●" : "";
     io.out(`  ${l.id}${l.description ? `  (${l.description})` : ""}${current}\n`);

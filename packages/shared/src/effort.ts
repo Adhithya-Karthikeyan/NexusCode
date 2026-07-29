@@ -47,6 +47,27 @@ export interface EffortListResult {
    *  `~/.codex/config.toml`). Omitted when unknown. */
   defaultLevel?: string;
   source: EffortListSource;
+  /**
+   * Whether sending NO effort override (NexusCode's own "off") actually
+   * disables reasoning for this provider. `true` for the token-budget/
+   * effort-string HTTP family (anthropic/gemini/vertex/bedrock, azure) —
+   * omitting `thinking`/`reasoning_effort` genuinely means no extended
+   * thinking there. `false` for a wrapped coding CLI (claude-code, codex):
+   * verified live, BOTH already emit real reasoning output with zero effort
+   * flags passed (each already has its OWN persistent effort setting — a
+   * claude session default, codex's `~/.codex/config.toml`
+   * `model_reasoning_effort`) — "off" here means "don't override", not
+   * "disable"; there is no flag this adapter ever sends that WOULD disable
+   * it. A picker MUST NOT offer "off" as a level here as if picking it turns
+   * reasoning off — see `packages/cli/src/commands.ts`'s `cmdEffort` /
+   * `listEffortLevelsForActive` and `packages/tui/src/chrome/commands.ts`'s
+   * `/effort` picker, the two places this gates whether "off" is even listed.
+   * A STATIC fact about how the adapter's wire works (never sends a
+   * disable-reasoning flag), not something that varies by probe outcome — so
+   * a claude-code/codex adapter reports `false` on every branch, including a
+   * failed probe.
+   */
+  offDisablesReasoning: boolean;
 }
 
 export interface EffortListCache {

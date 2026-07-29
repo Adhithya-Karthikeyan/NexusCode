@@ -588,11 +588,17 @@ export function createClaudeCodeAdapter(cfg: ClaudeCodeConfig = {}): ProviderAda
   // control for it, or to fall back to `--effort` unvalidated.
   adapter.listReasoningLevels = (): Promise<EffortListResult> =>
     effortCache.get(async () => {
+      // `offDisablesReasoning: false` on EVERY branch, success or fallback —
+      // a STATIC fact about this adapter's wire, not a probe result: verified
+      // live, `claude` already emits real `reasoning` events with ZERO
+      // `--effort` passed (it has its own persistent session default), and
+      // `buildArgs` never sends anything that WOULD turn reasoning off — see
+      // `EffortListResult.offDisablesReasoning`'s doc.
       try {
         const levels = await probeClaudeCodeEffort(cfg);
-        return { levels: levels.map((id) => ({ id })), source: "provider" };
+        return { levels: levels.map((id) => ({ id })), source: "provider", offDisablesReasoning: false };
       } catch {
-        return { levels: [], source: "fallback" };
+        return { levels: [], source: "fallback", offDisablesReasoning: false };
       }
     });
   return adapter;
