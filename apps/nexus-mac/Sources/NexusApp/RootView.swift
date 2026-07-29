@@ -51,15 +51,25 @@ struct RootView: View {
                         if let problem = workspace.setupProblem {
                             SetupBanner(message: problem)
                         }
-                        // `CanvasPanel`, not a bare `.frame`: every screen gets a
-                        // bounded, bordered instrument frame instead of rendering
-                        // straight onto the window's floor colour. See
-                        // `DESIGN.md` and that view's doc comment.
-                        CanvasPanel {
-                            content
-                        }
+                        content
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .background(theme.color(\.surfaceBase))
+                    // Full-bleed, at level 1 — the LIGHTEST large surface in
+                    // the window, and the brightest thing the eye lands on.
+                    //
+                    // This replaces `CanvasPanel`, which inset the content by
+                    // 12pt and drew a bordered "instrument frame" around it.
+                    // That idea was the previous thesis's self-described
+                    // highest-leverage change and it failed on both counts:
+                    // measured on screen the border was invisible (the panel
+                    // and the floor behind it sat within a hair of each
+                    // other's luminance), and the inset spent 24pt of width
+                    // and height on a gutter that communicated nothing — on a
+                    // screen whose central complaint was dead space. Content
+                    // running edge to edge against a darker rail is what Zed,
+                    // Linear, Xcode and Cursor all do, and it makes the
+                    // depth story unambiguous: chrome recedes, content rises.
+                    .background(theme.surface(1))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -219,6 +229,7 @@ private struct Sidebar: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .environment(\.colorScheme, theme.isDark ? .dark : .light)
         // No footer readout down here any more — this sidebar used to end in
         // its own live-status block ("OMC watching" / "N agents running"),
         // floating with no room to breathe right above the window's bottom
@@ -236,9 +247,25 @@ private struct Sidebar: View {
         // `.overlay` and `.composer`, belong to `Card` and the conversation
         // input bar respectively) — a flat fill everywhere, sidebar included,
         // was exactly what made this app read as a repainted terminal.
+        // ONLY the background bleeds under the title bar. Applying
+        // `.ignoresSafeArea()` to the whole sidebar is the standard way to get
+        // a native-looking material behind the traffic lights — and also the
+        // standard way to drag your own content up into that dead zone,
+        // because it applies to the entire subtree.
+        //
+        // `isDark:` is what stops the material from inverting the ladder here
+        // — see `themedFill`'s doc comment for the measurement. Before it, the
+        // sidebar rendered at twice the luminance of the canvas it sits
+        // beside, making the darkest surface in the theme the brightest one on
+        // screen.
         .background(alignment: .top) {
-            themedFill(theme.color(\.surfaceSunken), treatment: theme.materials.sidebar, in: Rectangle())
-                .ignoresSafeArea()
+            themedFill(
+                theme.color(\.surfaceSunken),
+                treatment: theme.materials.sidebar,
+                in: Rectangle(),
+                isDark: theme.isDark
+            )
+            .ignoresSafeArea()
         }
     }
 
@@ -257,19 +284,28 @@ private struct BrandHeader: View {
     let isCompact: Bool
 
     var body: some View {
-        HStack(spacing: Space.sm) {
+        HStack(spacing: Space.lg) {
             if isCompact { Spacer(minLength: 0) }
+            // The mark carries the theme's brand gradient — one of exactly two
+            // places in the app that earns it (the other is a primary CTA).
+            // A flat accent square was indistinguishable from any other
+            // rounded rect on screen; a gradient plate with a specular edge
+            // reads as an identity, which is what a wordmark is for.
             ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(theme.color(\.accentMuted))
-                    .frame(width: 30, height: 30)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(theme.accentGradient)
+                    .frame(width: 28, height: 28)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(.white.opacity(0.22), lineWidth: 1)
+                    }
                 Image(systemName: "hexagon.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(theme.color(\.accentDefault))
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.color(\.textInverse).opacity(0.92))
             }
             if !isCompact {
                 Text("NexusCode")
-                    .font(Kind.title)
+                    .textStyle(Type.heading)
                     .foregroundStyle(theme.color(\.textPrimary))
             }
             Spacer(minLength: 0)
@@ -422,24 +458,41 @@ private struct SidebarNavRow: View {
                     }
                 }
             }
-            .foregroundStyle(isSelected ? selectedForeground : theme.color(\.textSecondary))
-            .padding(.horizontal, Space.sm)
+            .foregroundStyle(isSelected ? theme.color(\.textPrimary) : theme.color(\.textSecondary))
+            .padding(.horizontal, Space.lg)
             .padding(.vertical, 7)
+            // Selection is a RAISED SURFACE, not a wash of accent colour.
+            //
+            // The old row filled with `accentMuted` — a large periwinkle block
+            // that was, measurably, the single loudest object on every screen
+            // in the app, for a control that only needs to be legible. It also
+            // spent the accent on something permanently on screen, which is
+            // exactly what the accent is not for. Here the selected row simply
+            // sits one rung UP the same ladder the whole app uses (level 2,
+            // with the specular edge), and the accent appears only as a 3pt
+            // rail on the leading edge. The row reads as physically lifted
+            // toward the viewer instead of painted, the accent stays a signal,
+            // and the eye is free to go to the content.
             .background {
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                     .fill(
                         isSelected
-                            ? theme.color(\.accentMuted)
-                            : (hovering ? theme.color(\.surfaceOverlay) : .clear)
+                            ? theme.surface(2)
+                            : (hovering ? theme.color(\.surfaceOverlay).opacity(0.6) : .clear)
                     )
+            }
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                        .strokeBorder(Depth.specular(theme, level: 2, strength: 0.85), lineWidth: 1)
+                }
             }
             .overlay(alignment: .leading) {
                 if isSelected {
-                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    Capsule()
                         .fill(theme.color(\.accentDefault))
-                        .frame(width: 3)
-                        .padding(.vertical, 5)
-                        .padding(.leading, 2)
+                        .frame(width: 3, height: 15)
+                        .padding(.leading, 3)
                 }
             }
         }

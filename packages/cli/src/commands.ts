@@ -159,6 +159,8 @@ import {
   ModelCatalog,
   contextWindowFor,
   historyBudgetFor,
+  implicitEffortDefaultFor,
+  listEffortLevelsFor,
   preflightModelSwitch,
   preflightProviderSwitch,
   reasoningCapabilityFor,
@@ -1034,49 +1036,67 @@ export function defaultSystemPrompt(cwd: string = process.cwd()): string {
 }
 
 /**
- * The `--effort` flag's vocabulary — identical to the TUI's `/effort` picker
- * (`cmdTui`'s `activeEffort` below), so a headless run and an interactive pick
- * are the same four values, never a different set that has to be translated.
+ * A reasoning-effort level, either a NexusCode-defined generic name
+ * (`"off"`, plus the token-budget family's `"low"|"medium"|"high"`) or a
+ * PROVIDER-NATIVE one (claude-code's `"xhigh"`/`"ultracode"`/…, codex's
+ * `"minimal"`/`"ultra"`/…). Deliberately a plain `string`, not a closed
+ * union: each provider defines its own scale (live-probed via
+ * `listEffortLevelsFor`/`ProviderAdapter.listReasoningLevels`), so a fixed
+ * enum here would either reject real values (the bug this replaces: the
+ * prior closed `"off"|"low"|"medium"|"high"` union rejected claude-code's
+ * OWN `xhigh`/`max`/`ultracode`/`auto`) or need editing every time a vendor
+ * CLI adds a level. `"off"` is the one universal value every provider
+ * understands (send nothing).
  */
-export type EffortLevel = "off" | "low" | "medium" | "high";
-
-function isEffortLevel(v: string): v is EffortLevel {
-  return v === "off" || v === "low" || v === "medium" || v === "high";
-}
+export type EffortLevel = string;
 
 /**
  * Build the `SamplingParams.reasoning` block for an effort level — the ONE
  * place either the headless `--effort` flag or the TUI's `/effort` picker
  * builds this shape (see `dispatchTurn` in `cmdTui`, which calls this same
  * function), so the two surfaces can never drift apart. `"off"` clears
- * reasoning entirely rather than sending a stale `enabled: true`.
+ * reasoning entirely rather than sending a stale `enabled: true`. The
+ * `low`/`medium`/`high` token-budget lookup only ever matches NexusCode's
+ * own generic family — a provider-native level name (e.g. `"xhigh"`) simply
+ * has no entry, so `budgetTokens` is omitted and the receiving adapter reads
+ * `effort` verbatim instead (see `ReasoningOptions`'s doc, `@nexuscode/shared`).
  */
 export function reasoningParamsFor(effort: EffortLevel): SamplingParams["reasoning"] | undefined {
   if (effort === "off") return undefined;
-  return { enabled: true, effort, budgetTokens: EFFORT_BUDGET_TOKENS[effort] };
+  const budgetTokens = (EFFORT_BUDGET_TOKENS as Record<string, number | undefined>)[effort];
+  return { enabled: true, effort, ...(budgetTokens !== undefined ? { budgetTokens } : {}) };
 }
 
 /**
  * Resolve `--effort`, layered over `config.defaultEffort` exactly like
  * `-p/--provider` layers over `config.defaultProvider`: the flag wins when
- * passed; otherwise the configured default; otherwise "off". Requires
- * `config` (so this runs right after `loadEffectiveConfig()`, not before it
- * like the cheap prompt/positional checks) — but an unrecognized flag VALUE is
- * still a usage error (exit 2), never silently coerced or dropped.
+ * passed; otherwise the configured default. `explicit` distinguishes "the
+ * user typed `--effort` on THIS command" from "nothing was typed, this is
+ * whatever `config.defaultEffort` resolves to" — `applyEffort` needs that
+ * distinction to decide whether an implicit, provider-family default may
+ * apply (see `implicitEffortDefaultFor`'s doc for why that matters).
+ *
+ * Only a genuinely EMPTY flag value is a client-side usage error (exit 2) —
+ * the legal set of level NAMES is provider-dependent now (claude-code alone
+ * accepts seven), so validating against a fixed list here would just
+ * reintroduce the "rejects the provider's own real value" bug. A value no
+ * provider recognizes is instead caught downstream by `applyEffort`, which
+ * already knows which provider is about to receive it.
  */
 function resolveEffortFlag(
   args: ParsedArgs,
   config: NexusConfig,
   io: Io,
   cmd: string,
-): { effort: EffortLevel } | { code: number } {
+): { effort: EffortLevel; explicit: boolean } | { code: number } {
   const raw = args.flags.get("effort");
-  if (raw === undefined) return { effort: config.defaultEffort };
-  if (!isEffortLevel(raw)) {
-    io.err(`nexus ${cmd}: invalid --effort "${raw}" (expected off | low | medium | high)\n`);
+  if (raw === undefined) return { effort: config.defaultEffort, explicit: false };
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    io.err(`nexus ${cmd}: invalid --effort "${raw}" (expected "off" or a provider-specific level name)\n`);
     return { code: 2 };
   }
-  return { effort: raw };
+  return { effort: trimmed, explicit: true };
 }
 
 /**
@@ -1090,20 +1110,32 @@ function resolveEffortFlag(
  * this feature exists to close, just moved one flag over. Omitting the param
  * (rather than sending it anyway) also avoids handing an unsupported field to
  * a provider that might reject the whole request over it.
+ *
+ * `explicit` (from `resolveEffortFlag`) gates ONE thing: whether `"off"` may
+ * be upgraded to `implicitEffortDefaultFor`'s provider-family default before
+ * anything else runs. An EXPLICIT `--effort off` (or a real, user-set
+ * `config.defaultEffort: "off"`) always stays off — only the case where
+ * NOTHING was said at all reaches the implicit default. This is what makes
+ * "Anthropic API: enable extended thinking by default" real without
+ * reintroducing the exact harm the app's `EffortPicker` was removed over
+ * (silently overriding a value claude-code/codex users already configured
+ * directly in those tools) — see `implicitEffortDefaultFor`'s doc.
  */
 function applyEffort(
   effort: EffortLevel,
+  explicit: boolean,
   providerId: string,
   runtime: Runtime,
   cmd: string,
   io: Io,
 ): SamplingParams["reasoning"] | undefined {
-  const reasoning = reasoningParamsFor(effort);
+  const resolved = !explicit && effort === "off" ? implicitEffortDefaultFor(runtime, providerId) : effort;
+  const reasoning = reasoningParamsFor(resolved);
   if (!reasoning) return undefined;
   if (!reasoningSupportedFor(runtime, providerId)) {
     io.err(
       `nexus ${cmd}: provider "${providerId}" does not support reasoning effort — ` +
-        `"--effort ${effort}" is ignored for this request\n`,
+        `"--effort ${resolved}" is ignored for this request\n`,
     );
     return undefined;
   }

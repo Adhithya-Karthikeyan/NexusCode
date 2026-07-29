@@ -567,6 +567,132 @@ async function probeCodexConfiguredModel(cfg: CodexConfig): Promise<string | und
   }
 }
 
+// ── Real reasoning-effort discovery ──────────────────────────────────────────
+
+/**
+ * `CODEX_HOME` defaults to `~/.codex` — confirmed live off `codex doctor
+ * --json`'s own `config.load.details.CODEX_HOME` field — mirrored here so
+ * the config.toml fallback below looks in the exact place codex itself does,
+ * honoring an explicit override.
+ */
+function codexHomeDir(): string {
+  const override = process.env.CODEX_HOME;
+  return override && override.length > 0 ? override : join(homedir(), ".codex");
+}
+
+/**
+ * Read the TOP-LEVEL `model_reasoning_effort` key straight out of
+ * `$CODEX_HOME/config.toml` — the value the user has actually configured,
+ * read WITHOUT spawning codex at all. This is the last-resort fallback for
+ * {@link probeCodexEffort}: when codex itself cannot be asked (unreachable,
+ * spawn error), this is the only source left for "the value actually
+ * configured" — the team's explicit instruction is to surface only that,
+ * never invented options, when the full set can't be determined.
+ *
+ * Deliberately NOT a general TOML parser — just enough targeted scanning to
+ * pull one known top-level scalar key, the same "just enough" defensive
+ * text-parsing discipline `AVAILABLE_RE`/`TRUSTED_DIR_RE` already use
+ * elsewhere in this provider family. Only the text BEFORE the first
+ * `[section]` header is scanned, so a `[profiles.x]`-scoped override of the
+ * same key name is never mistaken for the global default codex itself would
+ * fall back to. Returns `undefined` on any read/parse failure — never a guess.
+ */
+async function readConfiguredCodexEffort(): Promise<string | undefined> {
+  try {
+    const text = await readFile(join(codexHomeDir(), "config.toml"), "utf8");
+    const topLevel = text.split(/\n\s*\[/)[0] ?? text;
+    const m = /^\s*model_reasoning_effort\s*=\s*"([^"]+)"\s*$/m.exec(topLevel);
+    return m?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+interface CodexReasoningLevel {
+  effort?: unknown;
+  description?: unknown;
+}
+
+interface CodexModelCatalogEntry {
+  slug?: unknown;
+  default_reasoning_level?: unknown;
+  supported_reasoning_levels?: unknown;
+}
+
+interface CodexModelCatalog {
+  models?: unknown;
+}
+
+/**
+ * Real reasoning-effort discovery for `codex`: run `codex debug models
+ * --bundled` — the CLI's own documented introspection command ("Render the
+ * raw model catalog as JSON") — and read `supported_reasoning_levels`/
+ * `default_reasoning_level` for whichever model this run would actually use.
+ * `--bundled` skips the catalog-refresh network call and dumps only what
+ * shipped with this binary (verified live: well under 30ms, works from a
+ * plain non-git directory, needs no auth), so this never depends on network
+ * reachability the way a live catalog fetch would.
+ *
+ * This is intentionally NOT the "send a deliberately invalid
+ * `model_reasoning_effort` and scrape the resulting 400" trick — also
+ * verified live to work, since the Responses API's own validation error
+ * enumerates the full accepted set for the CURRENT model — but that
+ * technique requires a real network round-trip against a live, authenticated
+ * backend on every uncached probe (slower, costs a real API call, fails
+ * outright when offline). `debug models --bundled` answers the same
+ * question fully offline, so it is the primary probe; nothing here falls
+ * back to the network trick.
+ *
+ * THROWS on any failure (spawn error, timeout, unparseable JSON, the
+ * resolved model missing from the catalog, or a catalog entry with no
+ * `supported_reasoning_levels`) so the caller can fall back to
+ * {@link readConfiguredCodexEffort} instead of guessing.
+ */
+async function probeCodexEffort(
+  cfg: CodexConfig,
+): Promise<{ levels: EffortListResult["levels"]; defaultLevel?: string }> {
+  const bin = cfg.bin ?? codexSpec.defaultBin;
+  const model = await probeCodexConfiguredModel(cfg);
+  if (!model) throw new Error(`${bin}: could not determine the configured model`);
+
+  const probe = await runBoundedCapture({
+    bin,
+    args: ["debug", "models", "--bundled"],
+    ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}),
+    ...(cfg.resolveEnv ? { resolveEnv: cfg.resolveEnv } : {}),
+    ...(cfg.spawn ? { spawn: cfg.spawn } : {}),
+    timeoutMs: cfg.listModelsTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  });
+  if (probe.spawnError) throw new Error(`${bin} not available: ${probe.spawnError.message}`);
+  if (probe.timedOut) throw new Error(`${bin} debug models timed out — unknown, not empty`);
+  if (probe.exitCode !== 0) throw new Error(`${bin} debug models exited ${probe.exitCode}`);
+
+  let parsed: CodexModelCatalog;
+  try {
+    parsed = JSON.parse(probe.stdout) as CodexModelCatalog;
+  } catch {
+    throw new Error(`${bin} debug models returned unparseable output`);
+  }
+  const entries = Array.isArray(parsed.models) ? (parsed.models as CodexModelCatalogEntry[]) : [];
+  const entry = entries.find((e) => e.slug === model);
+  if (!entry) throw new Error(`${bin} debug models catalog has no entry for "${model}"`);
+
+  const rawLevels = Array.isArray(entry.supported_reasoning_levels)
+    ? (entry.supported_reasoning_levels as CodexReasoningLevel[])
+    : [];
+  const levels: EffortListResult["levels"] = [];
+  for (const l of rawLevels) {
+    if (typeof l.effort !== "string" || l.effort.length === 0) continue;
+    const info: EffortListResult["levels"][number] = { id: l.effort };
+    if (typeof l.description === "string" && l.description.length > 0) info.description = l.description;
+    levels.push(info);
+  }
+  if (levels.length === 0) throw new Error(`${bin} debug models: "${model}" has no supported_reasoning_levels`);
+
+  const defaultLevel = typeof entry.default_reasoning_level === "string" ? entry.default_reasoning_level : undefined;
+  return defaultLevel ? { levels, defaultLevel } : { levels };
+}
+
 const codexSpec: CliSpec<CodexConfig> = {
   id: PROVIDER_ID,
   label: "Codex (CLI)",
@@ -613,6 +739,7 @@ const codexSpec: CliSpec<CodexConfig> = {
  */
 export function createCodexAdapter(cfg: CodexConfig = {}): ProviderAdapter {
   const modelCache: ModelListCache = createModelListCache();
+  const effortCache: EffortListCache = createEffortListCache();
   const spec: CliSpec<CodexConfig> = {
     ...codexSpec,
     listModels: (c): Promise<ModelListResult> =>
@@ -629,7 +756,27 @@ export function createCodexAdapter(cfg: CodexConfig = {}): ProviderAdapter {
         return { models, source: configured ? "provider" : "fallback" };
       }),
   };
-  return createSubprocessAdapter(cfg, spec);
+  const adapter = createSubprocessAdapter(cfg, spec);
+  // `listReasoningLevels` gets its OWN cache instance for the same reason
+  // `modelCache` does — see that field's doc. `probeCodexEffort` throwing
+  // means "we could not ask the full catalog"; the fallback then tries
+  // `readConfiguredCodexEffort` (a plain file read, no subprocess) so a
+  // codex that is reachable-but-catalog-probe-failed still reports the ONE
+  // value it is actually configured to use, tagged `"fallback"` — never an
+  // invented option, per the team's explicit instruction. Only when BOTH
+  // fail does this degrade to an empty list.
+  adapter.listReasoningLevels = (): Promise<EffortListResult> =>
+    effortCache.get(async () => {
+      try {
+        const { levels, defaultLevel } = await probeCodexEffort(cfg);
+        return defaultLevel ? { levels, defaultLevel, source: "provider" } : { levels, source: "provider" };
+      } catch {
+        const configured = await readConfiguredCodexEffort();
+        if (configured) return { levels: [{ id: configured }], defaultLevel: configured, source: "fallback" };
+        return { levels: [], source: "fallback" };
+      }
+    });
+  return adapter;
 }
 
 export type { CallContext, ChatResult, HealthStatus, ProviderAdapter };

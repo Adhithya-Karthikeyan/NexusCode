@@ -283,51 +283,61 @@ struct ConversationView: View {
     /// Two ~320pt columns give each suggestion a cell close to its own
     /// content width instead.
     private var emptyState: some View {
-        VStack(spacing: Space.xl) {
-            VStack(spacing: Space.xs) {
-                ChatHeroMark(mode: controller.mode)
-                Text(heroTitle)
-                    .font(Kind.hero)
-                    .foregroundStyle(theme.color(\.textPrimary))
+        VStack(alignment: .leading, spacing: 0) {
+            // A kicker, set in mono and carrying the live provider's identity
+            // colour: the exact `nexus <mode>` this window will run. It is the
+            // one thing on the opening screen that could not appear in any
+            // other app, which is what an opening screen is for.
+            HStack(spacing: Space.sm) {
+                ProviderDot(provider: controller.provider, size: 6)
+                Text(commandKicker)
+                    .textStyle(Type.monoMicro)
+                    .foregroundStyle(theme.color(\.textSecondary))
             }
+            .padding(.bottom, Space.lg)
+
+            Text(heroTitle)
+                .textStyle(Type.display)
+                .foregroundStyle(theme.color(\.textPrimary))
+                .padding(.bottom, Space.md)
 
             Text(heroMessage)
-                .font(Kind.body)
+                .textStyle(Type.body)
                 .foregroundStyle(theme.color(\.textMuted))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 430)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, Space.section)
 
-            VStack(alignment: .leading, spacing: Space.sm) {
-                Text("TRY ASKING")
-                    .font(Kind.section)
-                    .tracking(0.7)
-                    .foregroundStyle(theme.color(\.textMuted))
-
-                // A plain 2-row `VStack` of `HStack`s, not `LazyVGrid` — the
-                // grid put every icon at the top-trailing corner of the WRONG
-                // cell, detached from its own card entirely (confirmed on
-                // screen at both widths, a real rendering fault this file
-                // does not otherwise have an explanation for). Four fixed
-                // items never needed a lazy, dynamically-sized grid anyway;
-                // two ordinary rows lay out exactly as written, and each
-                // card's own `.frame(maxWidth: .infinity)` still splits the
-                // row width evenly between its two cards.
-                VStack(spacing: Space.sm) {
-                    HStack(spacing: Space.sm) {
-                        suggestionCard(0)
-                        suggestionCard(1)
-                    }
-                    HStack(spacing: Space.sm) {
-                        suggestionCard(2)
-                        suggestionCard(3)
-                    }
+            // A plain 2-row stack, not `LazyVGrid` — the grid once put every
+            // icon in the wrong cell, detached from its own card (confirmed on
+            // screen at both widths). Four fixed items never needed a lazy,
+            // dynamically-sized grid; two ordinary rows lay out exactly as
+            // written.
+            VStack(spacing: Space.md) {
+                HStack(spacing: Space.md) {
+                    suggestionCard(0)
+                    suggestionCard(1)
+                }
+                HStack(spacing: Space.md) {
+                    suggestionCard(2)
+                    suggestionCard(3)
                 }
             }
-            .frame(maxWidth: readingColumnWidth)
         }
-        .padding(Space.xxl)
-        .frame(maxWidth: .infinity)
+        // Left-aligned, not centred. Centred text under a centred headline
+        // above centred cards gave the composition no edge to sit against, so
+        // it read as floating regardless of how much padding surrounded it.
+        // A single shared left margin, aligned with the composer directly
+        // beneath, is what makes the group read as one deliberate block.
+        .frame(maxWidth: readingColumnWidth, alignment: .leading)
+    }
+
+    /// `nexus ask -p anthropic` — the invocation, trimmed to the part that
+    /// identifies the run rather than the full argument vector the composer
+    /// footnote already prints verbatim.
+    private var commandKicker: String {
+        var parts = ["nexus", controller.mode.rawValue]
+        if let provider = controller.provider { parts.append("-p \(provider)") }
+        return parts.joined(separator: " ")
     }
 
     private func suggestionCard(_ index: Int) -> some View {
@@ -345,8 +355,11 @@ struct ConversationView: View {
         composerFocused = true
     }
 
+    /// The docked composer, used once a conversation exists. The opening
+    /// screen composes `composerCard` and `composerFootnote` itself so they
+    /// can sit inside the hero group instead of against the window edge.
     private var composer: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.lg) {
             if !controller.presentedDiagnostics.isEmpty {
                 DiagnosticsStrip(notes: controller.presentedDiagnostics)
             }
@@ -356,57 +369,63 @@ struct ConversationView: View {
             }
 
             composerCard
-
-            // The exact command this will run — the UI never hides the CLI.
-            HStack(spacing: Space.sm) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 9))
-                    .accessibilityHidden(true)
-                // `.tail`, not `.middle`: eliding the MIDDLE of a real command
-                // ("…nthropic -m claude-opus-5…" out of "-p anthropic") makes
-                // it read as corrupted text, not as a shortened one — the
-                // opposite of "the UI never hides the CLI" a moment above.
-                // Losing the trailing flags to `.tail` still loses
-                // information when it truncates at all, but what's LEFT
-                // reads as a real, intact command rather than garbled text.
-                Text(commandPreview)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
-                if controller.mode.isMultiLane && controller.backends.count < 2 {
-                    Text("add at least 2 backends")
-                        .foregroundStyle(theme.color(\.warningFg))
-                } else {
-                    // Moved here from the empty state: these are the
-                    // composer's OWN shortcuts (new/stop/send), so they
-                    // belong on the row that describes what the composer is
-                    // about to do, not floating alone mid-canvas disconnected
-                    // from the control they describe.
-                    HStack(spacing: Space.md) {
-                        KeyHint(keys: "⌘N", label: "new")
-                        KeyHint(keys: "⌘.", label: "stop")
-                        KeyHint(keys: "⏎", label: "send")
-                    }
-                }
-            }
-            .font(Kind.monoSmall)
-            .foregroundStyle(theme.color(\.textMuted))
+            composerFootnote
         }
-        .padding(Space.md)
-        // Capped to `readingColumnWidth` — the SAME measure the transcript
-        // above it is capped to, so the composer sits directly under the
-        // text it's replying to instead of floating in its own gutter. Only
-        // the CONTENT is capped; the sunken background band and top divider
-        // stay full-bleed on purpose. A full-width toolbar/input BAND is
-        // ordinary chrome (menu bars and browser toolbars span the window
-        // constantly); it's the INPUT ITSELF drifting out of alignment with
-        // the column above it that read as two unrelated layouts stacked.
+        .padding(.horizontal, Space.xl)
+        .padding(.top, Space.lg)
+        .padding(.bottom, Space.lg)
+        // Capped to the SAME measure as the transcript above it, so the
+        // composer sits directly under the text it is replying to instead of
+        // drifting into its own gutter. Only the CONTENT is capped; the band
+        // behind it stays full-bleed, which is ordinary chrome behaviour.
         .frame(maxWidth: readingColumnWidth, alignment: .leading)
         .frame(maxWidth: .infinity)
-        .background(theme.color(\.surfaceSunken))
-        .overlay(alignment: .top) {
-            Rectangle().fill(theme.color(\.chromeDivider)).frame(height: 1)
+        .background {
+            // A gradient, not a flat fill. The docked composer sits at the
+            // bottom of a scrolling column, and a hard horizontal seam across
+            // the window is what made the old build read as three unrelated
+            // strips stacked up. Fading the band into the canvas over its top
+            // ~40% lets the transcript pass under it and keeps the composer
+            // reading as part of the same surface.
+            LinearGradient(
+                stops: [
+                    .init(color: theme.color(\.surfaceBase).opacity(0), location: 0),
+                    .init(color: theme.color(\.surfaceBase).opacity(0.92), location: 0.45),
+                    .init(color: theme.color(\.surfaceBase), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
+    }
+
+    /// The exact command this will run — the UI never hides the CLI.
+    private var composerFootnote: some View {
+        HStack(spacing: Space.md) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 8, weight: .bold))
+                .accessibilityHidden(true)
+            // `.tail`, not `.middle`: eliding the MIDDLE of a real command
+            // makes it read as corrupted text rather than shortened, which is
+            // the opposite of "the UI never hides the CLI".
+            Text(commandPreview)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+            Spacer(minLength: Space.md)
+            if controller.mode.isMultiLane && controller.backends.count < 2 {
+                Text("add at least 2 backends")
+                    .foregroundStyle(theme.color(\.warningFg))
+            } else {
+                HStack(spacing: Space.lg) {
+                    KeyHint(keys: "⌘N", label: "new")
+                    KeyHint(keys: "⌘.", label: "stop")
+                    KeyHint(keys: "⏎", label: "send")
+                }
+            }
+        }
+        .textStyle(Type.monoMicro)
+        .foregroundStyle(theme.color(\.textMuted))
     }
 
     /// The centrepiece control: an elevated card that visibly lights up on
@@ -460,24 +479,44 @@ struct ConversationView: View {
             // this.
             TextField("Message NexusCode…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .lineLimit(1...8)
-                .font(Kind.body)
+                .lineLimit(1...10)
+                // 15pt, matching the transcript's own prose: what you type
+                // here becomes a turn in that column, and typing at 13pt into
+                // a field whose output renders at 15pt is a seam the eye
+                // notices even when it cannot name it.
+                .textStyle(Type.prose)
                 .foregroundStyle(theme.color(\.textPrimary))
                 .focused($composerFocused)
                 .onSubmit(send)
 
             composerButton
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm + 2)
+        // Substantially taller than before. The composer is the one control
+        // the whole screen exists to serve, and at 6pt vertical padding it
+        // read as an afterthought strip below a huge empty canvas. This is
+        // the single most-used target in the app and now has the presence to
+        // match.
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.lg + 2)
         .background {
-            themedFill(theme.color(\.surfaceRaised), treatment: theme.materials.composer, in: Rectangle())
+            themedFill(
+                theme.color(\.surfaceRaised),
+                treatment: theme.materials.composer,
+                in: Rectangle(),
+                isDark: theme.isDark
+            )
         }
-        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            // Focused: a 2px accent ring, the whole focus signal on its own.
+            // Unfocused: the specular edge every other raised surface carries,
+            // so the composer reads as a real object at rest rather than a
+            // rectangle that only becomes one when clicked.
+            RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
                 .strokeBorder(
-                    composerFocused ? theme.color(\.chromeBorderFocus) : theme.color(\.chromeBorderSubtle),
+                    composerFocused
+                        ? AnyShapeStyle(theme.color(\.chromeBorderFocus))
+                        : AnyShapeStyle(Depth.specular(theme, level: 2, strength: 0.9)),
                     lineWidth: composerFocused ? 2 : 1
                 )
         }
@@ -502,17 +541,17 @@ struct ConversationView: View {
             Button(action: controller.cancel) {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 18, height: 18)
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(SoftButton(tone: .danger))
+            .buttonStyle(SoftButton(tone: .danger, size: .compact))
             .help("Stop the run (⌘.)")
         } else {
             Button(action: send) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 12, weight: .bold))
-                    .frame(width: 18, height: 18)
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(SoftButton(tone: canSend ? .accent : .neutral))
+            .buttonStyle(SoftButton(tone: canSend ? .accent : .neutral, size: .compact))
             .disabled(!canSend)
             .help("Send (⏎)")
         }

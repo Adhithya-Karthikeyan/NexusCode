@@ -27,7 +27,7 @@ import {
   type ProviderSwitchAssessment,
 } from "@nexuscode/core";
 import type { Runtime } from "@nexuscode/runtime";
-import type { ChatRequest, Message, ToolDef } from "@nexuscode/shared";
+import type { ChatRequest, EffortListResult, Message, ToolDef } from "@nexuscode/shared";
 import { isProviderUsable, type ProviderModelChoice } from "./runtime.js";
 
 /**
@@ -158,10 +158,66 @@ export function historyBudgetFor(
 export function reasoningSupportedFor(runtime: Runtime, providerId: string): boolean {
   try {
     if (runtime.registry.capabilitiesOf(providerId).reasoning !== true) return false;
-    const transport = runtime.registry.get(providerId).transport;
-    return transport !== "cli-subprocess" && transport !== "http-openai-compat";
+    const adapter = runtime.registry.get(providerId);
+    if (adapter.transport === "cli-subprocess") {
+      // A wrapped coding CLI supports reasoning effort as request INPUT only
+      // when its adapter actually wires one into its own argv — claude-code's
+      // `--effort`, codex's `-c model_reasoning_effort=…` (see each
+      // provider's `buildArgs`). That is exactly what implementing
+      // `listReasoningLevels` signals (see `@nexuscode/core`'s
+      // `ProviderAdapter` doc): asking the adapter structurally, never
+      // guessing from `id`/`kind`, is what keeps a FUTURE subprocess CLI with
+      // no such wiring `false` here automatically, the same "ask the
+      // adapter, never assume" discipline `listModels`/`listModelsWithSource`
+      // already established.
+      return typeof adapter.listReasoningLevels === "function";
+    }
+    return adapter.transport !== "http-openai-compat";
   } catch {
     return false;
+  }
+}
+
+/**
+ * The effort value implicitly in force when the caller passes NO explicit
+ * `--effort` flag (or `/effort` picker choice) — `applyEffort` consults this
+ * only when nothing explicit was given AND `config.defaultEffort` is still
+ * sitting at ITS OWN baked-in default ("off"), never when the user actually
+ * typed `--effort off` or configured a real non-"off" default (see
+ * `applyEffort`'s doc for exactly where this is consulted).
+ *
+ * Deliberately scoped by TRANSPORT, not a single global value — this is the
+ * fix for the reported bug ("Anthropic API: reasoning traces button has
+ * nothing to show because nothing sets `thinking` since the effort flag was
+ * removed") without reintroducing the DIFFERENT bug that removal was
+ * over-correcting for in the first place:
+ *   - `http-sdk` (anthropic/gemini/vertex/bedrock's native token-budget
+ *     family): nothing else on the machine decides whether extended
+ *     thinking runs for these — NexusCode is the only caller of this API, so
+ *     it picks a sensible default (`"medium"`) rather than silently sending
+ *     none at all.
+ *   - `cli-subprocess` (claude-code, codex): the wrapped CLI already has ITS
+ *     OWN persistent effort setting the user configures DIRECTLY in that
+ *     tool (claude's own `--effort`/`/effort` session state, codex's
+ *     `~/.codex/config.toml` `model_reasoning_effort` — confirmed live:
+ *     `xhigh` was already configured there). Silently overriding that with
+ *     NexusCode's own opinion by default is the EXACT harm the app's
+ *     `EffortPicker` was removed over ("sending --effort would silently
+ *     override a value they deliberately set") — so these stay implicitly
+ *     "off" (send nothing) unless the user explicitly asks with
+ *     `--effort <value>` on THIS run.
+ *   - anything else (mock, an `openai-compat` backend with no native effort
+ *     param): "off" — there is nothing here to default.
+ */
+export function implicitEffortDefaultFor(runtime: Runtime, providerId: string): string {
+  const DEFAULT_IMPLICIT_EFFORT = "medium";
+  try {
+    if (runtime.registry.capabilitiesOf(providerId).reasoning !== true) return "off";
+    const adapter = runtime.registry.get(providerId);
+    if (adapter.transport === "cli-subprocess" || adapter.transport === "http-openai-compat") return "off";
+    return DEFAULT_IMPLICIT_EFFORT;
+  } catch {
+    return "off";
   }
 }
 
@@ -191,8 +247,16 @@ export const EFFORT_BUDGET_TOKENS: Record<"low" | "medium" | "high", number> = {
  *     for the Claude models it fronts — see the bedrock adapter's own guard).
  *   - `"effort-string"`: the adapter reads `effort` verbatim and ignores
  *     `budgetTokens` (OpenAI's/Azure OpenAI's native `reasoning_effort` field).
+ *   - `"cli-native"`: a wrapped coding CLI (claude-code, codex) with its OWN
+ *     live-probed effort vocabulary — see {@link listEffortLevelsFor}. Never
+ *     carries a `levels` table here (that would mean spawning the CLI on
+ *     every `providers status` call, which this command deliberately never
+ *     does — see `cmdProviders`'s own doc comment); a client that needs the
+ *     real per-provider scale calls `nexus effort <provider>` instead, the
+ *     dedicated "ask on purpose" surface `nexus models <provider>` already
+ *     established for live model discovery.
  */
-export type ReasoningCapabilityKind = "token-budget" | "effort-string";
+export type ReasoningCapabilityKind = "token-budget" | "effort-string" | "cli-native";
 
 /** `ProviderStatus.kind` values (see `@nexuscode/runtime`) known to read the
  *  shared reasoning params as a raw token budget. */
@@ -243,6 +307,13 @@ export interface ReasoningCapability {
  */
 export function reasoningCapabilityFor(runtime: Runtime, providerId: string): ReasoningCapability {
   if (!reasoningSupportedFor(runtime, providerId)) return { supported: false };
+  try {
+    if (runtime.registry.get(providerId).transport === "cli-subprocess") {
+      return { supported: true, kind: "cli-native" };
+    }
+  } catch {
+    return { supported: false };
+  }
   const kind = runtime.statuses.find((s) => s.id === providerId)?.kind;
   if (kind !== undefined && TOKEN_BUDGET_KINDS.has(kind)) {
     return { supported: true, kind: "token-budget", levels: { ...EFFORT_BUDGET_TOKENS } };
@@ -253,6 +324,33 @@ export function reasoningCapabilityFor(runtime: Runtime, providerId: string): Re
   // `reasoningSupportedFor` says yes but this `kind` isn't one of the mapped
   // families — report the flag honestly without guessing the wire shape.
   return { supported: true };
+}
+
+/**
+ * Live, per-provider reasoning-effort discovery — the "ask on purpose"
+ * surface `cmdProviders`'s own doc comment points to (mirrors `nexus models
+ * <provider>` for model discovery). Calls the adapter's own
+ * `listReasoningLevels` (present only on claude-code/codex today — see each
+ * provider's doc) when it exists; `undefined` means this provider has no
+ * live per-provider scale to probe (the token-budget/effort-string family,
+ * whose scale is `EFFORT_BUDGET_TOKENS` — NexusCode's own definition, not
+ * something to ask the backend for) or the provider is unregistered.
+ *
+ * Never throws: `listReasoningLevels` itself is contractually non-throwing
+ * (see `ProviderAdapter`'s doc), but this still guards a bad/misbehaving
+ * adapter from taking down a caller that just wants a picker to populate.
+ */
+export async function listEffortLevelsFor(
+  runtime: Runtime,
+  providerId: string,
+): Promise<EffortListResult | undefined> {
+  try {
+    const adapter = runtime.registry.get(providerId);
+    if (typeof adapter.listReasoningLevels !== "function") return undefined;
+    return await adapter.listReasoningLevels();
+  } catch {
+    return undefined;
+  }
 }
 
 /**
