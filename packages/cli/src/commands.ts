@@ -2735,10 +2735,16 @@ export async function cmdCode(args: ParsedArgs, io: Io = defaultIo): Promise<num
 
   const model = resolveRunModel(runtime, providerId, config, args.flags.get("model"));
   const system = args.flags.get("system");
-  // Always unsupported here (see `reasoningSupportedFor`'s `cli-subprocess`
-  // case): claude-code/codex run their own agent loop with no wire path for a
-  // reasoning-effort request, so this only ever warns and returns `undefined`.
-  const reasoning = applyEffort(effortResult.effort, providerId, runtime, "code", io);
+  // claude-code wires `--effort <level>`, codex wires `-c
+  // model_reasoning_effort=<level>` (see each adapter's `buildArgs`) — both
+  // now real wire paths, gated on `reasoningSupportedFor`'s `cli-subprocess`
+  // case, which is true for these two specifically because their adapters
+  // implement `listReasoningLevels`. An EXPLICIT `--effort <value>` this run
+  // did not recognize still warns (unchanged); no `--effort` at all leaves
+  // the CLI's own already-configured effort alone (see
+  // `implicitEffortDefaultFor`'s doc — these two are deliberately excluded
+  // from the implicit provider-family default).
+  const reasoning = applyEffort(effortResult.effort, effortResult.explicit, providerId, runtime, "code", io);
   const template: RunTemplate = { adapterId: providerId, model };
   if (system !== undefined || reasoning) {
     template.params = {
@@ -2913,7 +2919,7 @@ export async function cmdCompare(args: ParsedArgs, io: Io = defaultIo): Promise<
     // Each lane warns independently (via `applyEffort`) when ITS provider
     // can't honor `--effort` — a mixed `-b anthropic -b mock` run applies it
     // where it works and says exactly where it doesn't, per lane.
-    const reasoning = applyEffort(effortResult.effort, b.provider, runtime, "compare", io);
+    const reasoning = applyEffort(effortResult.effort, effortResult.explicit, b.provider, runtime, "compare", io);
     const template: RunTemplate = {
       adapterId: b.provider,
       model: resolveRunModel(runtime, b.provider, config, b.model),
@@ -3085,6 +3091,7 @@ function backendRuns(
   io: Io,
   command: string,
   effort: EffortLevel = "off",
+  explicit = false,
 ): { runs: RunSpec[]; laneLabels: string[] } | number {
   const backends = parseBackends(args);
   if (backends.length < 2) {
@@ -3101,7 +3108,7 @@ function backendRuns(
     const model = resolveRunModel(runtime, b.provider, config, b.model);
     // Each lane warns independently when ITS provider can't honor `--effort`
     // (see `cmdCompare`'s identical per-lane rationale).
-    const reasoning = applyEffort(effort, b.provider, runtime, command, io);
+    const reasoning = applyEffort(effort, explicit, b.provider, runtime, command, io);
     const run: RunSpec = { adapterId: b.provider, model, input: userText(prompt), idempotencyKey: randomUUID() };
     if (reasoning) run.params = { reasoning };
     runs.push(run);
@@ -3122,7 +3129,7 @@ export async function cmdRace(args: ParsedArgs, io: Io = defaultIo): Promise<num
   if ("code" in effortResult) return effortResult.code;
   // `-b/--backend` names providers by id — see `buildAuthedRuntime`'s doc.
   const runtime = await buildAuthedRuntime(config);
-  const resolved = backendRuns(args, runtime, config, prompt, io, "race", effortResult.effort);
+  const resolved = backendRuns(args, runtime, config, prompt, io, "race", effortResult.effort, effortResult.explicit);
   if (typeof resolved === "number") return resolved;
 
   const modeRaw = args.flags.get("mode");
@@ -3158,7 +3165,16 @@ export async function cmdConsensus(args: ParsedArgs, io: Io = defaultIo): Promis
   if ("code" in effortResult) return effortResult.code;
   // `-b/--backend` names providers by id — see `buildAuthedRuntime`'s doc.
   const runtime = await buildAuthedRuntime(config);
-  const resolved = backendRuns(args, runtime, config, prompt, io, "consensus", effortResult.effort);
+  const resolved = backendRuns(
+    args,
+    runtime,
+    config,
+    prompt,
+    io,
+    "consensus",
+    effortResult.effort,
+    effortResult.explicit,
+  );
   if (typeof resolved === "number") return resolved;
 
   const judgeModel = args.flags.get("judge");
@@ -3199,7 +3215,7 @@ export async function cmdChain(args: ParsedArgs, io: Io = defaultIo): Promise<nu
   const config = await loadEffectiveConfig();
   const effortResult = resolveEffortFlag(args, config, io, "chain");
   if ("code" in effortResult) return effortResult.code;
-  const { effort } = effortResult;
+  const { effort, explicit } = effortResult;
   // `--provider`/`--stages` name providers by id — see `buildAuthedRuntime`'s doc.
   const runtime = await buildAuthedRuntime(config);
   const provider = args.flags.get("provider") ?? "mock";
@@ -3227,7 +3243,7 @@ export async function cmdChain(args: ParsedArgs, io: Io = defaultIo): Promise<nu
       const m = resolveRunModel(runtime, prov, config, model);
       // Each stage warns independently when ITS provider can't honor `--effort`
       // (same per-lane rationale as `compare`/`race`/`consensus`).
-      const reasoning = applyEffort(effort, prov, runtime, "chain", io);
+      const reasoning = applyEffort(effort, explicit, prov, runtime, "chain", io);
       const run: RunSpec = {
         adapterId: prov,
         model: m,
@@ -3247,7 +3263,7 @@ export async function cmdChain(args: ParsedArgs, io: Io = defaultIo): Promise<nu
     for (let i = 0; i < CHAIN_PRESET.length; i++) {
       const def = CHAIN_PRESET[i]!;
       const m = resolveRunModel(runtime, provider, config, provider === "mock" ? def.mockModel : undefined);
-      const reasoning = applyEffort(effort, provider, runtime, "chain", io);
+      const reasoning = applyEffort(effort, explicit, provider, runtime, "chain", io);
       const run: RunSpec = {
         adapterId: provider,
         model: m,
@@ -3931,6 +3947,7 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   // `const` that provably never changes. Hoisting the narrowed value avoids
   // relying on narrowing crossing a closure boundary at all.
   const effort = effortResult.effort;
+  const effortExplicit = effortResult.explicit;
 
   const runtime = await buildAuthedRuntime(config);
   // Provider resolution mirrors `ask` / `tui` exactly: an explicit `-p` stays a
