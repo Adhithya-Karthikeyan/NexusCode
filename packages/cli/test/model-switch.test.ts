@@ -514,7 +514,7 @@ describe("reasoningSupportedFor — effort must actually reach the wire", () => 
     const config = NexusConfig.parse({ defaultProvider: "mock" });
     const runtime = await buildRuntime(config, { secrets: stubSecrets });
     const adapter = adapterWith("wired-cli", "cli-subprocess", true);
-    adapter.listReasoningLevels = async () => ({ levels: [{ id: "xhigh" }], source: "provider" });
+    adapter.listReasoningLevels = async () => ({ levels: [{ id: "xhigh" }], source: "provider", offDisablesReasoning: false });
     await runtime.registry.register(adapter, { skipHealth: true });
     expect(reasoningSupportedFor(runtime, "wired-cli")).toBe(true);
   });
@@ -570,7 +570,7 @@ describe("implicitEffortDefaultFor — a sensible default without silently overr
     const config = NexusConfig.parse({ defaultProvider: "mock" });
     const runtime = await buildRuntime(config, { secrets: stubSecrets });
     const adapter = adapterWith("wired-cli", "cli-subprocess", true);
-    adapter.listReasoningLevels = async () => ({ levels: [{ id: "xhigh" }], source: "provider" });
+    adapter.listReasoningLevels = async () => ({ levels: [{ id: "xhigh" }], source: "provider", offDisablesReasoning: false });
     await runtime.registry.register(adapter, { skipHealth: true });
     expect(implicitEffortDefaultFor(runtime, "wired-cli")).toBe("off");
   });
