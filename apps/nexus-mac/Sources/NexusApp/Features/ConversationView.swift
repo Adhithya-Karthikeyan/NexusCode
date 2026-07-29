@@ -359,43 +359,46 @@ struct ConversationView: View {
     /// screen composes `composerCard` and `composerFootnote` itself so they
     /// can sit inside the hero group instead of against the window edge.
     private var composer: some View {
-        VStack(alignment: .leading, spacing: Space.lg) {
-            if !controller.presentedDiagnostics.isEmpty {
-                DiagnosticsStrip(notes: controller.presentedDiagnostics)
-            }
-
-            if controller.view.streaming {
-                UsageReadout(view: controller.view)
-            }
-
-            composerCard
-            composerFootnote
-        }
-        .padding(.horizontal, Space.xl)
-        .padding(.top, Space.lg)
-        .padding(.bottom, Space.lg)
-        // Capped to the SAME measure as the transcript above it, so the
-        // composer sits directly under the text it is replying to instead of
-        // drifting into its own gutter. Only the CONTENT is capped; the band
-        // behind it stays full-bleed, which is ordinary chrome behaviour.
-        .frame(maxWidth: readingColumnWidth, alignment: .leading)
-        .frame(maxWidth: .infinity)
-        .background {
-            // A gradient, not a flat fill. The docked composer sits at the
-            // bottom of a scrolling column, and a hard horizontal seam across
-            // the window is what made the old build read as three unrelated
-            // strips stacked up. Fading the band into the canvas over its top
-            // ~40% lets the transcript pass under it and keeps the composer
-            // reading as part of the same surface.
+        // A fixed-height scrim above an opaque band, rather than one gradient
+        // spanning the whole composer.
+        //
+        // The first attempt faded across the composer's entire height, which
+        // left the input card itself sitting on a semi-transparent field: a
+        // code block scrolling underneath showed through it and the transcript
+        // appeared to be clipped by a floating rectangle. Separating the two
+        // gives the scroll a proper 28pt dissolve to pass under while the
+        // composer keeps a solid surface of its own — the shape ChatGPT and
+        // Claude both use, and the reason neither has a hard seam across the
+        // window.
+        VStack(spacing: 0) {
             LinearGradient(
-                stops: [
-                    .init(color: theme.color(\.surfaceBase).opacity(0), location: 0),
-                    .init(color: theme.color(\.surfaceBase).opacity(0.92), location: 0.45),
-                    .init(color: theme.color(\.surfaceBase), location: 1),
-                ],
+                colors: [theme.surface(1).opacity(0), theme.surface(1)],
                 startPoint: .top,
                 endPoint: .bottom
             )
+            .frame(height: 28)
+
+            VStack(alignment: .leading, spacing: Space.lg) {
+                if !controller.presentedDiagnostics.isEmpty {
+                    DiagnosticsStrip(notes: controller.presentedDiagnostics)
+                }
+
+                if controller.view.streaming {
+                    UsageReadout(view: controller.view)
+                }
+
+                composerCard
+                composerFootnote
+            }
+            // Capped to the SAME measure as the transcript above it, so the
+            // composer sits directly under the text it is replying to instead
+            // of drifting into its own gutter. Only the CONTENT is capped; the
+            // band behind it stays full-bleed, which is ordinary chrome.
+            .frame(maxWidth: readingColumnWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Space.xl)
+            .padding(.bottom, Space.lg)
+            .background(theme.surface(1))
         }
     }
 
@@ -634,9 +637,21 @@ struct ControlStrip: View {
                 modelListVerificationCaption
             }
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm)
-        .background(theme.color(\.surfaceSunken))
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.lg)
+        // Transparent over the canvas with a single hairline beneath, not its
+        // own `surfaceSunken` band.
+        //
+        // Measured on the old build, the strip rendered DARKER than the canvas
+        // below it while the composer band rendered LIGHTER, so a window read
+        // top to bottom as four surfaces in essentially random luminance
+        // order. Letting the strip share the canvas's surface removes one
+        // competing band outright and leaves the hairline to do the only job
+        // that was ever needed: say where chrome ends and content begins.
+        .background(theme.surface(1))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.hairline).frame(height: 1)
+        }
     }
 
     private var singleRow: some View {
@@ -1323,14 +1338,27 @@ private struct ModePicker: View {
                     mode = candidate
                 } label: {
                     Text(candidate.title)
-                        .font(.system(size: 11.5, weight: selected ? .semibold : .regular))
-                        .foregroundStyle(selected ? theme.color(\.accentFg) : theme.color(\.textSecondary))
-                        .padding(.horizontal, Space.md)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(selected ? theme.color(\.textPrimary) : theme.color(\.textMuted))
+                        .padding(.horizontal, Space.lg)
                         .padding(.vertical, 5)
                         .background {
+                            // The selected segment RISES out of the track
+                            // instead of filling with accent. A solid accent
+                            // segment made the mode switch the second-loudest
+                            // object on the chat screen — competing with Send,
+                            // which is the one action the accent is actually
+                            // reserved for. A lifted level-2 surface reads as
+                            // "this one is on top" using the same depth
+                            // language as the rest of the app, and leaves the
+                            // accent free to mean one thing.
                             if selected {
-                                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                                    .fill(theme.color(\.accentDefault))
+                                RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
+                                    .fill(theme.surface(2))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
+                                            .strokeBorder(Depth.specular(theme, level: 2, strength: 0.9), lineWidth: 1)
+                                    }
                             }
                         }
                 }
@@ -1339,12 +1367,12 @@ private struct ModePicker: View {
         }
         .padding(2)
         .background(theme.color(\.surfaceInset))
-        .clipShape(RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.control + 1, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous)
+            RoundedRectangle(cornerRadius: Radius.control + 1, style: .continuous)
                 .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
         }
-        .animation(.easeOut(duration: 0.15), value: mode)
+        .animation(Motion.state, value: mode)
     }
 }
 
@@ -1600,10 +1628,17 @@ struct TurnView: View {
                 .foregroundStyle(theme.color(\.textPrimary))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(alignment: .leading)
+                .multilineTextAlignment(.leading)
                 .padding(.horizontal, Space.xl)
                 .padding(.vertical, Space.lg)
                 .surface(2, radius: Radius.card, specular: 0.9)
+                // Capped well short of the full measure. Left to grow, a long
+                // prompt filled the column edge to edge and stopped reading as
+                // an inset block at all — it looked like a heading over the
+                // answer rather than the other speaker's turn. The indent is
+                // the entire signal, so it has to survive the longest prompt,
+                // not just short ones.
+                .frame(maxWidth: readingColumnWidth * 0.78, alignment: .trailing)
         }
     }
 

@@ -3976,7 +3976,7 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
   // Re-derived on every switch too (see `performSwitch`) — a provider that
   // does not honor reasoning effort must not silently keep stale params from
   // whatever provider WAS active when `--effort` was first applied.
-  let reasoning = applyEffort(effort, providerId, runtime, "chat", io);
+  let reasoning = applyEffort(effort, effortExplicit, providerId, runtime, "chat", io);
   const output = parseOutput(args);
   // `--persistent`: hold the process open and read stdin INCREMENTALLY — one
   // line dispatched as a turn as soon as it arrives — instead of the default
@@ -4258,7 +4258,7 @@ export async function cmdChat(args: ParsedArgs, io: Io = defaultIo): Promise<num
     // Re-applied for the NEW target — `applyEffort` already warns (and drops
     // the param rather than sending it) when the target does not honor
     // reasoning effort, exactly as it does on a fresh `chat` startup.
-    reasoning = applyEffort(effort, providerId, runtime, "chat", io);
+    reasoning = applyEffort(effort, effortExplicit, providerId, runtime, "chat", io);
 
     emit({
       t: "switch",
