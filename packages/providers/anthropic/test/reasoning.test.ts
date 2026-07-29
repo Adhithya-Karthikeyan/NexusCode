@@ -69,3 +69,47 @@ describe("anthropic — reasoning.enabled reaches the wire as `thinking`", () =>
     });
   });
 });
+
+/**
+ * Real Anthropic API constraint: `max_tokens` must exceed
+ * `thinking.budget_tokens` (the thinking budget counts toward the response
+ * ceiling, leaving room for the answer after it). The CLI has no
+ * `--max-tokens` flag at all, so `req.maxTokens` is ALWAYS unset in
+ * practice — meaning the adapter's own DEFAULT `max_tokens` (4096) was
+ * smaller than `EFFORT_BUDGET_TOKENS`'s "medium" (10,000) and "high"
+ * (24,000) on EVERY reasoning-enabled request this adapter ever built. This
+ * is exactly the kind of gap `reasoning.test.ts`'s original assertions
+ * (checking only `thinking`, never `max_tokens`) could not catch — found
+ * instead by `packages/cli/test/effort-anthropic-wire.integration.test.ts`
+ * driving the REAL adapter against a real HTTP server and inspecting the
+ * actual JSON body.
+ */
+describe("anthropic — max_tokens accommodates the thinking budget (a real API constraint)", () => {
+  it("the DEFAULT max_tokens (4096) is too small for 'medium' (10k)/'high' (24k) — bumped up with headroom for the answer", () => {
+    const mediumNative = toNativeRequest(cfg, req({ enabled: true, effort: "medium", budgetTokens: 10_000 }));
+    expect(mediumNative.max_tokens).toBeGreaterThan(10_000);
+    expect(mediumNative.max_tokens).toBe(10_000 + 1024);
+
+    const highNative = toNativeRequest(cfg, req({ enabled: true, effort: "high", budgetTokens: 24_000 }));
+    expect(highNative.max_tokens).toBeGreaterThan(24_000);
+    expect(highNative.max_tokens).toBe(24_000 + 1024);
+  });
+
+  it("'low' (4k) already fits under the default 4096 headroom-adjusted, so it still gets the bump (never leaves zero room for the answer)", () => {
+    const native = toNativeRequest(cfg, req({ enabled: true, effort: "low", budgetTokens: 4_000 }));
+    expect(native.max_tokens).toBe(4_000 + 1024);
+  });
+
+  it("an EXPLICIT cfg.defaultMaxTokens/req.maxTokens already large enough is left completely unchanged", () => {
+    const bigCfg: AnthropicConfig = { ...cfg, defaultMaxTokens: 50_000 };
+    const native = toNativeRequest(bigCfg, req({ enabled: true, effort: "high", budgetTokens: 24_000 }));
+    expect(native.max_tokens).toBe(50_000);
+  });
+
+  it("reasoning disabled/absent: max_tokens is completely untouched (still just the plain default/explicit value)", () => {
+    const native = toNativeRequest(cfg, req());
+    expect(native.max_tokens).toBe(4096);
+    const explicit = toNativeRequest(cfg, { ...req(), maxTokens: 500 });
+    expect(explicit.max_tokens).toBe(500);
+  });
+});

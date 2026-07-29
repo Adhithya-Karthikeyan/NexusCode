@@ -95,6 +95,56 @@ describe("bedrock adapter — request translation (pure, no network)", () => {
   });
 });
 
+/**
+ * Extended thinking's `budget_tokens` counts AGAINST `inferenceConfig.
+ * maxTokens` — the same real Anthropic-native constraint the direct
+ * `@nexuscode/provider-anthropic` adapter accounts for (this is literally
+ * the same Claude thinking mechanism, just fronted by Bedrock's Converse
+ * API for a `claude` model id). The DEFAULT `maxTokens` (4096) is smaller
+ * than `EFFORT_BUDGET_TOKENS`'s "medium" (10,000)/"high" (24,000), so a
+ * reasoning-enabled request built with no explicit `maxTokens` (the CLI has
+ * no `--max-tokens` flag at all) used to leave no room for an actual
+ * answer.
+ */
+describe("bedrock adapter — thinking budget sizes maxTokens (a real Anthropic-Converse constraint)", () => {
+  const claudeReq: ChatRequest = {
+    model: "sonnet",
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+    reasoning: { enabled: true, effort: "high", budgetTokens: 24_000 },
+  };
+
+  it("attaches thinking via additionalModelRequestFields for a Claude model id", () => {
+    const input = toBedrockRequest(CFG, claudeReq);
+    expect(input.additionalModelRequestFields).toEqual({ thinking: { type: "enabled", budget_tokens: 24_000 } });
+  });
+
+  it("bumps the DEFAULT maxTokens (4096) up past the thinking budget, with headroom for the answer", () => {
+    const input = toBedrockRequest(CFG, claudeReq);
+    expect(input.inferenceConfig?.maxTokens).toBeGreaterThan(24_000);
+    expect(input.inferenceConfig?.maxTokens).toBe(24_000 + 1024);
+  });
+
+  it("leaves an EXPLICIT maxTokens that is already large enough completely unchanged", () => {
+    const input = toBedrockRequest(CFG, { ...claudeReq, maxTokens: 40_000 });
+    expect(input.inferenceConfig?.maxTokens).toBe(40_000);
+  });
+
+  it("a non-Claude model id gets no thinking and no maxTokens adjustment, even with reasoning requested", () => {
+    const input = toBedrockRequest(
+      { modelMap: { nova: "amazon.nova-pro-v1:0" } },
+      { ...claudeReq, model: "nova" },
+    );
+    expect(input.additionalModelRequestFields).toBeUndefined();
+    expect(input.inferenceConfig?.maxTokens).toBe(4096);
+  });
+
+  it("reasoning disabled: maxTokens is the plain default, untouched", () => {
+    const input = toBedrockRequest(CFG, { ...claudeReq, reasoning: { enabled: false } });
+    expect(input.inferenceConfig?.maxTokens).toBe(4096);
+    expect(input.additionalModelRequestFields).toBeUndefined();
+  });
+});
+
 describe("bedrock adapter — stream event mapping (pure, fake events)", () => {
   it("maps a text delta event to a text-delta answer chunk", () => {
     const ev = { contentBlockDelta: { delta: { text: "hello" }, contentBlockIndex: 0 } } as unknown as ConverseStreamOutput;

@@ -352,6 +352,23 @@ export function mapMessagesToNative(messages: Message[]): Anthropic.MessageParam
 }
 
 /**
+ * The minimum output room left for the actual answer, on top of the thinking
+ * budget, when this adapter has to pick `max_tokens` itself. Extended
+ * thinking's `budget_tokens` counts AGAINST `max_tokens` (Anthropic's own
+ * documented constraint: `max_tokens` must exceed `thinking.budget_tokens`,
+ * since the response ceiling covers both the thinking tokens and the answer
+ * that follows them) — a request built with the DEFAULT `max_tokens` (4096)
+ * and a "medium" (10,000) or "high" (24,000) budget violates that outright.
+ * The CLI has no `--max-tokens` flag at all today, so `req.maxTokens` is
+ * ALWAYS unset in practice, meaning every "medium"/"high" run through this
+ * adapter was building exactly that invalid request — caught by
+ * `packages/cli/test/effort-anthropic-wire.integration.test.ts` driving the
+ * REAL (unmocked) adapter end to end, not by `reasoning.test.ts`'s offline
+ * unit coverage, which only ever inspected the `thinking` field in isolation.
+ */
+const MIN_ANSWER_HEADROOM_TOKENS = 1024;
+
+/**
  * Build the native streaming request from a canonical {@link ChatRequest}.
  * Exported as {@link toNativeRequest} so the content-block → native shape mapping
  * can be verified offline without any network or SDK client. `oauth` prepends the
@@ -365,9 +382,23 @@ export function toNativeRequest(
   const nativeModel = cfg.modelMap[req.model] ?? req.model;
   const dropTools = req.toolChoice === "none";
 
+  // Compute BEFORE `max_tokens` so an enabled thinking budget can size it —
+  // see `MIN_ANSWER_HEADROOM_TOKENS`'s doc for why this must happen at all.
+  const thinkingBudget = req.reasoning?.enabled
+    ? (req.reasoning.budgetTokens ?? cfg.defaultThinkingBudget ?? 8000)
+    : undefined;
+  const requestedMaxTokens = req.maxTokens ?? cfg.defaultMaxTokens ?? 4096;
+  // Only ever adjusts UPWARD, and only bites when thinking is actually on —
+  // an explicit `req.maxTokens` large enough already, or a non-reasoning
+  // request, passes through completely unchanged.
+  const maxTokens =
+    thinkingBudget !== undefined
+      ? Math.max(requestedMaxTokens, thinkingBudget + MIN_ANSWER_HEADROOM_TOKENS)
+      : requestedMaxTokens;
+
   const base: Anthropic.MessageStreamParams = {
     model: nativeModel,
-    max_tokens: req.maxTokens ?? cfg.defaultMaxTokens ?? 4096,
+    max_tokens: maxTokens,
     messages: mapMessages(req.messages),
   };
   // OAuth (Claude subscription) tokens REQUIRE the Claude Code identity as the
@@ -393,11 +424,24 @@ export function toNativeRequest(
   // `thinking` (extended reasoning) is not in the pinned SDK's param type but is
   // accepted on the wire; attach it structurally.
   const extras: Record<string, unknown> = { ...(req.providerExtensions ?? {}) };
-  if (req.reasoning?.enabled) {
-    extras.thinking = {
-      type: "enabled",
-      budget_tokens: req.reasoning.budgetTokens ?? cfg.defaultThinkingBudget ?? 8000,
-    };
+  if (thinkingBudget !== undefined) {
+    extras.thinking = { type: "enabled", budget_tokens: thinkingBudget };
+  }
+  // TEMPORARY DIAGNOSTIC — remove before shipping. Env-gated so it is inert
+  // unless explicitly asked for. Exists to answer one question that cannot be
+  // answered from a unit test: on a LIVE OAuth run, does `thinking` actually
+  // reach this boundary, or is `reasoning` being dropped upstream? `oauth`
+  // is logged too — it is exactly `lastCredKind === "bearer"` from the
+  // caller (`stream()`), so this confirms whether the run really resolved
+  // an OAuth Bearer credential at all, not just that thinking made it into
+  // the object either way.
+  if (process.env["NEXUS_DEBUG_ANTHROPIC_REQ"] === "1") {
+    process.stderr.write(
+      `[diag] model=${nativeModel} oauth=${String(oauth)} reasoning=${JSON.stringify(req.reasoning)} ` +
+        `thinkingBudget=${String(thinkingBudget)} ` +
+        `max_tokens=${String((base as unknown as Record<string, unknown>)["max_tokens"])} ` +
+        `thinking=${JSON.stringify(extras["thinking"])}\n`,
+    );
   }
   return { ...base, ...extras } as Anthropic.MessageStreamParams;
 }

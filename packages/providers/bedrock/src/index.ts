@@ -192,10 +192,29 @@ export function toBedrockRequest(
   const modelId = cfg.modelMap[req.model] ?? req.model;
   const dropTools = req.toolChoice === "none";
 
+  // Extended thinking's `budget_tokens` counts AGAINST `maxTokens` — the same
+  // Anthropic-native constraint `toNativeRequest` (the direct Anthropic
+  // adapter) accounts for, since this is literally the same thinking
+  // mechanism just fronted by Bedrock's Converse API for a Claude model id
+  // (see the `additionalModelRequestFields` gate below). The DEFAULT
+  // `maxTokens` (4096) is smaller than `EFFORT_BUDGET_TOKENS`'s "medium"
+  // (10,000) and "high" (24,000) — sized up here so a reasoning-enabled
+  // request is never built with a budget that leaves no room for the
+  // answer, only for a Claude model id where thinking is actually attached.
+  const thinkingBudget =
+    req.reasoning?.enabled && modelId.includes("claude")
+      ? (req.reasoning.budgetTokens ?? 8000)
+      : undefined;
+  const requestedMaxTokens = req.maxTokens ?? cfg.defaultMaxTokens ?? 4096;
+  const maxTokens =
+    thinkingBudget !== undefined
+      ? Math.max(requestedMaxTokens, thinkingBudget + 1024)
+      : requestedMaxTokens;
+
   const input: ConverseStreamCommandInput = {
     modelId,
     messages: mapMessages(req.messages),
-    inferenceConfig: { maxTokens: req.maxTokens ?? cfg.defaultMaxTokens ?? 4096 },
+    inferenceConfig: { maxTokens },
   };
   if (req.system !== undefined) {
     input.system = [{ text: req.system } as SystemContentBlock];
@@ -221,10 +240,10 @@ export function toBedrockRequest(
   // the request builder silently dropped it for EVERY model behind it — the
   // exact "shown but not real" class that check exists to catch, just missed
   // here because the input was never actually wired.
-  if (req.reasoning?.enabled && modelId.includes("claude")) {
+  if (thinkingBudget !== undefined) {
     input.additionalModelRequestFields = {
       ...(input.additionalModelRequestFields as Record<string, unknown> | undefined),
-      thinking: { type: "enabled", budget_tokens: req.reasoning.budgetTokens ?? 8000 },
+      thinking: { type: "enabled", budget_tokens: thinkingBudget },
     };
   }
   if (req.providerExtensions) {
