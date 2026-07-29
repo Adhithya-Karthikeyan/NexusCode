@@ -127,7 +127,9 @@ export interface RunTuiOptions {
   /** Whether the active provider supports reasoning (drives the `/effort` picker). */
   reasoningSupported?: boolean;
   /** Live, provider-scoped `/effort` levels — see `SlashCommandDeps.listEffortLevelsForProvider`. */
-  listEffortLevelsFor?: (providerId: string) => Promise<readonly { id: string; hint?: string }[]>;
+  listEffortLevelsFor?: (
+    providerId: string,
+  ) => Promise<{ levels: readonly { id: string; hint?: string }[]; offDisablesReasoning: boolean }>;
 }
 
 export interface RunTuiResult {

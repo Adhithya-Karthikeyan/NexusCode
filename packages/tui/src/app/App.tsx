@@ -123,7 +123,9 @@ export interface AppProps {
    * see `SlashCommandDeps.listEffortLevelsForProvider`'s doc. Falls back to
    * the generic `low/medium/high` names when absent.
    */
-  listEffortLevelsFor?: (providerId: string) => Promise<readonly { id: string; hint?: string }[]>;
+  listEffortLevelsFor?: (
+    providerId: string,
+  ) => Promise<{ levels: readonly { id: string; hint?: string }[]; offDisablesReasoning: boolean }>;
   /** `/clear` + `/new` — reset the transcript / start a new session. */
   onClearConversation?: () => void;
   onNewSession?: () => void;
@@ -443,7 +445,10 @@ export function App(props: AppProps): React.JSX.Element {
         ...(listEffortLevelsFor
           ? {
               listEffortLevelsForProvider: (pid: string) =>
-                Promise.resolve(listEffortLevelsFor(pid)).then((r) => r.map((l) => ({ ...l }))),
+                Promise.resolve(listEffortLevelsFor(pid)).then((r) => ({
+                  levels: r.levels.map((l) => ({ ...l })),
+                  offDisablesReasoning: r.offDisablesReasoning,
+                })),
             }
           : {}),
         onPickEffort: (effort) => {
