@@ -62,23 +62,6 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
     ///    acting on.
     ///  - `.some(true)` — confirmed reachable.
     public let localServerReachable: Bool?
-    /// Reasoning/thinking-effort capability, straight from the wire's
-    /// `reasoning` object.
-    ///
-    /// THREE states, deliberately not collapsed to two:
-    ///  - `nil` — the row had no `reasoning` key at all. A live `nexus
-    ///    providers list -o json` run (as opposed to `status`) confirms this
-    ///    still happens today, not just on an older CLI: "unknown", not "no".
-    ///  - `.some(x)` with `x.supported == false` — a confirmed negative (a
-    ///    live run shows codex, claude-code, and every plain `openai-compat`
-    ///    provider report exactly `{"supported":false}`). The control should
-    ///    say "not supported here", not just greyed out for no stated reason.
-    ///  - `.some(x)` with `x.supported == true` — see `ReasoningCapability`
-    ///    for `kind`/`levels`.
-    ///
-    /// See `Providers.swift`'s module doc / `ReasoningCapability` for the
-    /// captured wire shapes this was decoded against.
-    public let reasoning: ReasoningCapability?
 
     /// Plain memberwise construction — for previews and tests. Kept separate
     /// from `init?(json:)` below, which is the only one that talks to the
@@ -90,8 +73,7 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         needsKey: Bool = false,
         detail: String? = nil,
         isTestFixture: Bool = false,
-        localServerReachable: Bool? = nil,
-        reasoning: ReasoningCapability? = nil
+        localServerReachable: Bool? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -100,7 +82,6 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         self.detail = detail
         self.isTestFixture = isTestFixture
         self.localServerReachable = localServerReachable
-        self.reasoning = reasoning
     }
 
     /// `nil` only when the row has no `id` at all — every other field
@@ -117,164 +98,24 @@ public struct NexusProvider: Sendable, Hashable, Identifiable {
         // the same Swift `nil` for free (see this property's doc) — no
         // special-case decode needed for the two-vs-three-state distinction.
         self.localServerReachable = json["localServerReachable"]?.boolValue
-        self.reasoning = json["reasoning"].flatMap(ReasoningCapability.init(json:))
     }
 
     /// Whether picking this provider would actually work right now —
     /// `available` alone isn't enough (see the type doc above).
     public var isUsable: Bool { available && !needsKey }
-
-    /// A truthful display label for `level` ON THIS PROVIDER — driven
-    /// entirely by what the CLI reported, never a guess.
-    ///
-    /// `.off` is always labeled: it means "send no `--effort` flag at all"
-    /// (see `EffortLevel`/`ConversationController.effort`'s doc), which works
-    /// uniformly regardless of provider capability.
-    ///
-    /// For `low`/`medium`/`high`, `nil` means this level cannot actually be
-    /// used right now — either `reasoning` is `nil` (unknown) or
-    /// `reasoning?.supported == false` (a confirmed negative). Those two
-    /// cases are DELIBERATELY not distinguished here, because there is no
-    /// truthful label to show for either; a caller that needs to render them
-    /// differently (e.g. greyed out vs. a specific "not supported" caption)
-    /// should read `reasoning` directly rather than infer it from this
-    /// returning `nil`.
-    ///
-    /// When supported, a `.tokenBudget` provider gets the real token count
-    /// folded in (e.g. "High — 24k thinking tokens"); an `.effortString`
-    /// provider (native `reasoning_effort`, no numeric budget on the wire)
-    /// gets just the level name, e.g. "High".
-    public func reasoningLabel(for level: EffortLevel) -> String? {
-        ReasoningCapability.label(for: level, reasoning: reasoning)
-    }
 }
 
-/// One provider row's `reasoning` object from `providers list|status -o
-/// json` — whether/how thinking effort can be requested.
-///
-/// Two `kind`s confirmed live so far, both captured from a real run (not
-/// hand-typed from the TypeScript source):
-///  - `"token-budget"` (anthropic, gemini, bedrock, vertex) — carries a
-///    `levels` object mapping `"low"/"medium"/"high"` to an actual token
-///    count, e.g. `{"low":4000,"medium":10000,"high":24000}`.
-///  - `"effort-string"` (azure-openai) — a native `reasoning_effort`
-///    parameter with no numeric budget; the real row is bare
-///    `{"supported":true,"kind":"effort-string"}`, no `levels` key at all.
-///
-/// Every currently-unsupported provider (codex, claude-code, mock, and every
-/// plain `openai-compat` provider without a native reasoning param) reports
-/// exactly `{"supported":false}` — no `kind`, no `levels`.
-public struct ReasoningCapability: Sendable, Hashable {
-    public enum Kind: Sendable, Hashable {
-        case tokenBudget
-        case effortString
-        /// A `kind` string this build doesn't recognize yet. Preserved
-        /// verbatim rather than dropped, so a future provider's capability
-        /// doesn't silently disappear — `reasoningLabel(for:)` still falls
-        /// back to a bare level name for it, the same as `.effortString`.
-        case unknown(String)
-
-        init(wireValue: String) {
-            switch wireValue {
-            case "token-budget": self = .tokenBudget
-            case "effort-string": self = .effortString
-            default: self = .unknown(wireValue)
-            }
-        }
-    }
-
-    public let supported: Bool
-    /// `nil` when `supported` is `false` — every confirmed-negative row on a
-    /// live run is bare `{"supported":false}`, with no `kind` at all — or
-    /// when `supported` is `true` but the row still omits `kind` (degrade,
-    /// don't crash).
-    public let kind: Kind?
-    /// Level name (`"low"`/`"medium"`/`"high"`) -> token budget. Empty for
-    /// `.effortString` (no `levels` key on the wire, see the type doc) and
-    /// for anything unsupported; may also be missing individual levels if a
-    /// future wire shape only carries some of them.
-    public let levels: [String: Int]
-
-    /// `nil` only when the row has no `supported` field at all — every other
-    /// field degrades independently, the same defensive style as
-    /// `NexusProvider`/`ProviderCircuit`.
-    public init?(json: JSONValue) {
-        guard let supported = json["supported"]?.boolValue else { return nil }
-        self.supported = supported
-        self.kind = json["kind"]?.stringValue.map(Kind.init(wireValue:))
-        var levels: [String: Int] = [:]
-        if case .object(let fields)? = json["levels"] {
-            for (name, value) in fields {
-                if let tokens = value.intValue { levels[name] = tokens }
-            }
-        }
-        self.levels = levels
-    }
-
-    /// The picker-facing rule set, in ONE place so no call site re-derives
-    /// it: `.off` is always available (see `NexusProvider.reasoningLabel(for:)`'s
-    /// doc); `low`/`medium`/`high` have no truthful label when `reasoning` is
-    /// `nil` (unknown) or `.supported == false` (confirmed negative —
-    /// deliberately not distinguished here); a `.tokenBudget` level folds in
-    /// its real token count, everything else supported gets just the level
-    /// name.
-    ///
-    /// Two callers share this: `NexusProvider.reasoningLabel(for:)` (the full
-    /// decode) and `ConversationView.swift`'s `EffortPicker`, which only has
-    /// `PickerOption.reasoning` — a provider row already flattened down to
-    /// just this capability, not the whole `NexusProvider` — because
-    /// `ControlStrip` builds the control off the SELECTED provider's row in
-    /// the SAME `[PickerOption]` list already threaded through for the
-    /// dropdown, rather than a second parallel `NexusProvider` lookup.
-    public static func label(for level: EffortLevel, reasoning: ReasoningCapability?) -> String? {
-        guard level != .off else { return level.title }
-        guard let reasoning, reasoning.supported else { return nil }
-        guard case .tokenBudget = reasoning.kind, let tokens = reasoning.levels[level.rawValue] else {
-            return level.title
-        }
-        return "\(level.title) — \(formatThinkingTokens(tokens)) thinking tokens"
-    }
-
-    /// `4000` -> `"4k"`, `4001` -> `"4001"` — only a display nicety, never a
-    /// re-derivation of the number itself (that always comes straight off
-    /// the wire via `levels`).
-    private static func formatThinkingTokens(_ tokens: Int) -> String {
-        guard tokens >= 1000, tokens.isMultiple(of: 1000) else { return "\(tokens)" }
-        return "\(tokens / 1_000)k"
-    }
-
-    /// Whether `level` should render DISABLED for this capability — true
-    /// ONLY for a CONFIRMED negative (`reasoning != nil && !supported`).
-    /// Unknown (`reasoning == nil`) must never disable anything — collapsing
-    /// "we don't know" into "no" is exactly the conflation `NexusProvider
-    /// .reasoning`'s doc calls out as the thing this task removed. `.off` is
-    /// never disabled — it always works, on every provider.
-    ///
-    /// Lives here (not in `EffortPicker`, `ConversationView.swift`) because
-    /// `NexusApp` has no test target — see this file's module doc — and this
-    /// is exactly the kind of policy decision that belongs in `NexusKit` so
-    /// it stays under `swift test` instead of only checkable by eye.
-    public static func isUnsupported(_ level: EffortLevel, reasoning: ReasoningCapability?) -> Bool {
-        guard level != .off, let reasoning else { return false }
-        return !reasoning.supported
-    }
-
-    /// What a picker's effort selection should become right after switching
-    /// TO a provider whose capability is `newReasoning` — closes the exact
-    /// bug this task exists to remove: silently keeping `effort` selected at
-    /// a level the new provider has just CONFIRMED it can't honor would look
-    /// identical to it still working, when the CLI's own `applyEffort`
-    /// (`packages/cli/src/commands.ts`) would drop it with a stderr warning
-    /// instead. Falls back to `.off`, exactly like the picker's own default,
-    /// rather than leaving a decorative selection in place.
-    ///
-    /// Never resets on merely UNKNOWN support — only a confirmed negative is
-    /// reason enough to override the user's choice (same reasoning as
-    /// `isUnsupported(_:reasoning:)` above).
-    public static func effortAfterProviderSwitch(from effort: EffortLevel, to newReasoning: ReasoningCapability?) -> EffortLevel {
-        isUnsupported(effort, reasoning: newReasoning) ? .off : effort
-    }
-}
+// Reasoning-effort capability used to live here as `ReasoningCapability`,
+// decoded from `providers list|status -o json`'s `reasoning` field. Removed:
+// that field never probes live and only ever describes the token-budget/
+// effort-string families, never claude-code's or codex's own native scale —
+// a live run of `nexus effort claude-code -o json` returns SEVEN levels
+// `reasoning` has no way to represent at all. `EffortCapability`
+// (`Effort.swift`), decoded from the dedicated `nexus effort <provider>`
+// live probe, is the real replacement — see its module doc for the full
+// reasoning, and `cmdEffort`'s own doc comment in `packages/cli/src/
+// commands.ts` for why that command exists as a separate surface from this
+// one.
 
 /// One entry from `providers status -o json`'s `circuits` array — the
 /// provider circuit breaker's persisted, CROSS-PROCESS state for one
@@ -494,10 +335,10 @@ public struct NexusModel: Sendable, Hashable, Identifiable {
     /// `.fallback` and `nil` (an older CLI / a malformed value): an unknown
     /// provenance must never read as verified, the same "unknown is not a
     /// confirmed positive" rule `NexusProvider.localServerReachable` and
-    /// `ReasoningCapability` already apply. This is the ONE property a
-    /// picker should read to decide display treatment — see this type's doc
-    /// for why it must never render a `.fallback`/unknown row identically to
-    /// a verified one.
+    /// `EffortCapability.source`/`EffortListSource` (`Effort.swift`) already
+    /// apply. This is the ONE property a picker should read to decide
+    /// display treatment — see this type's doc for why it must never render
+    /// a `.fallback`/unknown row identically to a verified one.
     public var isVerified: Bool { source == .provider }
 
     /// Plain memberwise construction — for previews and tests.

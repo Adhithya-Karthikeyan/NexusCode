@@ -133,34 +133,13 @@ public enum RunMode: String, CaseIterable, Identifiable, Sendable {
     public var isMultiLane: Bool { self == .compare || self == .race }
 }
 
-/// The `--effort` flag's vocabulary — identical to the CLI's own
-/// (`EffortLevel` in `packages/cli/src/commands.ts`) and to the TUI's
-/// `/effort` picker.
-///
-/// No longer driven by a control on `ConversationController`: the app used
-/// to expose an `effort` property and append `--effort` from it, but the
-/// owner configures reasoning effort at the PROVIDER level (e.g. codex's
-/// `model_reasoning_effort`), so an app-side value could only duplicate or
-/// silently override that — see `ConversationController.persistentSessionArguments`'s
-/// doc. This type survives as the shared vocabulary `ReasoningCapability`'s
-/// decode and derived reads (`Providers.swift`: `NexusProvider
-/// .reasoningLabel(for:)`, `.isUnsupported(_:reasoning:)`,
-/// `.effortAfterProviderSwitch(from:to:)`) are expressed in, correct and
-/// tested, for whoever next needs to surface per-provider effort in the UI.
-public enum EffortLevel: String, CaseIterable, Identifiable, Sendable {
-    case off, low, medium, high
-
-    public var id: String { rawValue }
-
-    public var title: String {
-        switch self {
-        case .off: return "Off"
-        case .low: return "Low"
-        case .medium: return "Med"
-        case .high: return "High"
-        }
-    }
-}
+// The `--effort` flag's vocabulary used to live here as a closed 4-case enum
+// (`off`/`low`/`medium`/`high`) mirroring an old, fixed CLI union. That union
+// is gone on the CLI side too — real providers have real scales a fixed enum
+// can't represent (claude-code alone reports seven live-probed levels) — so
+// `EffortLevel` is now a plain `String` (`Effort.swift`), exactly like the
+// CLI's own `EffortLevel` (`packages/cli/src/commands.ts`). See
+// `ConversationController.effort`'s doc for how a picked level reaches argv.
 
 /// One provider/model switch request, ready to become the persistent stdin
 /// control line `nexus chat --persistent` documents (`parseSwitchDecision`,
@@ -287,6 +266,29 @@ public final class ConversationController {
     /// the kind of stale copy that already bit the model picker.
     public var role: String?
 
+    /// The reasoning-effort level explicitly picked via the control strip's
+    /// effort picker (`ControlStrip.effortPicker`, `ConversationView.swift`),
+    /// live-probed per provider from `nexus effort <provider> -o json` (see
+    /// `EffortCapability`, `Effort.swift`).
+    ///
+    /// `nil` — the default, and what a fresh provider selection resets this
+    /// to — means nothing was explicitly chosen, so `--effort` is omitted
+    /// from argv entirely and the provider's own already-configured default
+    /// governs, UNOPPOSED. This is deliberately never auto-populated from a
+    /// live probe's `defaultLevel` (see that property's doc): auto-selecting
+    /// it would re-derive the exact harm `--effort` was removed for the
+    /// first time this control existed — a value captured once, at
+    /// provider-switch time, silently overriding whatever the owner's own
+    /// `~/.codex/config.toml` (or a later in-tool `/model` change) sets
+    /// after that snapshot was taken. Only a genuine user click on this
+    /// picker ever sets this to a non-nil value — see `persistentSessionArguments`/
+    /// `oneShotArguments` for where it becomes `--effort <value>`.
+    ///
+    /// A provider-native level id (e.g. claude-code's `"xhigh"`), or the
+    /// universal `"off"` sentinel — never validated against a closed list
+    /// here; see `EffortLevel`'s doc (`Effort.swift`) for why.
+    public var effort: EffortLevel?
+
     /// Pending tool approvals for this conversation.
     public let approvals = ApprovalsController()
 
@@ -390,14 +392,18 @@ public final class ConversationController {
         // a decision. Without `--ask` the gate would auto-allow, which is the
         // behaviour this whole path exists to remove.
         if approvalsEnabled { args += ["-t", "--ask"] }
-        // No `--effort` here, deliberately: the app used to append it from a
-        // picker on the control strip, but the owner configures reasoning
-        // effort at the PROVIDER level (e.g. codex's `model_reasoning_effort`
-        // in `~/.codex/config.toml`), so sending `--effort` from here would
-        // silently override a value they deliberately set. `EffortLevel` and
-        // `ReasoningCapability` (`Providers.swift`) still describe that
-        // capability correctly for whoever next needs to surface it — this
-        // argv builder just stops competing over it.
+        // `--effort` only when the user EXPLICITLY picked a level via the
+        // control strip's effort picker (`effort != nil`) — see that
+        // property's doc. Omitted otherwise, so the provider's own
+        // already-configured default (e.g. codex's `model_reasoning_effort`
+        // in `~/.codex/config.toml`) governs unopposed, exactly as before
+        // this control existed. Like `-p`/`-m`/`-t`/`--ask`, this is baked
+        // into argv at LAUNCH time — changing the picker mid-conversation
+        // has no effect on an already-running persistent backend (the
+        // `{"type":"switch",…}` control line has no `effort` field to
+        // retarget it with), the same limitation `approvalsEnabled` already
+        // has; it takes effect on the next fresh launch or provider switch.
+        if let effort { args += ["--effort", effort] }
         return args
     }
 
@@ -420,10 +426,14 @@ public final class ConversationController {
         if !mode.isMultiLane {
             if let provider { args += ["-p", provider] }
             if let model { args += ["-m", model] }
+            // Same rule as `persistentSessionArguments`'s `--effort` — only
+            // when explicitly picked, never a re-derived default — applied
+            // uniformly across every one-shot subcommand built above.
+            // Compare/race never reach this branch: a fan-out run has no
+            // SINGLE active provider for a level to be scoped to (mirrors
+            // `-p`/`-m` being withheld the same way just above).
+            if let effort { args += ["--effort", effort] }
         }
-        // No `--effort` here either — see `persistentSessionArguments`'s doc;
-        // the same reasoning applies uniformly across every one-shot
-        // subcommand built above.
         // `nexus agent --role` DOES honor `--resume` — `runAgentOoda` threads
         // it through the same `resolveResumeTarget` resolver `chat
         // --persistent` uses (see `packages/cli/src/commands.ts`, and the

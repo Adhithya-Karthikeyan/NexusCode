@@ -10,6 +10,19 @@ import NexusKit
 /// not hypothetical, at the default 1280pt window before this existed.
 private let readingColumnWidth: CGFloat = 720
 
+/// The identity `ConversationView`'s effort `.task(id:)` re-fires on.
+/// Every other `.task(id:)` in this app keys on a single `Equatable` value
+/// (`workspace.projectDirectory` alone, in `RootView`/`GitView`/`SessionsView`/
+/// `TasksView`/`IntegrationsView`) — this is the first that needs to react to
+/// TWO independent values changing together (the project directory AND the
+/// active provider — see `effortController`'s doc for why). A bare tuple
+/// isn't itself `Equatable` in a way `.task(id:)`'s generic constraint
+/// accepts, hence this one-purpose wrapper rather than a tuple literal.
+private struct EffortTaskKey: Equatable {
+    let directory: URL?
+    let provider: String?
+}
+
 /// The conversation surface: transcript, controls, composer.
 ///
 /// Every control here resolves to a flag on a `nexus` command — the mode picker
@@ -39,6 +52,22 @@ struct ConversationView: View {
     // never hardcoded (see `NexusRole`'s doc): a stale Swift copy of the role
     // list is exactly the mistake this avoids.
     @State private var rolesController: RolesController?
+
+    // MARK: - Effort picker
+    //
+    // Same self-contained shape as `rolesController` above, for the same
+    // reason — but keyed on the ACTIVE provider too, not just the project
+    // directory: `nexus effort <provider>` is a per-provider live probe (see
+    // `EffortCapability`'s doc, `Effort.swift`), so a provider switch must
+    // re-fetch, never keep showing the previous provider's scale. `authController`
+    // sits beside it rather than folded in: it answers a different question
+    // (is the SIGN-IN method for this provider one that can't do extended
+    // thinking at all — the Claude-subscription-OAuth case, see
+    // `effortUnavailableCaption`), and `nexus auth status` is a snapshot of
+    // every provider at once, so it only needs to reload with the project,
+    // not with every provider switch.
+    @State private var effortController: EffortController?
+    @State private var authController: AuthController?
 
     // MARK: - Provider/model picker seam
     //
@@ -114,7 +143,9 @@ struct ConversationView: View {
                 isLoadingModels: isLoadingModels,
                 modelsAreUnverified: modelsAreUnverified,
                 onLoadModels: onLoadModels,
-                rolesController: rolesController
+                rolesController: rolesController,
+                effortController: effortController,
+                authController: authController
             )
         }
             // A sheet, deliberately: a blocked tool call is modal in fact — the
@@ -134,7 +165,17 @@ struct ConversationView: View {
             // Mirrors `ChatTab`'s own `.task(id: workspace.projectDirectory)`
             // for `ProvidersController` — reload whenever the project (and so
             // the resolved `nexus` binary) changes.
-            .task(id: workspace.projectDirectory) { await loadRoles() }
+            .task(id: workspace.projectDirectory) {
+                await loadRoles()
+                await loadAuth()
+            }
+            // A SEPARATE `.task(id:)`, keyed on provider too — see
+            // `effortController`'s doc for why this can't share the task
+            // above: it must re-fire on every provider switch, not just a
+            // project change.
+            .task(id: EffortTaskKey(directory: workspace.projectDirectory, provider: controller.provider)) {
+                await loadEffort()
+            }
     }
 
     private func loadRoles() async {
@@ -145,6 +186,30 @@ struct ConversationView: View {
         let loaded = RolesController(client: NexusClient(binary: binary), workingDirectory: workspace.projectDirectory)
         rolesController = loaded
         await loaded.refresh()
+    }
+
+    private func loadAuth() async {
+        guard let binary = workspace.binary else {
+            authController = nil
+            return
+        }
+        let loaded = AuthController(client: NexusClient(binary: binary), binary: binary, workingDirectory: workspace.projectDirectory)
+        authController = loaded
+        await loaded.refresh()
+    }
+
+    /// A fresh `EffortController` per (directory, provider) pair — never one
+    /// reused across a provider switch, so `capability` starts `nil` on
+    /// every load rather than briefly showing the PREVIOUS provider's scale
+    /// while the new probe is in flight (see `EffortController`'s doc).
+    private func loadEffort() async {
+        guard let binary = workspace.binary, let provider = controller.provider else {
+            effortController = nil
+            return
+        }
+        let loaded = EffortController(client: NexusClient(binary: binary), workingDirectory: workspace.projectDirectory)
+        effortController = loaded
+        await loaded.refresh(provider: provider)
     }
 
     private var laneOrder: [LaneState] { controller.view.orderedLanes }
@@ -566,9 +631,11 @@ struct ConversationView: View {
     private var commandPreview: String {
         // No special-casing here: this is the exact same array the real spawn
         // builds from (`plannedCommand`), not a second copy that can drift
-        // from it. The app never appends `--effort` (removed per the owner's
-        // direction — see `runConfigGroup`'s doc), so the provider's own
-        // configured effort governs whatever this preview shows.
+        // from it — including `--effort`, which only appears when
+        // `controller.effort` was explicitly set via the control strip's
+        // effort picker (see `runConfigGroup`'s doc); otherwise the
+        // provider's own configured default governs, exactly as this
+        // preview shows.
         let args = controller.plannedCommand(for: draft.isEmpty ? "…" : draft).arguments
         return "nexus " + args
             .map { $0.contains(" ") ? "\"\($0)\"" : $0 }
@@ -582,22 +649,29 @@ struct ConversationView: View {
     }
 }
 
-/// Mode, provider/model or backends, the approval indicator, and the
-/// reasoning-TRACES toggle — grouped by what they actually MEAN, not just
-/// placed left to right in declaration order.
+/// Mode, provider/model or backends, reasoning effort, the approval
+/// indicator, and the reasoning-TRACES toggle — grouped by what they
+/// actually MEAN, not just placed left to right in declaration order.
 ///
-/// Three categories, in this order: what the run IS (`ModePicker`), what
-/// answers it (provider/model, or backend chips in Compare/Race), and what
-/// it is allowed to do (`approvalControl`). A fourth used to sit between the
-/// first two — reasoning EFFORT (`EffortPicker`) — removed because the owner
-/// configures it at the provider level and an app-side control could only
-/// duplicate or override that; see `runConfigGroup`'s doc for the full
-/// reasoning. `GroupDivider` hairlines make the remaining grouping visible
-/// instead of leaving differently-shaped controls to read as "placed" rather
-/// than designed. Session/reasoning-traces/clear are deliberately NOT part of
-/// that sequence — they are utility actions on the conversation as a whole,
-/// not part of configuring the next run, so they stay a separate trailing
-/// tray.
+/// Four categories, in this order: what the run IS (`ModePicker`), what
+/// answers it (provider/model, or backend chips in Compare/Race), how hard
+/// it reasons (`effortPicker`, single-lane only), and what it is allowed to
+/// do (`approvalControl`). The effort picker is a deliberate RE-addition —
+/// an earlier `EffortPicker` here was removed because it offered a fixed
+/// four-value scale (`off`/`low`/`medium`/`high`) that fought whatever the
+/// owner had already configured at the provider level (codex's
+/// `model_reasoning_effort` in particular). This one is different in the way
+/// that matters: it is built from `nexus effort <provider>`'s live,
+/// per-provider probe (`EffortCapability`, `Effort.swift` — real scales,
+/// e.g. claude-code's seven levels, not a guessed universal one) and it
+/// NEVER auto-selects a value — see `ConversationController.effort`'s doc —
+/// so an untouched picker still leaves the provider's own default fully in
+/// control, exactly like before this control existed. `GroupDivider`
+/// hairlines make the grouping visible instead of leaving differently-shaped
+/// controls to read as "placed" rather than designed. Session/reasoning-
+/// traces/clear are deliberately NOT part of that sequence — they are
+/// utility actions on the conversation as a whole, not part of configuring
+/// the next run, so they stay a separate trailing tray.
 ///
 /// `ViewThatFits` (not a hand-picked width breakpoint) decides whether that
 /// whole sequence fits one row or needs two: a real measurement at this
@@ -619,6 +693,17 @@ struct ControlStrip: View {
     let modelsAreUnverified: Bool
     let onLoadModels: (String) -> Void
     let rolesController: RolesController?
+    /// Backs `effortPicker` — `nil` while loading or when nothing is
+    /// selected yet, `capability.supported == false` when the active
+    /// provider has no reasoning-effort concept at all. See
+    /// `ConversationView.effortController`'s doc for why this is fetched
+    /// per-provider rather than joined off `providers`.
+    let effortController: EffortController?
+    /// Backs `effortUnavailableCaption` — every provider's sign-in state
+    /// from `nexus auth status`, used to detect the one case this control
+    /// must warn about rather than silently offer: anthropic while signed
+    /// in via Claude subscription OAuth. See that property's doc.
+    let authController: AuthController?
 
     // Clearing destroys an on-screen conversation with no undo, same class of
     // action as "Delete task" (`TasksView.swift`) and "Sign out" (`AuthView.
@@ -634,6 +719,9 @@ struct ControlStrip: View {
             }
             if modelsAreUnverified {
                 modelListVerificationCaption
+            }
+            if let warning = effortUnavailableCaption {
+                effortUnavailableCaptionView(warning)
             }
         }
         .padding(.horizontal, Space.xl)
@@ -685,6 +773,51 @@ struct ControlStrip: View {
             .foregroundStyle(theme.color(\.textMuted))
     }
 
+    /// A caution that reasoning is silently unusable on the CURRENT
+    /// credential — narrowly scoped to the one case actually verified live:
+    /// `anthropic` while signed in via a Claude subscription OAuth token
+    /// (see `reasoningUnavailableForOAuth`, `packages/providers/anthropic/
+    /// src/index.ts`). That adapter proved the `/v1/messages` request
+    /// returns 200 and silently drops every thinking block for a bearer
+    /// token — never an error — so the effort picker itself would look
+    /// fully functional while doing nothing. `offDisablesReasoning == true`
+    /// is used as the general marker of "this is the token-budget family
+    /// the OAuth defect applies to" rather than hardcoding a `kind` this
+    /// wire shape doesn't even carry (`EffortCapability` has no `kind`
+    /// field — see its doc) — narrowed to `provider == "anthropic"` because
+    /// that is the ONLY provider this was actually proven on; generalizing
+    /// further would be a guess this codebase's own discipline elsewhere
+    /// (`ModelListSource`, `NexusProvider.localServerReachable`) argues
+    /// against making.
+    ///
+    /// Same "visible, not blocking" contract as `circuitWarning`/
+    /// `localServerWarning` (`SelectableProvider`, `Providers.swift`) and
+    /// `modelListVerificationCaption` above: the picker stays fully
+    /// selectable — this app is advisory, never the enforcement point — but
+    /// the reason a level does nothing is never left for the user to
+    /// discover only by watching nothing happen. Amber, not neutral, unlike
+    /// `modelListVerificationCaption`: that caption flags a data-provenance
+    /// gap (an unconfirmed guess), this one flags a real dead end, the same
+    /// weight `circuitWarning` earns for a tripped circuit.
+    private var effortUnavailableCaption: String? {
+        guard controller.provider == "anthropic",
+              effortController?.capability?.offDisablesReasoning == true,
+              authController?.providers.first(where: { $0.providerId == "anthropic" })?.kind == .oauth
+        else { return nil }
+        return "Extended thinking isn't available for a Claude subscription (OAuth) sign-in — picking a level below has no effect. Sign in with an API key instead to use it."
+    }
+
+    private func effortUnavailableCaptionView(_ warning: String) -> some View {
+        HStack(alignment: .top, spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 8))
+                .padding(.top, 2)
+            Text(warning)
+                .textStyle(Type.caption)
+        }
+        .foregroundStyle(theme.color(\.warningFg))
+    }
+
     /// `approvalControl` moved onto ROW ONE with `runConfigGroup` here — it
     /// is the third of the three run-configuration categories this file's
     /// own doc comment already names (what the run IS / what answers it /
@@ -706,22 +839,24 @@ struct ControlStrip: View {
         }
     }
 
-    /// What the run IS and what answers it — the two categories that
-    /// together decide what `plannedCommand` builds.
+    /// What the run IS, what answers it, and how hard it reasons — the
+    /// three categories that together decide what `plannedCommand` builds.
     ///
-    /// A third category, reasoning effort, used to live here as `EffortPicker`
-    /// — removed per the owner's direction ("also thinking i enabled by
-    /// default in all these models - so lets not have it separate"):
-    /// they configure `--effort`/reasoning at the PROVIDER level (e.g.
-    /// `~/.codex/config.toml`'s `model_reasoning_effort`), so an app-side
-    /// control wasn't just redundant, it was harmful — sending `--effort`
-    /// would silently override a value they deliberately set with whatever
-    /// the picker happened to show. The app no longer sends `--effort` at all
-    /// (see `persistentSessionArguments`/`oneShotArguments`); the provider's
-    /// own configured effort governs, unopposed. The capability data behind
-    /// the old control (`ReasoningCapability`, `NexusProvider
-    /// .reasoningLabel(for:)`) stays in `NexusKit`, correct and tested, for
-    /// whoever next needs to surface per-provider effort.
+    /// The effort picker (third here) used to live as a fixed four-value
+    /// `EffortPicker` — removed per the owner's direction at the time
+    /// ("also thinking i enabled by default in all these models - so lets
+    /// not have it separate"), because it fought whatever `--effort`/
+    /// reasoning was already configured at the PROVIDER level (e.g.
+    /// `~/.codex/config.toml`'s `model_reasoning_effort`) with a guessed
+    /// universal scale. `effortPicker` below is a deliberate re-addition,
+    /// not a revert: it is built from `nexus effort <provider>`'s live,
+    /// per-provider probe (real scales — claude-code's seven levels, not a
+    /// hardcoded four), hidden outright for a provider with no reasoning
+    /// concept at all (never a disabled dead control), and — critically —
+    /// never auto-populates a selection, so an untouched picker leaves the
+    /// provider's own configured default in full control exactly like
+    /// before this control existed; see `ConversationController.effort`'s
+    /// doc for the full "why this doesn't repeat the old harm" reasoning.
     private var runConfigGroup: some View {
         HStack(spacing: Space.md) {
             ModePicker(mode: $controller.mode)
@@ -733,6 +868,14 @@ struct ControlStrip: View {
                 backendControls
             } else {
                 singleLaneControls
+            }
+
+            // Multi-lane (compare/race) has no SINGLE active provider for a
+            // level to be scoped to — mirrors provider/model being withheld
+            // the same way in `backendControls`/`oneShotArguments`.
+            if !controller.mode.isMultiLane, showsEffortPicker {
+                GroupDivider()
+                effortPicker
             }
 
             // Role only means anything in `.agent` mode — everywhere else
@@ -792,6 +935,99 @@ struct ControlStrip: View {
             )
         }
         return [native] + roles
+    }
+
+    // MARK: - Effort picker
+    //
+    // See `runConfigGroup`'s doc for why this control exists a second time
+    // after an earlier version was removed, and `ConversationController
+    // .effort`'s doc for the "never auto-selects" guarantee that keeps it
+    // from repeating the harm the first one caused.
+
+    /// Whether `effortPicker` should render at all — hidden outright (never
+    /// a disabled dead control, per this feature's "no dead controls" rule,
+    /// same as `NexusProvider`/`EffortCapability`'s "hide, don't grey out"
+    /// discipline elsewhere) until the live probe CONFIRMS the active
+    /// provider has a reasoning-effort concept with at least one real level
+    /// to offer. `nil` (no provider selected yet, still loading, or the
+    /// probe failed) and a confirmed `supported == false` read identically
+    /// here — neither is a reason to show anything.
+    private var showsEffortPicker: Bool {
+        guard let capability = effortController?.capability else { return false }
+        return capability.supported && !capability.levels.isEmpty
+    }
+
+    /// A sentinel id for "nothing explicitly picked" — mirrors
+    /// `nativeToolLoopId` above exactly, including WHY: `controller.effort
+    /// == nil` is a real, first-class choice (leave the provider's own
+    /// default alone, see that property's doc), not merely "nothing picked
+    /// yet", so the picker needs an explicit row to return TO it. A plain
+    /// word, not a placeholder-style token, because `DropdownPicker` renders
+    /// `selection` directly as the closed button's text when non-nil (see
+    /// `rolePicker`'s identical `"native"` sentinel) — "default" reads fine
+    /// there and cannot collide with a real provider-native level name.
+    private static let effortDefaultId = "default"
+
+    /// `nexus effort <provider>`'s live per-provider scale, never a shared
+    /// lowest-common-denominator list (see `EffortCapability`'s doc for why
+    /// that assumption is exactly what got this control deleted once
+    /// already) — driven entirely by `effortController.capability`, with NO
+    /// per-provider special-casing in this view beyond the one documented,
+    /// narrowly-scoped exception (`effortUnavailableCaption`).
+    private var effortPicker: some View {
+        DropdownPicker(
+            placeholder: "effort",
+            options: effortOptions,
+            selection: controller.effort ?? Self.effortDefaultId,
+            isLoading: effortController?.isLoading ?? false,
+            minWidth: 84,
+            maxWidth: 128,
+            emptyHint: effortController?.error ?? "No reasoning-effort levels"
+        ) { id in
+            controller.effort = id == Self.effortDefaultId ? nil : id
+        }
+        .help("Reasoning effort for \(controller.provider ?? "the active provider") — the provider's own default is used unless you pick a level here")
+    }
+
+    /// Options for `effortPicker`, built from the live probe:
+    ///  - `"default"` (`effortDefaultId`), mapping back to `nil` — the
+    ///    provider's own already-configured default, left UNOPPOSED (see
+    ///    `ConversationController.effort`'s doc).
+    ///  - `"off"`, ONLY when `offDisablesReasoning` is true. Omitted
+    ///    entirely — never shown disabled or relabelled — for claude-code/
+    ///    codex, which always reason and have no off to offer at all (see
+    ///    `EffortCapability.offDisablesReasoning`'s doc); present for the
+    ///    token-budget family (anthropic/gemini/bedrock/vertex), where off
+    ///    genuinely disables extended thinking.
+    ///  - every level the live probe reported, verbatim — claude-code's
+    ///    seven, anthropic's three, whatever codex's own scale is — with the
+    ///    CURRENT provider-side default (`capability.defaultLevel`) marked
+    ///    so it's visible without having to be re-selected.
+    private var effortOptions: [PickerOption] {
+        guard let capability = effortController?.capability else { return [] }
+        var options = [
+            PickerOption(id: Self.effortDefaultId, detail: "Provider's own configured default"),
+        ]
+        if capability.offDisablesReasoning {
+            options.append(PickerOption(id: "off", detail: "No extended thinking"))
+        }
+        options += capability.levels.map { level in
+            PickerOption(id: level.id, detail: effortLevelDetail(level, isCurrentDefault: level.id == capability.defaultLevel))
+        }
+        return options
+    }
+
+    /// `level.description` (e.g. "24k thinking tokens" for a token-budget
+    /// provider) with the live-probed CURRENT default folded in — mirrors
+    /// `cmdEffort`'s own text-mode `●` marker (`commands.ts`) rather than
+    /// inventing a different convention for the same fact.
+    private func effortLevelDetail(_ level: EffortLevelOption, isCurrentDefault: Bool) -> String? {
+        switch (level.description, isCurrentDefault) {
+        case (let description?, true): return "\(description) · current default"
+        case (let description?, false): return description
+        case (nil, true): return "current default"
+        case (nil, false): return nil
+        }
     }
 
     /// Conversation-wide utility actions — not part of configuring the next
@@ -886,6 +1122,14 @@ struct ControlStrip: View {
             ) { id in
                 controller.provider = id
                 controller.model = nil
+                // A level picked for the OLD provider's scale (e.g.
+                // claude-code's `"xhigh"`) is meaningless — or actively
+                // wrong — the instant a different provider is selected;
+                // `effortController`'s own `.task(id:)` will re-probe the
+                // new provider's scale separately (see `ConversationView
+                // .effortController`'s doc), but nothing else resets a
+                // stale explicit pick.
+                controller.effort = nil
                 onLoadModels(id)
             }
 
@@ -1338,6 +1582,21 @@ private struct ModePicker: View {
                 } label: {
                     Text(candidate.title)
                         .font(.system(size: 12, weight: .medium))
+                        // Without this, a squeezed `HStack` lets the label
+                        // WRAP mid-word ("Agent" -> "Agen"/"t") instead of
+                        // reporting its true unwrapped width — which is
+                        // exactly what fooled `ViewThatFits` (`ControlStrip
+                        // .body`) into picking `singleRow` at 900pt once a
+                        // fourth control (`effortPicker`) pushed the row past
+                        // its real intrinsic width: the WRAPPED, artificially
+                        // shrunk measurement fit, so `ViewThatFits` never saw
+                        // the overflow that should have selected
+                        // `twoRowStack` instead. `.lineLimit(1)` forbids the
+                        // wrap; `.fixedSize` makes the view report that
+                        // un-wrapped size as its ideal width rather than
+                        // accepting a proposed width smaller than it needs.
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundStyle(selected ? theme.color(\.textPrimary) : theme.color(\.textMuted))
                         .padding(.horizontal, Space.lg)
                         .padding(.vertical, 5)

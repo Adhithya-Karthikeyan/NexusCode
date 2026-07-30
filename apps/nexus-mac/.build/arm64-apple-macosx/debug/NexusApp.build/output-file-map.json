@@ -9,6 +9,13 @@
     "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/DesignSystem.swiftdeps",
     "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/DesignSystem.dia"
   },
+  "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/Foundation.swift": {
+    "dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/Foundation.d",
+    "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/Foundation.swift.o",
+    "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/Foundation~partial.swiftmodule",
+    "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/Foundation.swiftdeps",
+    "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/Foundation.dia"
+  },
   "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/Markdown.swift": {
     "dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/Markdown.d",
     "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/debug/NexusApp.build/Markdown.swift.o",

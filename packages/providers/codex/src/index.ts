@@ -670,6 +670,17 @@ async function probeCodexEffort(
     ...(cfg.resolveEnv ? { resolveEnv: cfg.resolveEnv } : {}),
     ...(cfg.spawn ? { spawn: cfg.spawn } : {}),
     timeoutMs: cfg.listModelsTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+    // The default probe cap is 262_144 chars; this catalog is ~290KB on a real
+    // install because every entry embeds its model's full `base_instructions`
+    // prose. Truncation is INVISIBLE to a JSON probe — the parse simply fails,
+    // the caller degrades to `readConfiguredCodexEffort`, and codex reports one
+    // "unverified" level instead of its real six. Measured, not guessed: the
+    // live output was 289.6KB against a 256KB cap.
+    //
+    // A cap below the payload it must parse is not a safety limit, it is a
+    // silent failure. 4MB keeps a real bound against a runaway child while
+    // leaving ample headroom as the catalog grows.
+    maxOutputChars: 4_194_304,
   });
   if (probe.spawnError) throw new Error(`${bin} not available: ${probe.spawnError.message}`);
   if (probe.timedOut) throw new Error(`${bin} debug models timed out — unknown, not empty`);

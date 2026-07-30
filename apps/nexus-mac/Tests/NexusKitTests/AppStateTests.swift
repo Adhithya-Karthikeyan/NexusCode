@@ -80,7 +80,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(args.contains("s_123"))
     }
 
-    // MARK: - Preview/spawn parity matrix (Bug 1 + never-sends---effort regression guard)
+    // MARK: - Preview/spawn parity matrix (Bug 1 + --effort regression guard)
 
     /// "The preview shows a command that isn't what runs" has recurred TWICE:
     /// first as `nexus agent …` displayed while `chat --persistent …` actually
@@ -90,16 +90,20 @@ final class AppStateTests: XCTestCase {
     /// prevented the next one. This replaces the single-case guard with a full
     /// state matrix so the whole CLASS of bug is impossible, not just the two
     /// instances already found — every mode, `.agent` with/without a role,
-    /// provider/model set/unset, approvals on/off, and `sessionId`
-    /// present/absent.
+    /// provider/model set/unset, approvals on/off, `sessionId` present/absent,
+    /// and (now) `effort` set/unset.
     ///
-    /// `--effort` itself is no longer part of the matrix's DIMENSIONS — the
-    /// app stopped sending it entirely (the owner configures reasoning effort
-    /// at the provider level; see `ConversationController
-    /// .persistentSessionArguments`'s doc) — but it stays a CONTENT assertion
-    /// below: every combination in this matrix must produce an argv with no
-    /// `--effort` anywhere in it, which is exactly the shape a regression
-    /// (some future code path re-adding it) would break.
+    /// `effort` REJOINED the matrix's dimensions once the control strip
+    /// gained a real, live-probed effort picker (`ConversationController
+    /// .effort`, `Effort.swift`) — the second recurrence above is exactly why
+    /// this needs the same full-matrix treatment as provider/model/session
+    /// rather than a single hand-picked case: `--effort` must appear in argv
+    /// if and only if `effort` was explicitly set, in EVERY other
+    /// combination of state, never leaking in from — or dropped by — an
+    /// unrelated dimension. Multi-lane modes (`compare`/`race`) are the one
+    /// exception: they never carry `-p`/`-m` either (no single active
+    /// provider to scope a level to), so `--effort` must be absent there
+    /// regardless of `effort`.
     ///
     /// For every combination this compares `plannedCommand(for:).arguments`
     /// against the value ACTUALLY used to spawn — never two literals that
@@ -123,6 +127,7 @@ final class AppStateTests: XCTestCase {
         let modelOptions: [String?] = [nil, "model-x"]
         let approvalsOptions = [true, false]
         let sessionIdOptions: [String?] = [nil, "s_matrix"]
+        let effortOptions: [EffortLevel?] = [nil, "xhigh"]
         // `.agent` is the only mode `role` affects — nil (native tool loop,
         // persistent) vs. set (OODA framework, one-shot) are two structurally
         // different dispatch shapes and both need a pass through the matrix;
@@ -143,76 +148,88 @@ final class AppStateTests: XCTestCase {
                     for model in modelOptions {
                         for approvalsEnabled in approvalsOptions {
                             for sessionId in sessionIdOptions {
-                                let c = controller()
-                                c.mode = mode
-                                c.role = role
-                                c.provider = provider
-                                c.model = model
-                                c.approvalsEnabled = approvalsEnabled
-                                c.sessionId = sessionId
-                                if mode.isMultiLane { c.backends = ["b1", "b2"] }
+                                for effort in effortOptions {
+                                    let c = controller()
+                                    c.mode = mode
+                                    c.role = role
+                                    c.provider = provider
+                                    c.model = model
+                                    c.approvalsEnabled = approvalsEnabled
+                                    c.sessionId = sessionId
+                                    c.effort = effort
+                                    if mode.isMultiLane { c.backends = ["b1", "b2"] }
 
-                                let context = "mode=\(mode.rawValue) role=\(role ?? "nil") " +
-                                    "provider=\(provider ?? "nil") model=\(model ?? "nil") " +
-                                    "approvals=\(approvalsEnabled) session=\(sessionId ?? "nil")"
+                                    let context = "mode=\(mode.rawValue) role=\(role ?? "nil") " +
+                                        "provider=\(provider ?? "nil") model=\(model ?? "nil") " +
+                                        "approvals=\(approvalsEnabled) session=\(sessionId ?? "nil") " +
+                                        "effort=\(effort ?? "nil")"
 
-                                let preview = c.plannedCommand(for: "matrix prompt").arguments
+                                    let preview = c.plannedCommand(for: "matrix prompt").arguments
 
-                                if usesPersistentSession {
-                                    // The actual Bug-1 guard: a genuine second, independent call.
-                                    XCTAssertEqual(
-                                        preview, c.persistentSessionArguments(),
-                                        "preview/spawn argv diverged for \(context)"
-                                    )
-                                    XCTAssertEqual(preview.first, "chat", context)
-                                    XCTAssertTrue(preview.contains("--persistent"), context)
-                                    // The persistent path never puts the prompt in argv — it is
-                                    // written to the process's stdin turn by turn instead.
-                                    XCTAssertFalse(preview.contains("matrix prompt"), "persistent path must never argv the prompt, \(context)")
-                                } else {
-                                    XCTAssertEqual(preview.first, mode.rawValue, context)
-                                    XCTAssertTrue(preview.contains("matrix prompt"), "one-shot dispatch must argv the prompt, \(context)")
+                                    if usesPersistentSession {
+                                        // The actual Bug-1 guard: a genuine second, independent call.
+                                        XCTAssertEqual(
+                                            preview, c.persistentSessionArguments(),
+                                            "preview/spawn argv diverged for \(context)"
+                                        )
+                                        XCTAssertEqual(preview.first, "chat", context)
+                                        XCTAssertTrue(preview.contains("--persistent"), context)
+                                        // The persistent path never puts the prompt in argv — it is
+                                        // written to the process's stdin turn by turn instead.
+                                        XCTAssertFalse(preview.contains("matrix prompt"), "persistent path must never argv the prompt, \(context)")
+                                    } else {
+                                        XCTAssertEqual(preview.first, mode.rawValue, context)
+                                        XCTAssertTrue(preview.contains("matrix prompt"), "one-shot dispatch must argv the prompt, \(context)")
+                                    }
+
+                                    // --- Content assertions, shared by both dispatch shapes ---
+
+                                    // `--effort` appears if and only if it was explicitly picked,
+                                    // and never at all for a multi-lane (compare/race) run — see
+                                    // this test's doc.
+                                    if mode.isMultiLane {
+                                        XCTAssertFalse(preview.contains("--effort"), "compare/race must never carry --effort, \(context)")
+                                    } else {
+                                        XCTAssertEqual(preview.contains("--effort"), effort != nil, context)
+                                        if let effort {
+                                            XCTAssertTrue(preview.contains(effort), "the picked level itself must be in argv, \(context)")
+                                        }
+                                    }
+
+                                    if usesPersistentSession {
+                                        XCTAssertEqual(preview.contains("-t"), approvalsEnabled, context)
+                                        XCTAssertEqual(preview.contains("--ask"), approvalsEnabled, context)
+                                    } else {
+                                        // Documented, honest gap (pre-existing, not introduced by this
+                                        // test): one-shot dispatch has no approval-gate flag at all
+                                        // today — `oneShotArguments` never reads `approvalsEnabled` —
+                                        // so compare/race/role-agent runs are never gated regardless of
+                                        // this setting. Asserted explicitly so a silently-untested
+                                        // combination can't hide a real gap the way this bug class has
+                                        // twice before.
+                                        XCTAssertFalse(preview.contains("-t"), context)
+                                        XCTAssertFalse(preview.contains("--ask"), context)
+                                    }
+
+                                    if mode.isMultiLane {
+                                        XCTAssertFalse(preview.contains("-p"), "compare/race must never carry -p/-m, \(context)")
+                                        XCTAssertFalse(preview.contains("-m"), context)
+                                    } else {
+                                        XCTAssertEqual(preview.contains("-p"), provider != nil, context)
+                                        XCTAssertEqual(preview.contains("-m"), model != nil, context)
+                                    }
+
+                                    if mode == .agent, let role {
+                                        XCTAssertTrue(preview.contains("--role") && preview.contains(role), context)
+                                    }
+                                    // `agent --role` DOES honor `--resume` (threaded through the same
+                                    // `resolveResumeTarget` resolver `chat --persistent` uses — see
+                                    // `oneShotArguments`'s doc) — so every mode, role or not, carries
+                                    // `--resume` exactly when `sessionId` is set. What resumes is the
+                                    // CONVERSATION only; plan/task state always starts fresh, but that's
+                                    // a runtime behavior, not a reason to withhold the flag from argv.
+                                    XCTAssertEqual(preview.contains("--resume"), sessionId != nil, context)
                                 }
-
-                                // --- Content assertions, shared by both dispatch shapes ---
-
-                                // The app never sends `--effort`, in ANY state — see this
-                                // test's doc.
-                                XCTAssertFalse(preview.contains("--effort"), "--effort must never be sent, \(context)")
-
-                                if usesPersistentSession {
-                                    XCTAssertEqual(preview.contains("-t"), approvalsEnabled, context)
-                                    XCTAssertEqual(preview.contains("--ask"), approvalsEnabled, context)
-                                } else {
-                                    // Documented, honest gap (pre-existing, not introduced by this
-                                    // test): one-shot dispatch has no approval-gate flag at all
-                                    // today — `oneShotArguments` never reads `approvalsEnabled` —
-                                    // so compare/race/role-agent runs are never gated regardless of
-                                    // this setting. Asserted explicitly so a silently-untested
-                                    // combination can't hide a real gap the way this bug class has
-                                    // twice before.
-                                    XCTAssertFalse(preview.contains("-t"), context)
-                                    XCTAssertFalse(preview.contains("--ask"), context)
-                                }
-
-                                if mode.isMultiLane {
-                                    XCTAssertFalse(preview.contains("-p"), "compare/race must never carry -p/-m, \(context)")
-                                    XCTAssertFalse(preview.contains("-m"), context)
-                                } else {
-                                    XCTAssertEqual(preview.contains("-p"), provider != nil, context)
-                                    XCTAssertEqual(preview.contains("-m"), model != nil, context)
-                                }
-
-                                if mode == .agent, let role {
-                                    XCTAssertTrue(preview.contains("--role") && preview.contains(role), context)
-                                }
-                                // `agent --role` DOES honor `--resume` (threaded through the same
-                                // `resolveResumeTarget` resolver `chat --persistent` uses — see
-                                // `oneShotArguments`'s doc) — so every mode, role or not, carries
-                                // `--resume` exactly when `sessionId` is set. What resumes is the
-                                // CONVERSATION only; plan/task state always starts fresh, but that's
-                                // a runtime behavior, not a reason to withhold the flag from argv.
-                                XCTAssertEqual(preview.contains("--resume"), sessionId != nil, context)
                             }
                         }
                     }

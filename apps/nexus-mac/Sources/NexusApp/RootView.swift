@@ -998,15 +998,17 @@ struct ChatTab: View {
                 // Circuit wins if somehow both are set — it is the more
                 // urgent, live-operational one of the two.
                 warning: entry.circuitWarning ?? entry.localServerWarning
-                // No `reasoning:` here any more. The app used to carry each
-                // provider's reasoning capability through to an effort picker
-                // in the control strip; that picker is gone. Reasoning effort
-                // is configured per-provider where it belongs — codex's
-                // `model_reasoning_effort`, claude-code's own `/model` effort —
-                // and a duplicate control here could only fight that, sending
-                // `--effort` over a value the user deliberately set.
-                // `NexusProvider.reasoning` still exists and is still tested;
-                // nothing in the UI consumes it today.
+                // No `reasoning:` here — `NexusProvider.reasoning` and the
+                // `ReasoningCapability` it decoded are gone entirely (see
+                // `Providers.swift`'s module note). The control strip's
+                // effort picker (`ConversationView.swift`'s `ControlStrip
+                // .effortPicker`) is instead backed by its OWN dedicated
+                // controller (`EffortController`, `Effort.swift`), live-
+                // probed per selected provider from `nexus effort <provider>
+                // -o json` rather than joined off this list — that command
+                // is the only place the CLI actually reports claude-code's/
+                // codex's native scale, which `providers status`'s
+                // `reasoning` field never could.
             )
         }
     }

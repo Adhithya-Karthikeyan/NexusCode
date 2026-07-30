@@ -1496,6 +1496,50 @@ truncated mid-object) — a test that has never been seen red proves nothing
 about a race. **416 executed, 0 failures, 0 skipped.** Reinstalled to
 `/Applications` afterwards, since the first install predated this fix.
 
+### 🔴 A Claude SUBSCRIPTION OAuth token cannot do extended thinking
+The most expensive investigation of this project — three agents, four rounds,
+two wrong root causes — so record the answer and the method.
+
+**Symptom:** `--effort high` on `anthropic` produced ZERO `reasoning` events,
+with no error and no warning, while `claude-code` reasoned fine.
+
+**Two wrong answers found along the way, both real bugs worth keeping:**
+- `max_tokens` defaulted to 4096 while thinking budgets are 10k–24k, and
+  Anthropic requires `max_tokens > thinking.budget_tokens`. Every medium/high
+  reasoning request this adapter ever built was invalid. Fixed — but NOT the
+  cause here.
+- My own theory that `anthropic-beta` could not carry a second value alongside
+  `oauth-2025-04-20`. Plausible, documented in the file, and wrong.
+
+**The actual answer, from capturing the literal request bytes** (a temporary
+env-gated `fetch` wrapper on the SDK client, since a unit test cannot see this):
+```
+bodyKeys    = model,max_tokens,messages,system,thinking,stream
+thinkingKey = {"type":"enabled","budget_tokens":24000}
+max_tokens  = 25024      anthropic-beta = oauth-2025-04-20      status = 200
+→ zero thinking content returned
+```
+The request was **perfect** and the server returned **200**. A Claude.ai
+subscription bearer token **accepts `thinking` and silently ignores it**.
+
+**Fix:** do not send a parameter the server ignores. `toNativeRequest` omits
+`thinking` on the bearer path, does not inflate `max_tokens` for a budget it
+will not send (that was real cost and latency for nothing), and
+`reasoningUnavailableForOAuth` lets callers say so. The adapter writes one
+stderr notice per process naming the cause and the two real workarounds
+(console API key, or the `claude-code` provider). 3 regression tests.
+
+**Method note worth more than the finding:** every layer's unit tests passed
+throughout. `implicitEffortDefaultFor` returned "medium"; `toNativeRequest`
+built a correct `thinking` block; a real-HTTP-server integration test showed
+the field on the wire. All true, all green, feature dead. What found it was
+instrumenting a **live credential** — and the decisive detail (subscription vs
+API key) is invisible to every test that does not use the owner's real token.
+Two of my own diagnostics also produced false negatives first (a regex
+requiring no space, then treating a non-string body as empty) and reported
+`max_tokens` as "absent" when the API requires it — when a diagnostic says
+something impossible, the diagnostic is wrong.
+
 ### Open
 1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
    `IntegrationsView`/`GitView`/`ApprovalSheet`), plus a before/after

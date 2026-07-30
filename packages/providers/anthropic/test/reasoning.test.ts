@@ -130,10 +130,10 @@ describe("extended thinking is not sent on a Claude subscription OAuth token", (
     const cfg: AnthropicConfig = { modelMap: {} };
     const reasoning = { enabled: true, effort: "high", budgetTokens: 24_000 };
 
-    const viaOAuth = toNativeRequest(cfg, req(reasoning), true) as Record<string, unknown>;
+    const viaOAuth = toNativeRequest(cfg, req(reasoning), true) as unknown as Record<string, unknown>;
     expect(viaOAuth["thinking"]).toBeUndefined();
 
-    const viaApiKey = toNativeRequest(cfg, req(reasoning), false) as Record<string, unknown>;
+    const viaApiKey = toNativeRequest(cfg, req(reasoning), false) as unknown as Record<string, unknown>;
     expect(viaApiKey["thinking"]).toEqual({ type: "enabled", budget_tokens: 24_000 });
   });
 
@@ -147,7 +147,7 @@ describe("extended thinking is not sent on a Claude subscription OAuth token", (
       cfg,
       req({ enabled: true, effort: "high", budgetTokens: 24_000 }),
       true,
-    ) as Record<string, unknown>;
+    ) as unknown as Record<string, unknown>;
     expect(viaOAuth["max_tokens"]).toBe(4096);
   });
 
