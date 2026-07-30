@@ -1,4 +1,5 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/DesignSystem.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/Foundation.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/Markdown.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/AgentsView.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/ApprovalSheet.swift
@@ -10,3 +11,4 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Features/TasksView.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/NexusApp.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/RootView.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/ScreenshotSeam.swift

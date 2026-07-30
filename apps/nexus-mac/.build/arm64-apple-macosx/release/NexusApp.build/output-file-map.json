@@ -10,6 +10,12 @@
     "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/DesignSystem.swiftdeps",
     "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/DesignSystem.dia"
   },
+  "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/Foundation.swift": {
+    "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/Foundation.swift.o",
+    "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/Foundation~partial.swiftmodule",
+    "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/Foundation.swiftdeps",
+    "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/Foundation.dia"
+  },
   "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/Components/Markdown.swift": {
     "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/Markdown.swift.o",
     "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/Markdown~partial.swiftmodule",
@@ -75,5 +81,11 @@
     "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/RootView~partial.swiftmodule",
     "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/RootView.swiftdeps",
     "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/RootView.dia"
+  },
+  "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusApp/ScreenshotSeam.swift": {
+    "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/ScreenshotSeam.swift.o",
+    "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/ScreenshotSeam~partial.swiftmodule",
+    "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/ScreenshotSeam.swiftdeps",
+    "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/ScreenshotSeam.dia"
   }
 }

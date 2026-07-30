@@ -3,11 +3,13 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/AuthView.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/ConversationView.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/DesignSystem.swift.o
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/Foundation.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/GitView.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/IntegrationsView.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/Markdown.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/NexusApp.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/RootView.swift.o
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/ScreenshotSeam.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/SessionsView.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusApp.build/TasksView.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/AppState.swift.o
@@ -16,6 +18,7 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Approvals.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Auth.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/DiagnosticClassifier.swift.o
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Effort.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Integrations.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/JSONValue.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/MarkdownBlocks.swift.o
@@ -27,8 +30,10 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Providers.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Roles.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Sessions.swift.o
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/SidebarState.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Tasks.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Theme.swift.o
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/ThemeDerivation.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Themes.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/UiEvent.swift.o
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/ViewState.swift.o

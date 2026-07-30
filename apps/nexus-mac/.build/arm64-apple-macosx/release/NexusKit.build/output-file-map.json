@@ -40,6 +40,12 @@
     "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/DiagnosticClassifier.swiftdeps",
     "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/DiagnosticClassifier.dia"
   },
+  "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Effort.swift": {
+    "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Effort.swift.o",
+    "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Effort~partial.swiftmodule",
+    "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Effort.swiftdeps",
+    "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Effort.dia"
+  },
   "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift": {
     "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Themes.swift.o",
     "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Themes~partial.swiftmodule",
@@ -112,6 +118,12 @@
     "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Sessions.swiftdeps",
     "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Sessions.dia"
   },
+  "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/SidebarState.swift": {
+    "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/SidebarState.swift.o",
+    "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/SidebarState~partial.swiftmodule",
+    "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/SidebarState.swiftdeps",
+    "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/SidebarState.dia"
+  },
   "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Tasks.swift": {
     "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Tasks.swift.o",
     "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Tasks~partial.swiftmodule",
@@ -123,6 +135,12 @@
     "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Theme~partial.swiftmodule",
     "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Theme.swiftdeps",
     "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/Theme.dia"
+  },
+  "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ThemeDerivation.swift": {
+    "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/ThemeDerivation.swift.o",
+    "swiftmodule": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/ThemeDerivation~partial.swiftmodule",
+    "swift-dependencies": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/ThemeDerivation.swiftdeps",
+    "diagnostics": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/ThemeDerivation.dia"
   },
   "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/UiEvent.swift": {
     "object": "/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/.build/arm64-apple-macosx/release/NexusKit.build/UiEvent.swift.o",

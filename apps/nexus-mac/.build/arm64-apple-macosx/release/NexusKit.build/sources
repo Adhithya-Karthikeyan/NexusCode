@@ -4,6 +4,7 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Approvals.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Auth.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/DiagnosticClassifier.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Effort.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Generated/Themes.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Integrations.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/JSONValue.swift
@@ -16,7 +17,9 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Providers.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Roles.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Sessions.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/SidebarState.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Tasks.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/Theme.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ThemeDerivation.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/UiEvent.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Sources/NexusKit/ViewState.swift
