@@ -95,7 +95,6 @@ struct GitView: View {
     private var headerRow: some View {
         PageHeader(
             "Git",
-            subtitle: "Commit, review, explain, and describe — nexus commit/review/explain/pr",
             accessory: AnyView(
                 Button {
                     Task { await refreshRepoState() }
@@ -292,7 +291,7 @@ private struct ExplainCard: View {
     @State private var state: ActionState<String> = .idle
 
     var body: some View {
-        Card {
+        Card(fill: true) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 SectionHeader("Explain", subtitle: "Plain-language summary of the diff — nexus explain")
 
@@ -363,7 +362,7 @@ private struct ReviewCard: View {
     @State private var state: ActionState<ReviewResult> = .idle
 
     var body: some View {
-        Card {
+        Card(fill: true) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 SectionHeader("Review", subtitle: "Correctness, clarity, security, and style — nexus review")
 
@@ -487,7 +486,7 @@ private struct CommitCard: View {
     @State private var confirmingApply = false
 
     var body: some View {
-        Card {
+        Card(fill: true) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 SectionHeader("Commit", subtitle: "Conventional Commit message from the staged diff — nexus commit")
 
@@ -595,7 +594,7 @@ private struct PrCard: View {
     @State private var state: ActionState<PrResult> = .idle
 
     var body: some View {
-        Card {
+        Card(fill: true) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 SectionHeader("Pull request", subtitle: "Title + description from commits/diff — nexus pr")
 

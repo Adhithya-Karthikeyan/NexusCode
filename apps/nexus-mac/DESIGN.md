@@ -27,7 +27,8 @@ absent or fixes something that measured wrong.
 
 ## What was actually wrong — measured, not asserted
 
-Sampling the shipped build at 1440x900 on Meridian (relative luminance, WCAG):
+Sampling the then-shipped build at 1440x900 (relative luminance, WCAG). The
+theme sampled was Meridian, since retired — Storm occupies its register now:
 
 | surface | intended role | measured |
 |---|---|---|
@@ -183,24 +184,29 @@ The highest-stakes surface, and the least designed thing in the old build.
   bubble: no tail, no capsule, no saturated fill, because round coloured
   bubbles read as casual texting and undercut the tool framing. But it *is* a
   container, because weight alone was not doing the job.
-- **The slab rises on dark and recesses on light** (`SpeakerSlab`). The ladder
-  is not symmetric, and assuming it was produced the light-mode mirror of the
-  material bug: on BOTH light themes `elevation.level1` and `level2` are the
+- **The slab rises on dark and recesses on light** (`SpeakerSlab`). This began
+  as a workaround: both old light themes set `level1` and `level2` to the
   identical `#FFFFFF`, so a "raised" slab measured **1.0000 against a canvas at
-  1.0000** — literally zero separation, with only a hairline to distinguish it.
-  Light themes do have room downward (`surfaceInset` is `#F3EDE3` on Daylight,
-  `#EEF0F2` on Studio), so on light the slab steps *back* instead: measured
-  0.8787 and 0.8948 against the same white canvas. Not a compromise — it is the
-  convention Claude and ChatGPT both use in light mode, and it is the correct
-  physics in each direction. **When a treatment depends on elevation, check
-  that the rung above actually differs from the rung below in that theme.**
+  1.0000** — literally zero separation. That is fixed at the root now; every
+  light theme in the seed catalogue keeps real headroom above its canvas, and
+  `ThemeSeed.validate` refuses one whose top rung is pure white. The slab still
+  recesses on light because that is the convention Claude and ChatGPT use and it
+  is good physics either way — but it is now a choice, not a necessity.
+  **When a treatment depends on elevation, check that the rung above actually
+  differs from the rung below in that theme** — and prefer making the ladder
+  correct over teaching each component to work around it.
 - **The assistant's turn is introduced by an attribution row** — provider
   identity dot, `provider/model` in mono, cache state, and the copy control.
   Shown on *every* turn, not only when the provider changed. Repetition is the
   point: a recurring anchor at a fixed rhythm is what lets the eye find turn
   boundaries while scrolling.
-- **34pt between turns.** A turn boundary is the largest structural break the
-  transcript has and must clearly outrank the 12pt used within a turn.
+- **40pt between turns** (`Space.turn`), below the 48pt `Space.section` that
+  separates whole regions of a screen. The large end of the scale used to be
+  `xxl: 32`, `section: 28`, `turn: 34` — three steps inside the noise floor of
+  what anyone can see, so they were used interchangeably and none of them read
+  as a bigger break than the others. What reads as expensive is the RATIO:
+  12pt inside a card against 48pt between sections is 4x, and that is legible
+  at a glance.
 - **The composer docks with one hairline**, on the canvas's own surface. Two
   gradient scrims were tried and discarded — a scrim can only dissolve content
   it shares a colour with, and a fenced code block carries its own darker fill,
@@ -262,15 +268,30 @@ one that responds.
 
 ## Non-negotiables
 
-- Contrast floors are asserted by `AppThemeTests` — run them.
+- Contrast floors are **derived and enforced**, not merely asserted:
+  `ThemeTokens.derived(from:)` lifts an ink until it clears its floor, and
+  `ThemeSeed.validate()` refuses a palette that misses one. `AppThemeTests`,
+  `ThemeDerivationTests` and `ThemeCatalogTests` guard the contract — run them.
+  A new theme is a `ThemeSeed` in `ThemeCatalog`; never hand-author
+  `ThemeTokens` or an `ElevationLadder` again, which is how `level2 == level3`
+  shipped in five of seven themes and four themes got a border identical to the
+  surface it bounded.
 - Determinism: no `UUID()` or wall-clock reads in derived view state.
 - Fixed header + one region owning remaining height; never top-align short
   content in a tall scroll view.
-- All seven hand-authored themes and the 16 terminal palettes keep working. If
-  the model's shape changes, migrate them — don't leave one behind.
-- Drop shadows at rest stay banned on dark themes. The two that opted in
-  (Cinder, Nightfall) render real material over them and are the documented
-  exception.
+- All twelve catalogue themes and the 16 terminal palettes keep working. If the
+  model's shape changes, migrate them — don't leave one behind. A retired theme
+  id must keep resolving (`ThemeCatalog.retiredThemeIds`): silently dropping a
+  returning user on the default loses a choice they made, with nothing on
+  screen admitting it.
+- Drop shadows at rest stay banned on dark themes — `DepthIntent.shadow` is
+  `.none` for every dark theme and `.cast` for every light one, where an
+  occlusion shadow is simply correct physics.
+- Translucency may never govern value. Measured: with the token drawn
+  underneath the material, the largest opacity that still keeps a sidebar
+  behind its canvas over a white desktop is ~0.025 — so every theme declares a
+  solid sidebar and spends translucency only on overlays, which float above
+  everything and have no ordering to invert.
 
 ## Verification
 

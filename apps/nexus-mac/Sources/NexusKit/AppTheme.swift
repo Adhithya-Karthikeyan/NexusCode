@@ -30,6 +30,11 @@ public struct AppTheme: Sendable, Hashable, Identifiable {
     public let stateLayers: StateLayers
     public let accents: AccentSystem
     public let typography: TypographyIntent
+    /// Whether surfaces cast shadows, and how strong the specular top edge is.
+    /// Authored per theme because the previously hardcoded specular opacity
+    /// (0.11) measured 1.398:1 against its own surface — invisible. See
+    /// `DepthIntent`.
+    public let depth: DepthIntent
 
     public init(
         id: String,
@@ -42,7 +47,8 @@ public struct AppTheme: Sendable, Hashable, Identifiable {
         gradients: GradientSet,
         stateLayers: StateLayers,
         accents: AccentSystem,
-        typography: TypographyIntent
+        typography: TypographyIntent,
+        depth: DepthIntent? = nil
     ) {
         self.id = id
         self.name = name
@@ -55,6 +61,7 @@ public struct AppTheme: Sendable, Hashable, Identifiable {
         self.stateLayers = stateLayers
         self.accents = accents
         self.typography = typography
+        self.depth = depth ?? (isDark ? .luminous : .paper)
     }
 }
 
@@ -304,15 +311,30 @@ public extension AppTheme {
 }
 
 public extension AppTheme {
-    /// Every hand-designed app theme, in `AppThemes.swift`.
-    static let all: [AppTheme] = [
-        .meridian, .studio, .cinder, .daylight, .basalt, .vantage, .nightfall,
-    ]
+    /// Every shipped theme, expanded from the seeds in `AppThemes.swift`.
+    ///
+    /// Derived rather than listed: a theme is now ~22 authored colours, and the
+    /// other 52 tokens plus the whole elevation ladder are a function of them.
+    /// See `ThemeCatalog` for why the previous 756-line hand-authored file had
+    /// to go.
+    static let all: [AppTheme] = ThemeCatalog.seeds.map(AppTheme.derived(from:))
 
-    static let defaultThemeId = "meridian"
+    static let defaultThemeId = "storm"
 
     static func named(_ id: String) -> AppTheme? {
         all.first { $0.id == id }
+    }
+
+    /// `named(_:)`, but also resolving the seven retired theme ids.
+    ///
+    /// The catalogue replaced every hand-designed theme, so a user who had
+    /// picked one has a `themeId` in `UserDefaults` that no longer resolves —
+    /// and the unresolved path silently falls back to the default, which would
+    /// have moved everyone onto Storm and lost their choice without a word.
+    /// This is the one call site that must not do that; see
+    /// `ThemeCatalog.retiredThemeIds` for the register-preserving map.
+    static func resolving(_ id: String) -> AppTheme? {
+        ThemeCatalog.migrate(id).flatMap(named)
     }
 }
 
@@ -345,7 +367,14 @@ public extension NexusTheme {
                 level0: ElevationStep(surface: tokens.surfaceSunken, border: tokens.chromeBorderSubtle, shadowOpacity: 0, shadowRadius: 0),
                 level1: ElevationStep(surface: tokens.surfaceRaised, border: tokens.chromeBorder, shadowOpacity: isDark ? 0 : 0.06, shadowRadius: isDark ? 0 : 6),
                 level2: ElevationStep(surface: tokens.surfaceOverlay, border: tokens.chromeBorderStrong, shadowOpacity: isDark ? 0 : 0.10, shadowRadius: isDark ? 0 : 12),
-                level3: ElevationStep(surface: tokens.surfaceOverlay, border: tokens.chromeBorderFocus, shadowOpacity: isDark ? 0 : 0.14, shadowRadius: isDark ? 0 : 20)
+                // NOT `surfaceOverlay` again. These 16 palettes define four
+                // surface tokens, so a naive level3 reused level2's fill and
+                // left a popover with no rung above the card it floats over —
+                // the same duplicate-rung defect the hand-authored themes had.
+                // One more step up the same ink the other rungs are diluted
+                // toward keeps the ladder four-deep without inventing a token
+                // the terminal palette never declared.
+                level3: ElevationStep(surface: Hex.mix(tokens.surfaceOverlay, tokens.textPrimary, 0.06), border: tokens.chromeBorderFocus, shadowOpacity: isDark ? 0 : 0.14, shadowRadius: isDark ? 0 : 20)
             ),
             materials: MaterialUsage(sidebar: .solid, overlay: .solid, composer: .solid),
             gradients: GradientSet(

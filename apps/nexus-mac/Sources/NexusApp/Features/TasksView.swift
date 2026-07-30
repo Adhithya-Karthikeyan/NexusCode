@@ -116,7 +116,6 @@ struct TasksView: View {
     private var headerRow: some View {
         PageHeader(
             "Tasks",
-            subtitle: "The durable task queue — nexus task list",
             accessory: AnyView(
                 Button {
                     Task { await controller?.refresh() }

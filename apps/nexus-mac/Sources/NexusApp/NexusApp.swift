@@ -41,24 +41,52 @@ struct NexusMacApp: App {
                 Button("New Conversation") { workspace.conversation?.clear() }
                     .keyboardShortcut("n", modifiers: .command)
             }
+            // Real menu commands rather than bare `.keyboardShortcut` on the
+            // buttons themselves, so every one of these works from all eight
+            // tabs and is discoverable in the menu bar and Help search.
+            CommandGroup(before: .toolbar) {
+                // ⌘B for the everyday collapse. This app's peer set is VS Code,
+                // Zed and Cursor, where ⌘B is the sidebar and nothing else —
+                // there is no rich-text surface here for it to collide with.
+                Button("Collapse Sidebar") { workspace.sidebar.toggle() }
+                    .keyboardShortcut("b", modifiers: .command)
+                // ⌃⌘S for away-entirely. A separate chord because it is a
+                // separate kind of act (see `SidebarPresentation.hidden`), and
+                // because reaching it by accident while aiming for the collapse
+                // would remove the app's only navigation. Apple's own VoiceOver
+                // wording for this control, verbatim.
+                Button(workspace.sidebar.preference == .hidden ? "Show Sidebar" : "Hide Sidebar") {
+                    workspace.sidebar.toggleHidden()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .control])
+                Divider()
+                // ⌘1–⌘8. These are what make `hidden` safe to offer at all:
+                // with them, no destination is reachable ONLY through the
+                // sidebar. They moved here from the Run menu, where a list of
+                // navigation destinations never belonged.
+                ForEach(Array(WorkspaceTab.allCases.enumerated()), id: \.element) { index, tab in
+                    Button(tab.title) { workspace.tab = tab }
+                        .keyboardShortcut(
+                            KeyEquivalent(Character("\(index + 1)")),
+                            modifiers: .command
+                        )
+                }
+                Divider()
+            }
             CommandMenu("Run") {
                 Button("Stop") { workspace.conversation?.cancel() }
                     .keyboardShortcut(".", modifiers: .command)
                     .disabled(workspace.conversation?.isRunning != true)
-                Divider()
-                ForEach(WorkspaceTab.allCases) { tab in
-                    Button(tab.title) { workspace.tab = tab }
-                }
             }
         }
     }
 }
 
 /// Resolves the selected theme against the OS's actual light/dark setting
-/// before anything below it renders, so a paired theme (Meridian↔Studio,
-/// Cinder↔Daylight) follows System Appearance the way a native app does,
+/// before anything below it renders, so a paired theme (Storm↔Porcelain,
+/// Sumi↔Paper) follows System Appearance the way a native app does,
 /// instead of staying locked to whichever brightness was active when it was
-/// picked. An unpaired theme (Basalt, Vantage, Nightfall) has no sibling to
+/// picked. An unpaired theme (Mocha, Mirage, Grove, Neon Grid) has no sibling to
 /// switch to, so `resolved(for:)` returns it unchanged in either scheme —
 /// that theme simply doesn't follow the OS, which is the correct behaviour
 /// for a theme that was never designed with a light/dark counterpart.
@@ -66,7 +94,7 @@ struct NexusMacApp: App {
 /// `workspace.matchSystemAppearance` gates that following via `AppTheme
 /// .displayed(for:matchSystemAppearance:)` rather than calling `resolved(for:)`
 /// unconditionally — the fix for a real bug: with no such gate, Daylight and
-/// Studio (the only two `isDark == false` hand-designed themes) were simply
+/// Studio (then the only two `isDark == false` themes) were simply
 /// unreachable on a Mac in Dark Mode. Picking either one moved the Settings
 /// checkmark but `resolved(for:)` swapped the ACTUAL theme straight back to
 /// its dark pair every time, silently — see `SettingsView`'s swatch action
@@ -93,6 +121,10 @@ private struct ThemedRoot: View {
         RootView()
             .environment(\.nexusTheme, resolvedTheme)
             .preferredColorScheme(resolvedTheme.isDark ? .dark : .light)
+            // Verification seam — inert unless `NEXUS_UI_SHOT` is set. See
+            // `ScreenshotSeam` for why the app renders its own PNG rather than
+            // relying on an external window capture.
+            .onAppear { ScreenshotSeam.armIfRequested() }
     }
 }
 
@@ -102,6 +134,14 @@ private struct ThemedRoot: View {
 @Observable
 final class WorkspaceModel {
     var tab: WorkspaceTab = .chat
+
+    /// The left rail's collapse state and geometry.
+    ///
+    /// Its own type in `NexusKit` rather than a pair of flags here, because the
+    /// interesting parts are rules — the auto-collapse breakpoint must not eat
+    /// the user's preference, a restored width must never be zero — and this
+    /// target is unreachable from `swift test`. See `SidebarStateTests`.
+    let sidebar: SidebarState
 
     /// An id from EITHER catalogue: one of the 7 hand-designed `AppTheme`s or
     /// one of the 16 generated `NexusTheme`s. `activeTheme` below resolves
@@ -149,6 +189,7 @@ final class WorkspaceModel {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        sidebar = SidebarState(defaults: defaults)
         // Launched from Finder, the working directory is `/` — useless as a
         // project root. Prefer the last directory the user actually chose, so
         // the app reopens where they left off, and fall back to the working
@@ -157,9 +198,18 @@ final class WorkspaceModel {
         projectDirectory = ProjectLocation.resolve(
             remembered: defaults.string(forKey: Keys.project)
         )
-        if let saved = defaults.string(forKey: Keys.theme),
-           AppTheme.named(saved) != nil || NexusTheme.named(saved) != nil {
-            themeId = saved
+        // `resolving`, not `named`: the twelve-seed catalogue retired all seven
+        // previously hand-designed themes, so a returning user's saved id no
+        // longer names anything. Falling through to the default would silently
+        // move every one of them onto Storm and lose the choice they made, with
+        // nothing on screen admitting it — `ThemeCatalog.retiredThemeIds` maps
+        // each retired id onto the theme that occupies its register instead.
+        if let saved = defaults.string(forKey: Keys.theme) {
+            if let migrated = AppTheme.resolving(saved) {
+                themeId = migrated.id
+            } else if NexusTheme.named(saved) != nil {
+                themeId = saved
+            }
         }
         // `bool(forKey:)` answers `false` for a key that was never set, which
         // would silently flip the "defaults on" contract above for every
@@ -174,8 +224,8 @@ final class WorkspaceModel {
         // are actually set: a normal launch never enters either branch.
         if let tab = WorkspaceTab.fromEnvironment() { self.tab = tab }
         if let forced = ProcessInfo.processInfo.environment["NEXUS_UI_THEME"],
-           AppTheme.named(forced) != nil || NexusTheme.named(forced) != nil {
-            themeId = forced
+           AppTheme.resolving(forced) != nil || NexusTheme.named(forced) != nil {
+            themeId = AppTheme.resolving(forced)?.id ?? forced
             // A forced theme is an explicit pick, exactly like clicking a
             // swatch — so it must not be silently swapped back to its
             // light/dark pair by appearance-following (see
@@ -191,7 +241,7 @@ final class WorkspaceModel {
     /// richer model either way, so `ThemedRoot` never needs to branch on
     /// which catalogue answered.
     var activeTheme: AppTheme {
-        AppTheme.named(themeId)
+        AppTheme.resolving(themeId)
             ?? NexusTheme.named(themeId)?.appTheme
             ?? AppTheme.named(AppTheme.defaultThemeId)
             ?? AppTheme.all[0]

@@ -58,21 +58,39 @@ extension AppTheme {
 /// content read as a hole. No token was wrong; the material was overruling
 /// all of them.
 ///
-/// The fix keeps translucency without letting it govern value: draw the
-/// material for its texture and movement, then lay the surface's own colour
-/// back over it at `materialTint`. What survives is the subtle parallax and
-/// desktop pickup that makes a Mac app feel native; what does not survive is
-/// the material deciding how light the surface is. That belongs to the theme.
+/// The fix keeps translucency without letting it govern value: the token is the
+/// opaque base, and the material sits on top at a few percent purely for its
+/// texture and movement. What survives is the faint desktop pickup that makes a
+/// Mac app feel native; what does not survive is the material deciding how light
+/// the surface is. That belongs to the theme.
 ///
-/// A light theme needs far less correction — a light material over a light
-/// token is already close to the intended value — so the tint is scaled down
-/// there rather than muddying an already-correct surface.
+/// A light theme needs less of it — a light material over a light token is
+/// already close to the intended value — so its pass is lighter still.
+///
+/// Measured afterwards: with the token underneath, the largest material opacity
+/// that still keeps every theme's sidebar BEHIND its canvas is about 0.025.
+/// That is small enough that the shipped catalogue simply declares `.solid`
+/// sidebars (`ThemeCatalog`) and spends translucency only on overlays, which
+/// float above everything and so have no ordering to invert. This function
+/// stays because that is a theme's decision to make, not this file's.
 @ViewBuilder
 func themedFill<S: Shape>(_ color: Color, treatment: SurfaceTreatment, in shape: S, isDark: Bool = true) -> some View {
     if let material = treatment.material {
+        // Opaque token FIRST, material on top at a token opacity — not the
+        // other way round.
+        //
+        // The previous order (material, then the token at 0.82) left 18% of the
+        // rendered value in the desktop's hands, and 18% of a bright wallpaper
+        // is enough to bring the documented inversion straight back: composited
+        // over white, Storm's sidebar (`#121320`, the DARKEST surface it owns)
+        // resolves to roughly `#3D3E4A` — L* 25 against the canvas's L* 11, so
+        // the surface furthest back renders as the brightest thing on screen.
+        // The fix is not a smaller number of the same kind; it is putting the
+        // token underneath, where the desktop can modulate it by a few percent
+        // and can never reorder it.
         ZStack {
-            shape.fill(material)
-            shape.fill(color.opacity(isDark ? 0.82 : 0.55))
+            shape.fill(color)
+            shape.fill(material).opacity(isDark ? 0.06 : 0.04)
         }
     } else {
         shape.fill(color)
@@ -89,12 +107,21 @@ struct Card<Content: View>: View {
     var padding: CGFloat = Space.lg
     var radius: CGFloat = Radius.card
     var elevated = false
+    /// Whether the card stretches to its container's full width.
+    ///
+    /// Opt-in, not automatic. The unconditional `.frame(maxWidth: .infinity)`
+    /// this replaces is why a metrics card with ~200pt of content drew an 800pt
+    /// rectangle at a wide window — a card is a container for its contents, and
+    /// a card four times wider than what is in it reads as an empty box that
+    /// happens to have some text in one corner. A form row or a full-bleed
+    /// panel genuinely wants the width and says so.
+    var fill = false
     @ViewBuilder var content: Content
 
     var body: some View {
         content
             .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: fill ? .infinity : nil, alignment: .leading)
             .surface(elevated ? 2 : 1, radius: radius, specular: elevated ? 1 : 0.7)
     }
 }
@@ -113,8 +140,9 @@ struct SectionHeader: View {
     }
 
     /// Typography intent is the one theme dimension that is not a colour: a
-    /// tool-forged theme (Basalt, Vantage) leans monospaced for scanability,
-    /// an editorial theme (Daylight, Nightfall) opens the tracking up.
+    /// tool-forged theme (Mirage, Neon Grid, Ink) leans monospaced for
+    /// scanability, an editorial theme (Grove, Moon, Paper, Dawn) opens the
+    /// tracking up.
     private var font: Font {
         theme.typography == .toolForged
             ? .system(size: 10.5, weight: .semibold, design: .monospaced)
@@ -145,6 +173,12 @@ struct SectionHeader: View {
             Spacer(minLength: 0)
             accessory
         }
+        // Capped, because a header spans whatever it is given and a window can
+        // be 1900pt wide. Uncapped, the trailing accessory — a "Refresh" button
+        // that belongs to the label — ended up stranded most of a screen away
+        // from it, which reads as two unrelated controls rather than one group.
+        .frame(maxWidth: 640, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -446,7 +480,12 @@ struct HeroEmptyState<Actions: View>: View {
             }
 
             Text(title)
-                .textStyle(Type.display)
+                // `title2` (24pt), not `display` (32pt). An empty state is the
+                // screen with the LEAST on it, and giving it the app's largest
+                // type meant a screen with nothing to say shouted louder than
+                // one full of work. `display` is now reserved for a genuine
+                // first-run moment.
+                .textStyle(Type.title2)
                 .foregroundStyle(theme.color(\.textPrimary))
                 .padding(.bottom, Space.lg)
 

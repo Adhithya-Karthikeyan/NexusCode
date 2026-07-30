@@ -110,7 +110,7 @@ public extension NexusTheme {
 /// `NexusTheme.appTheme`, the generic bridge in `AppTheme.swift` — so every
 /// view in the app can read `theme.color(...)`, `theme.elevation`, etc.
 /// without caring which catalogue the active theme came from. The default is
-/// a hand-designed theme (`AppTheme.defaultThemeId`, currently Meridian), not
+/// a catalogue theme (`AppTheme.defaultThemeId`, currently Storm), not
 /// a generated one — a default nobody changes is what most users will
 /// actually see.
 public struct ThemeKey: EnvironmentKey {

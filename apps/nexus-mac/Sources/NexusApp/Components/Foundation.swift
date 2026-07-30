@@ -86,6 +86,14 @@ enum Type {
     /// The one big statement per screen. Tracked hard — this is where the
     /// "designed vs. default" difference is most visible.
     static let display = TextStyle(font: .system(size: 32, weight: .bold), tracking: -0.9)
+    /// The largest heading a screen with real content on it should use.
+    ///
+    /// The rung that was missing: the ramp jumped 15 → 20 → 32, so anything
+    /// wanting emphasis above a heading had to reach for `display`, and a 32pt
+    /// title on a screen that already has content is what made empty states and
+    /// populated screens read at the same volume. `display` is now reserved for
+    /// screens with nothing on them.
+    static let title2 = TextStyle(font: .system(size: 24, weight: .semibold), tracking: -0.5)
     /// A screen's own name.
     static let title = TextStyle(font: .system(size: 20, weight: .semibold), tracking: -0.4)
     /// A heading inside a screen.
@@ -156,14 +164,25 @@ enum Space {
     static let xl: CGFloat = 20
     /// Between hero elements.
     static let xxl: CGFloat = 32
-    /// Between distinct SECTIONS of one screen — the step that did not exist.
-    static let section: CGFloat = 28
+    /// Between distinct SECTIONS of one screen.
+    ///
+    /// Re-valued from 28. The old large end was `xxl: 32`, `section: 28` and
+    /// `turn: 34` — three steps within 6pt of each other, which is inside the
+    /// noise floor of what anyone can see, so they were used interchangeably
+    /// and none of them read as a bigger break than the others. What actually
+    /// reads as expensive is the RATIO between the small gap and the large one:
+    /// 12pt inside a card against 48pt between sections is 4×, and that
+    /// difference is legible at a glance. Linear, Raycast and Warp all run a
+    /// section rhythm near this.
+    static let section: CGFloat = 48
     /// The generous outer margin a content page gets at wide window sizes.
     static let page: CGFloat = 40
     /// Between whole conversation turns. A turn boundary is the largest
     /// structural break the transcript has, and it needs to outrank every gap
-    /// inside a turn by a clear margin or the transcript reads as one wall.
-    static let turn: CGFloat = 34
+    /// inside a turn by a clear margin or the transcript reads as one wall —
+    /// but it should still sit BELOW a section break, which separates whole
+    /// screens' worth of content.
+    static let turn: CGFloat = 40
 }
 
 enum Radius {
@@ -209,11 +228,21 @@ enum Motion {
 ///
 /// * **Luminance** — each rung is measurably lighter than the one below it.
 /// * **A specular edge** — the 1px line along a raised surface's TOP where it
-///   turns toward the ambient light. This is the mechanism the old system was
-///   missing entirely, and it is the one that separates a dark UI that looks
-///   like real material from one that looks like flat swatches. It is
-///   achromatic and one pixel tall, so it cannot become the coloured halo the
-///   owner rejected.
+///   turns toward the ambient light. Achromatic and one pixel tall, so it
+///   cannot become the coloured halo that was rejected before.
+///
+///   Its opacity is now `theme.depth.specular`, authored per theme, because the
+///   hardcoded 0.11 it replaces **did not render**: white at 0.11 over
+///   `#1B1E27` composites to `#34373F`, which is 1.398:1 against the surface it
+///   is meant to be an edge on — measured at 1.386–1.400 across every dark
+///   theme, i.e. below the threshold at which anything reads as a line. The
+///   mechanism was sound and the number was decorative. 0.26 composites to
+///   2.34:1 and is actually visible.
+///
+///   It also belongs only on SMALL raised objects — buttons, pills, popovers.
+///   A bright top line drawn across an 800pt panel does not read as material
+///   catching light, it reads as a seam, so large calm surfaces pass
+///   `specular: 0`.
 ///
 /// A light theme has the opposite physics — a raised white surface is defined
 /// by the shadow it casts, not by a highlight — so `specular` returns a
@@ -231,8 +260,8 @@ enum Depth {
         if theme.isDark {
             return LinearGradient(
                 stops: [
-                    .init(color: .white.opacity(0.11 * strength), location: 0),
-                    .init(color: .white.opacity(0.030 * strength), location: 0.30),
+                    .init(color: .white.opacity(theme.depth.specular * strength), location: 0),
+                    .init(color: .white.opacity(theme.depth.specular * 0.23 * strength), location: 0.30),
                     .init(color: border, location: 0.75),
                     .init(color: border, location: 1),
                 ],
@@ -312,21 +341,19 @@ extension View {
 
 /// The user's own turn in the transcript: raised on dark, recessed on light.
 ///
-/// The single treatment that cannot be shared between the two modes, because
-/// the ladder is not symmetric. On a dark theme a raised surface is lighter
-/// than its canvas and there is plenty of room upward. On BOTH light themes,
-/// `elevation.level1` and `level2` are the identical `#FFFFFF` — the canvas is
-/// already pure white, so "raised" has nowhere to go, and a level-2 slab
-/// rendered white-on-white separated only by a hairline. That is the light-mode
-/// mirror of the material inversion this redesign started with: a structural
-/// gap in the ladder, not a styling preference.
+/// **The structural reason for this split is gone; the convention is why it
+/// stays.** It used to be forced: both light themes set `elevation.level1` and
+/// `level2` to the identical `#FFFFFF`, so a "raised" slab rendered white on
+/// white with only a hairline between, and recessing was the only direction
+/// left. The seed catalogue fixed that at the root — every light theme now
+/// keeps real headroom above its canvas (`ThemeSeed.validate` refuses a light
+/// theme whose top rung is pure white), so a light slab COULD now rise.
 ///
-/// Light themes do have room DOWNWARD (`surfaceInset` is `#F3EDE3` on Daylight,
-/// `#EEF0F2` on Studio against a white canvas), so on light the slab recesses
-/// instead. This is not a compromise — it is the convention Claude and ChatGPT
-/// both use in light mode, and it is the correct physics either way: the block
-/// reads as a distinct speaker by stepping off the canvas, in whichever
-/// direction that mode actually affords.
+/// It still recesses, because that is the convention Claude and ChatGPT both
+/// use in light mode and it is good physics in both directions: on dark the
+/// slab catches light, on light it sits in the paper. What changed is that this
+/// is now a design choice with an alternative, rather than a workaround for a
+/// broken ladder — and if it is ever revisited, that is the reason to weigh.
 struct SpeakerSlab: ViewModifier {
     @Environment(\.nexusTheme) private var theme
 

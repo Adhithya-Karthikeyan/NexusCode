@@ -76,9 +76,13 @@ lines.push("import SwiftUI");
 lines.push("");
 lines.push("/// Every semantic token a theme defines. No view names a raw colour;");
 lines.push("/// each visual role is a token here, exactly as in the terminal theme layer.");
+lines.push("/// Every semantic token a theme defines. `var`, not `let`: a `ThemeSeed`'s");
+lines.push("/// `overrides` closure mutates a finished token set in place (see");
+lines.push("/// `ThemeDerivation.swift`), which is the per-theme escape hatch from the");
+lines.push("/// derivation. Still a value type, so nothing is shared.");
 lines.push("public struct ThemeTokens: Sendable, Hashable {");
 for (const token of tokens) {
-  lines.push(`    public let ${swiftName(token)}: String`);
+  lines.push(`    public var ${swiftName(token)}: String`);
 }
 lines.push("}");
 lines.push("");

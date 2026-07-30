@@ -10,8 +10,13 @@ import SwiftUI
 final class AppThemeTests: XCTestCase {
     // MARK: - Completeness
 
-    func testShipsBetweenSixAndEightHandDesignedThemes() {
-        XCTAssertTrue((6...8).contains(AppTheme.all.count), "expected 6-8 hand-designed themes, found \(AppTheme.all.count)")
+    /// The catalogue is seed-driven now (`ThemeCatalog`), so the cost of an
+    /// extra theme is ~15 lines rather than 74 hand-picked hex values — which is
+    /// why the bound moved from 6–8 up to 10–16 rather than staying tight. The
+    /// upper bound still exists: past ~16 the Settings grid stops being a
+    /// picker and starts being a catalogue to browse.
+    func testShipsBetweenTenAndSixteenThemes() {
+        XCTAssertTrue((10...16).contains(AppTheme.all.count), "expected 10-16 themes, found \(AppTheme.all.count)")
     }
 
     func testEveryThemeDefinesAllSeventyFourTokens() throws {

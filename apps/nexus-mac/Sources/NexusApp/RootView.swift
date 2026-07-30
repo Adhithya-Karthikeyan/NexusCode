@@ -38,14 +38,36 @@ struct RootView: View {
             // exactly backwards from every competitor, which narrows or
             // collapses the rail as the window does.
             GeometryReader { geometry in
-                let isCompact = geometry.size.width < 1000
+                let presentation = workspace.sidebar.presentation(forWindowWidth: geometry.size.width)
+                let railWidth = workspace.sidebar.renderedWidth(forWindowWidth: geometry.size.width)
                 HStack(spacing: 0) {
-                    Sidebar(isCompact: isCompact)
-                        .frame(width: isCompact ? 64 : 248)
+                    // At zero width the sidebar is not merely invisible, it is
+                    // gone — kept in the tree so the width animates to and from
+                    // it rather than the column popping, and clipped ONLY then
+                    // so nothing inside it can draw over the content.
+                    //
+                    // Conditional, because an unconditional `.clipped()` also
+                    // clips the background's deliberate bleed into the title-bar
+                    // safe area — which is exactly what left a black band above
+                    // the sidebar, measured at (0, 0, 0), while the same fix on
+                    // the content column worked.
+                    Sidebar(presentation: presentation)
+                        .frame(width: railWidth)
+                        .clipped(presentation == .hidden)
 
-                    Rectangle()
-                        .fill(theme.hairline)
-                        .frame(width: 1)
+                    // The divider IS the drag handle when the sidebar is
+                    // expanded — a separate 1px rule plus a separate grab strip
+                    // would put two different things in the same 4pt of screen.
+                    // In rail state it goes back to being an inert hairline:
+                    // a rail has exactly one correct width, so offering a drag
+                    // that silently does nothing (see `SidebarState.resize`)
+                    // would be a control that lies.
+                    SidebarEdge(
+                        isResizable: presentation == .expanded,
+                        currentWidth: railWidth,
+                        onResize: { workspace.sidebar.resize(to: $0) },
+                        onReset: { workspace.sidebar.resetWidth() }
+                    )
 
                     VStack(spacing: 0) {
                         if let problem = workspace.setupProblem {
@@ -53,6 +75,17 @@ struct RootView: View {
                         }
                         content
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    // The way back. With the sidebar hidden the toggle that
+                    // hid it has gone with it, which would leave ⌃⌘S — a chord
+                    // the user has no way to discover — as the only exit. This
+                    // is the smallest affordance that is unambiguously a door.
+                    .overlay(alignment: .topLeading) {
+                        if presentation == .hidden {
+                            SidebarRestoreButton()
+                                .padding(.leading, Space.sm)
+                                .padding(.top, Space.sm)
+                        }
                     }
                     // Full-bleed, at level 1 — the LIGHTEST large surface in
                     // the window, and the brightest thing the eye lands on.
@@ -69,8 +102,23 @@ struct RootView: View {
                     // running edge to edge against a darker rail is what Zed,
                     // Linear, Xcode and Cursor all do, and it makes the
                     // depth story unambiguous: chrome recedes, content rises.
-                    .background(theme.surface(1))
+                    // `.ignoresSafeArea(edges: .top)` on the FILL only, never on
+                    // the content: the column's own views must keep their
+                    // title-bar inset (that inset is the only thing keeping the
+                    // sidebar header out from under the traffic lights), but the
+                    // colour behind them has to reach the window's top edge.
+                    // Without it the top 32pt of this column paints nothing and
+                    // the window wears a black band above its canvas —
+                    // measured at (0,0,0) on all eleven captures, including the
+                    // light themes where it is unmissable.
+                    .background(theme.surface(1).ignoresSafeArea(edges: .top))
                 }
+                // Width, not opacity or offset: the content column must take
+                // up the space the sidebar releases in the same frame it
+                // releases it, or the two slide past each other and the
+                // divider visibly detaches mid-animation.
+                .animation(Motion.overlay, value: workspace.sidebar.preference)
+                .animation(Motion.overlay, value: workspace.sidebar.width)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -173,61 +221,81 @@ private let costIncompleteHelp = "Partial total — pricing is unknown for at le
 private struct Sidebar: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
-    /// Below the app's own 900pt documented minimum width, the sidebar drops
-    /// text and collapses to icons — see `RootView`'s `GeometryReader` for
-    /// the breakpoint. Every row keeps its name as a hover tooltip and its
-    /// existing `accessibilityLabel`, so nothing here is discoverable only
-    /// by trial and error.
-    let isCompact: Bool
+    /// Expanded, or collapsed to an icon rail. In rail state every row keeps
+    /// its name as a hover tooltip and its existing `accessibilityLabel`, so
+    /// nothing here becomes discoverable only by trial and error.
+    let presentation: SidebarPresentation
+
+    private var isRail: Bool { presentation == .rail }
 
     var body: some View {
-        // A `List` rather than a bare `VStack`. Only a List's scroll view
-        // participates in the sidebar column's title-bar safe area on macOS — a
-        // plain VStack gets no top inset at all, which drew the brand header and
-        // project switcher underneath the traffic lights. Keeping List for the
-        // inset (and for free keyboard navigation) while hiding its background
-        // and row chrome preserves the fully custom look.
-        List {
-            Group {
-                BrandHeader(isCompact: isCompact)
-                    .padding(.bottom, Space.md)
+        // A pinned head and foot around ONE scrolling middle, rather than the
+        // single `List` this used to be.
+        //
+        // The old sidebar put brand, project switcher and nav into one List and
+        // then stopped — eight rows ending 340pt down an 860pt column, with
+        // roughly 520pt (60%) of unexplained black beneath them. That void is
+        // the single most-cited reason the window read as unfinished, and the
+        // fix is not padding: it is that a chat app's sidebar has an obvious
+        // job for that space, which is the conversations you might go back to.
+        // `RecentsSection` fills it with real, live data, scrolls when there is
+        // more of it than room, and the head/foot stay put either way.
+        VStack(spacing: 0) {
+            VStack(spacing: Space.sm) {
+                BrandHeader(isRail: isRail)
+                // In the rail the toggle gets its own centred row rather than
+                // riding beside the wordmark there is no longer room for. It
+                // has to appear SOMEWHERE in this state: a collapse control
+                // that vanishes on collapse leaves the only way back to a
+                // keyboard chord the user has no way to discover.
+                if isRail { SidebarToggleButton() }
+                ProjectSwitcherRow(isRail: isRail)
+                NewConversationButton(isRail: isRail)
+            }
+            .padding(.horizontal, isRail ? Space.sm : Space.lg)
+            .padding(.bottom, Space.lg)
 
-                ProjectSwitcherRow(isCompact: isCompact)
-                    .padding(.bottom, Space.lg)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Grouped, not one flat list of eight. Ungrouped peers read
+                    // as equal, which is wrong: Settings is configured once,
+                    // Chat is used every session. Group LABELS drop in the rail
+                    // — there is no room for a tracked heading beside a 24pt
+                    // icon column, and a truncated one would look worse than
+                    // none.
+                    ForEach(WorkspaceTab.Group.allCases) { group in
+                        if !isRail {
+                            SectionHeader(group.title)
+                                .padding(.top, group == .work ? 0 : Space.lg)
+                                .padding(.bottom, Space.xs)
+                                .padding(.horizontal, Space.sm)
+                        } else if group != .work {
+                            RailGroupSeparator()
+                        }
 
-                // Grouped, not one flat list of eight. Ungrouped peers read as
-                // equal, which is wrong: Settings is configured once, Chat is
-                // used every session. Group LABELS drop when compact — there
-                // is no room for an 11pt tracked heading beside a 24pt icon
-                // column, and a truncated one would look worse than none.
-                ForEach(WorkspaceTab.Group.allCases) { group in
-                    if !isCompact {
-                        SectionHeader(group.title)
-                            .padding(.top, group == .work ? 0 : Space.lg)
-                            .padding(.bottom, Space.xs)
-                    } else if group != .work {
-                        Color.clear.frame(height: Space.lg)
-                    }
-
-                    VStack(spacing: 2) {
-                        ForEach(WorkspaceTab.tabs(in: group)) { tab in
-                            SidebarNavRow(
-                                tab: tab,
-                                isSelected: workspace.tab == tab,
-                                badge: badge(for: tab),
-                                isCompact: isCompact,
-                                action: { workspace.tab = tab }
-                            )
+                        VStack(spacing: 1) {
+                            ForEach(WorkspaceTab.tabs(in: group)) { tab in
+                                SidebarNavRow(
+                                    tab: tab,
+                                    isSelected: workspace.tab == tab,
+                                    badge: badge(for: tab),
+                                    isRail: isRail,
+                                    action: { workspace.tab = tab }
+                                )
+                            }
                         }
                     }
+
+                    if !isRail {
+                        RecentsSection()
+                            .padding(.top, Space.lg)
+                    }
                 }
+                .padding(.horizontal, isRail ? Space.sm : Space.lg)
+                .padding(.bottom, Space.lg)
             }
-            .listRowInsets(EdgeInsets(top: 0, leading: isCompact ? Space.xs : Space.md, bottom: 0, trailing: isCompact ? Space.xs : Space.md))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
+            .scrollIndicators(.never)
         }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, theme.isDark ? .dark : .light)
         // No footer readout down here any more — this sidebar used to end in
@@ -258,14 +326,24 @@ private struct Sidebar: View {
         // sidebar rendered at twice the luminance of the canvas it sits
         // beside, making the darkest surface in the theme the brightest one on
         // screen.
-        .background(alignment: .top) {
+        // No `alignment:` argument. `.background(alignment: .top) { … }` pins
+        // the background to the sidebar's own frame, and a view pinned inside
+        // that frame cannot then expand past it — so the `.ignoresSafeArea()`
+        // below it did nothing, and the top 32pt of this column measured
+        // (0, 0, 0) on every capture. Unaligned, the background is free to grow
+        // into the safe area, which is the whole point of asking it to.
+        //
+        // `edges: .top` specifically, not the blanket form: the sidebar must
+        // still respect the BOTTOM safe area or it would draw under the status
+        // bar.
+        .background {
             themedFill(
-                theme.color(\.surfaceSunken),
+                theme.surface(0),
                 treatment: theme.materials.sidebar,
                 in: Rectangle(),
                 isDark: theme.isDark
             )
-            .ignoresSafeArea()
+            .ignoresSafeArea(edges: .top)
         }
     }
 
@@ -281,11 +359,11 @@ private struct Sidebar: View {
 /// status bar without duplicating the layout.
 private struct BrandHeader: View {
     @Environment(\.nexusTheme) private var theme
-    let isCompact: Bool
+    let isRail: Bool
 
     var body: some View {
-        HStack(spacing: Space.lg) {
-            if isCompact { Spacer(minLength: 0) }
+        HStack(spacing: Space.sm) {
+            if isRail { Spacer(minLength: 0) }
             // The mark carries the theme's brand gradient — one of exactly two
             // places in the app that earns it (the other is a primary CTA).
             // A flat accent square was indistinguishable from any other
@@ -303,17 +381,174 @@ private struct BrandHeader: View {
                     .font(.system(size: 12))
                     .foregroundStyle(theme.color(\.textInverse).opacity(0.92))
             }
-            if !isCompact {
+            if !isRail {
                 Text("NexusCode")
                     .textStyle(Type.heading)
                     .foregroundStyle(theme.color(\.textPrimary))
             }
             Spacer(minLength: 0)
+            // The toggle lives beside the wordmark, which is where every Mac
+            // app with a hand-rolled rail puts it, and it stays visible in BOTH
+            // states — a collapse control that disappears once you collapse is
+            // how a sidebar becomes a one-way door.
+            if !isRail { SidebarToggleButton() }
         }
-        // Only touched in compact mode: the icon-only mark otherwise has no
-        // text of its own for VoiceOver to read. Untouched when the "NexusCode"
-        // text is present — that Text already reads correctly on its own.
-        .modifier(CompactAccessibilityLabel(isCompact: isCompact, label: "NexusCode"))
+        // Only touched in the rail: the icon-only mark otherwise has no text of
+        // its own for VoiceOver to read. Untouched when the "NexusCode" text is
+        // present — that Text already reads correctly on its own.
+        .modifier(CompactAccessibilityLabel(isCompact: isRail, label: "NexusCode"))
+    }
+}
+
+/// Collapses the sidebar to its icon rail and back.
+///
+/// `⌥⌘S` is not a guess: it is the key equivalent macOS itself uses for "Hide
+/// Sidebar" in Finder, Mail, Notes and Reminders, so it is the one chord a Mac
+/// user already has in their fingers. The `Cmd-B` that VS Code and Zed use is
+/// deliberately NOT bound — this app is a Mac app first, and `⌘B` is bold.
+private struct SidebarToggleButton: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(\.nexusTheme) private var theme
+    @State private var hovering = false
+
+    private var isRail: Bool { workspace.sidebar.preference == .rail }
+
+    var body: some View {
+        Button {
+            workspace.sidebar.toggle()
+        } label: {
+            Image(systemName: "sidebar.leading")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.color(hovering ? \.textPrimary : \.textMuted))
+                .frame(width: 24, height: 24)
+                .background(
+                    theme.color(\.surfaceOverlay).opacity(hovering ? 1 : 0),
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Motion.state, value: hovering)
+        .help(isRail ? "Expand sidebar (⌥⌘S)" : "Collapse sidebar (⌥⌘S)")
+        .accessibilityLabel(isRail ? "Expand sidebar" : "Collapse sidebar")
+    }
+}
+
+private extension View {
+    /// `.clipped()`, but only when it is actually wanted.
+    ///
+    /// SwiftUI has no conditional clip, and the usual `if` inside a `ViewBuilder`
+    /// would change the view's identity between branches — which on this
+    /// particular view would restart the width animation the clip exists to
+    /// support.
+    @ViewBuilder
+    func clipped(_ isClipped: Bool) -> some View {
+        if isClipped { clipped() } else { self }
+    }
+}
+
+/// Brings a hidden sidebar back.
+///
+/// Floats over the content's top-left corner — the position the sidebar itself
+/// occupies, so the control sits where the thing it restores will appear. Only
+/// rendered in the `hidden` state; the rail and expanded states carry their own
+/// toggle inside the sidebar.
+private struct SidebarRestoreButton: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(\.nexusTheme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            workspace.sidebar.toggleHidden()
+        } label: {
+            Image(systemName: "sidebar.leading")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.color(hovering ? \.textPrimary : \.textMuted))
+                .frame(width: 26, height: 26)
+                .background(
+                    theme.color(\.surfaceOverlay).opacity(hovering ? 1 : 0.55),
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Motion.state, value: hovering)
+        .help("Show sidebar (⌃⌘S)")
+        .accessibilityLabel("Show Sidebar")
+    }
+}
+
+/// Starts a fresh conversation, and switches to Chat if you were somewhere else.
+///
+/// The one primary action in the whole shell, and the reason it sits at the top
+/// of the sidebar rather than inside the Chat screen: it is the thing a user
+/// does most, it must be reachable from all eight destinations, and every chat
+/// client this competes with (Claude, ChatGPT, Cursor, Raycast) puts it in
+/// exactly this position. It is also the only place besides the wordmark that
+/// spends the theme's brand gradient.
+private struct NewConversationButton: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(\.nexusTheme) private var theme
+    let isRail: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            workspace.tab = .chat
+            workspace.conversation?.clear()
+        } label: {
+            HStack(spacing: Space.sm) {
+                if isRail { Spacer(minLength: 0) }
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 12, weight: .semibold))
+                    .accessibilityHidden(true)
+                if !isRail {
+                    Text("New Conversation")
+                        .textStyle(Type.label)
+                    Spacer(minLength: 0)
+                    Text("⌘N")
+                        .textStyle(Type.monoMicro)
+                        .opacity(0.65)
+                }
+                if isRail { Spacer(minLength: 0) }
+            }
+            .foregroundStyle(theme.color(\.accentFg))
+            .padding(.horizontal, isRail ? Space.xs : Space.md)
+            .padding(.vertical, 7)
+            .background(theme.accentGradient, in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .strokeBorder(.white.opacity(theme.isDark ? 0.22 : 0.10), lineWidth: 1)
+            }
+            .opacity(hovering ? 1 : 1 - theme.stateLayers.hover * 0.5)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Motion.state, value: hovering)
+        .help(isRail ? "New Conversation (⌘N)" : "")
+        .accessibilityLabel("New Conversation")
+    }
+}
+
+/// The rail's stand-in for a group heading: a short centred hairline. A
+/// truncated 10.5pt tracked label in a 60pt column would read as damage, but
+/// dropping the grouping entirely turns eight icons into one undifferentiated
+/// strip — this keeps the rhythm without pretending to carry the words.
+private struct RailGroupSeparator: View {
+    @Environment(\.nexusTheme) private var theme
+
+    var body: some View {
+        Rectangle()
+            .fill(theme.hairline)
+            .frame(width: 20, height: 1)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Space.md)
+            .accessibilityHidden(true)
     }
 }
 
@@ -342,7 +577,7 @@ private struct CompactAccessibilityLabel: ViewModifier {
 private struct ProjectSwitcherRow: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(\.nexusTheme) private var theme
-    let isCompact: Bool
+    let isRail: Bool
     @State private var hovering = false
 
     var body: some View {
@@ -352,12 +587,12 @@ private struct ProjectSwitcherRow: View {
             }
         } label: {
             HStack(spacing: Space.sm) {
-                if isCompact { Spacer(minLength: 0) }
+                if isRail { Spacer(minLength: 0) }
                 Image(systemName: "folder.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(theme.color(\.textMuted))
                     .accessibilityHidden(true)
-                if !isCompact {
+                if !isRail {
                     Text(workspace.projectDirectory.lastPathComponent)
                         .textStyle(Type.bodyStrong)
                         .foregroundStyle(theme.color(\.textPrimary))
@@ -365,7 +600,7 @@ private struct ProjectSwitcherRow: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
-                if !isCompact {
+                if !isRail {
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(theme.color(\.textMuted))
@@ -411,8 +646,8 @@ private struct SidebarNavRow: View {
     let badge: Int
     /// Icon-only, centred, no label — the name survives as a hover tooltip
     /// (`.help`) and the explicit `accessibilityLabel` below, same as every
-    /// other compact-mode row in this sidebar.
-    let isCompact: Bool
+    /// other rail-state row in this sidebar.
+    let isRail: Bool
     let action: () -> Void
 
     @State private var hovering = false
@@ -428,7 +663,7 @@ private struct SidebarNavRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.sm) {
-                if isCompact { Spacer(minLength: 0) }
+                if isRail { Spacer(minLength: 0) }
                 Image(systemName: tab.systemImage)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
@@ -438,16 +673,19 @@ private struct SidebarNavRow: View {
                     // `AXButton` in VoiceOver — hiding it lets the row's own
                     // `accessibilityLabel` win instead of competing with it.
                     .accessibilityHidden(true)
-                if !isCompact {
+                if !isRail {
                     Text(tab.title)
-                        .textStyle(Type.bodyStrong)
+                        .textStyle(Type.label)
+                        // A half-step of weight, so selection survives being
+                        // read at a glance without the row needing more colour.
+                        .fontWeight(isSelected ? .semibold : .medium)
                 }
                 Spacer(minLength: 0)
                 if badge > 0 {
                     // A plain dot when compact — a full `CountPill` needs
                     // more width than a 64pt icon column has to spare, and a
                     // pill number with no adjacent label reads as noise.
-                    if isCompact {
+                    if isRail {
                         Circle()
                             .fill(theme.color(\.accentDefault))
                             .frame(width: 6, height: 6)
@@ -464,7 +702,7 @@ private struct SidebarNavRow: View {
             // selection pill crowding both edges with the accent rail hard
             // against the window's. 6pt gives the lifted surface room to read
             // as a distinct object at either width.
-            .padding(.horizontal, isCompact ? Space.sm : Space.lg)
+            .padding(.horizontal, isRail ? Space.xs : Space.sm)
             .padding(.vertical, 7)
             // Selection is a RAISED SURFACE, not a wash of accent colour.
             //
@@ -493,28 +731,254 @@ private struct SidebarNavRow: View {
                 }
             }
             .overlay(alignment: .leading) {
-                // The accent rail only earns its place beside a label. In the
-                // icon-only rail there is no leading edge to hang it off
-                // without it reading as a stray mark, and the lifted surface
-                // already says "selected" on its own there.
-                if isSelected && !isCompact {
+                // Drawn in BOTH states. It used to be suppressed in the rail on
+                // the reasoning that the lifted surface said "selected" on its
+                // own — but the rail is precisely where that is least true: the
+                // label is gone, so a one-rung surface step under a 16pt glyph
+                // is the entire signal. The rail is the only thing left that
+                // says which of eight identical-looking icons you are on.
+                if isSelected {
                     Capsule()
                         .fill(theme.color(\.accentDefault))
-                        .frame(width: 3, height: 15)
-                        .padding(.leading, 3)
+                        .frame(width: 3, height: isRail ? 14 : 15)
+                        .padding(.leading, isRail ? 1 : 3)
                 }
             }
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-        .help(isCompact ? tab.title : "")
+        .help(isRail ? tab.title : "")
         // Set explicitly rather than relying on the label + icon + badge
         // combining on their own: this is the exact control the accessibility
         // tree audit found reading as an unnamed button (see the file's
         // header task notes), so the name is asserted here instead of hoped for.
         .accessibilityLabel(badge > 0 ? "\(tab.title), \(badge) running" : tab.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// The boundary between sidebar and content: a hairline that is also the drag
+/// handle when the sidebar is expanded.
+///
+/// The visible rule stays 1px — a thick grabbable bar would be a permanent
+/// piece of furniture in exchange for an interaction used once a month — while
+/// the hit area is 7pt wide and overhangs the content side, which is the
+/// standard trick for making a hairline grabbable without moving it.
+private struct SidebarEdge: View {
+    @Environment(\.nexusTheme) private var theme
+    let isResizable: Bool
+    /// The sidebar's width right now. Captured at drag start so the gesture's
+    /// cumulative `translation` is applied to a FIXED origin — applying it to
+    /// the live width instead compounds every frame and makes the sidebar fly
+    /// off the edge of the window on a slow drag.
+    let currentWidth: CGFloat
+    let onResize: (CGFloat) -> Void
+    let onReset: () -> Void
+
+    @State private var dragOrigin: CGFloat?
+    @State private var hovering = false
+
+    var body: some View {
+        Rectangle()
+            .fill(theme.hairline)
+            .frame(width: 1)
+            .overlay {
+                if isResizable {
+                    // Wider than the rule it sits on, and drawn clear, so the
+                    // grab area is generous while the seam stays a hairline.
+                    Color.clear
+                        .frame(width: 7)
+                        .contentShape(Rectangle())
+                        .onHover { inside in
+                            hovering = inside
+                            // `push`/`pop` rather than `set`: `set` is undone by
+                            // the next mouse-moved event the window sends, so
+                            // the cursor flickers back to an arrow mid-drag.
+                            if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                        }
+                        .gesture(
+                            DragGesture(minimumDistance: 1)
+                                .onChanged { value in
+                                    let origin = dragOrigin ?? currentWidth
+                                    if dragOrigin == nil { dragOrigin = origin }
+                                    onResize(origin + value.translation.width)
+                                }
+                                .onEnded { _ in dragOrigin = nil }
+                        )
+                        .onTapGesture(count: 2) { onReset() }
+                }
+            }
+            // The seam brightens under the cursor, which is the only signal
+            // that a 1px rule is draggable at all.
+            .overlay {
+                if isResizable && hovering {
+                    Rectangle().fill(theme.color(\.accentDefault).opacity(0.55)).frame(width: 1)
+                }
+            }
+            .animation(Motion.state, value: hovering)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The conversations you might go back to, live from `nexus session list`.
+///
+/// **This is what fills the sidebar's dead bottom** — see `Sidebar`'s own note
+/// for the measurement. It is not decoration to occupy space: recents are the
+/// single most-used navigation in every chat client this competes with, and
+/// they were previously reachable only by going to a whole separate Sessions
+/// screen and scrolling a 1,189-row list.
+///
+/// Capped at six. A sidebar recents list is a shortcut to *the thing you were
+/// just doing*, not a browser — the seventh-most-recent session is what the
+/// Sessions tab is for, and an uncapped list would put the nav above it into a
+/// scroll view that never comes to rest.
+private struct RecentsSection: View {
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(\.nexusTheme) private var theme
+
+    @State private var controller: SessionsController?
+    @State private var isOpening = false
+
+    private static let limit = 6
+
+    private var recents: [NexusSession] {
+        Array((controller?.sessions ?? []).prefix(Self.limit))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            SectionHeader(
+                "Recent",
+                accessory: recents.isEmpty ? nil : AnyView(
+                    Button("All") { workspace.tab = .sessions }
+                        .buttonStyle(.plain)
+                        .textStyle(Type.micro)
+                        .foregroundStyle(theme.color(\.textMuted))
+                        .help("Open the Sessions screen")
+                )
+            )
+            .padding(.horizontal, Space.sm)
+            .padding(.bottom, Space.xs)
+
+            if recents.isEmpty {
+                // A quiet line, never a `HeroEmptyState` — this is a 200pt
+                // column, and the shared hero composition is sized for a whole
+                // screen. Says what will appear rather than that nothing has.
+                Text(controller?.isLoading == true ? "Loading…" : "Conversations you start will appear here.")
+                    .textStyle(Type.caption)
+                    .foregroundStyle(theme.color(\.textMuted))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Space.sm)
+                    .padding(.vertical, Space.xs)
+            } else {
+                ForEach(recents) { session in
+                    RecentRow(session: session, action: { open(session) })
+                }
+            }
+        }
+        .disabled(isOpening)
+        // Same key as every other project-scoped controller in the app
+        // (`ChatTab`, `ConversationView`): the session store is per-directory,
+        // so pointing the window at another checkout must reload this list
+        // rather than leave another project's conversations on screen.
+        .task(id: workspace.projectDirectory) {
+            guard let binary = workspace.binary else {
+                controller = nil
+                return
+            }
+            let loaded = SessionsController(
+                client: NexusClient(binary: binary),
+                workingDirectory: workspace.projectDirectory
+            )
+            controller = loaded
+            await loaded.refresh()
+        }
+    }
+
+    /// Reopens the session AND re-renders its recorded transcript — the same
+    /// two steps `SessionsView.replay` takes, deliberately, rather than the
+    /// bare `resume` that leaves the transcript empty. Clicking a named
+    /// conversation and landing on a blank screen would read as data loss.
+    private func open(_ session: NexusSession) {
+        guard let conversation = workspace.conversation, let controller else { return }
+        isOpening = true
+        workspace.tab = .chat
+        conversation.reopen(sessionId: session.sessionId, provider: session.provider, model: session.model)
+        Task {
+            let events = await controller.replayEvents(for: session.sessionId)
+            conversation.ingest(events)
+            isOpening = false
+        }
+    }
+}
+
+/// One recent conversation: what it was called, who answered, how long ago.
+private struct RecentRow: View {
+    @Environment(\.nexusTheme) private var theme
+    let session: NexusSession
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    /// Sessions are usually unnamed, and `s_b27e96a9-9f97-…` is not a title.
+    /// The short id is what the Sessions screen already shows and what the CLI
+    /// accepts back, so it is at least a handle the user can act on — but it is
+    /// rendered as mono metadata, not as prose pretending to be a name.
+    private var label: String {
+        session.name ?? String(session.sessionId.prefix(9))
+    }
+
+    private var isNamed: Bool { session.name != nil }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.sm) {
+                ProviderDot(provider: session.provider, size: 5)
+                Text(label)
+                    .textStyle(isNamed ? Type.body : Type.monoMicro)
+                    .foregroundStyle(theme.color(hovering ? \.textPrimary : \.textSecondary))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: Space.xs)
+                if let updated = session.updatedAt {
+                    Text(RelativeTime.short(updated))
+                        .textStyle(Type.micro)
+                        .foregroundStyle(theme.color(\.textMuted))
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, 5)
+            .background(
+                theme.color(\.surfaceOverlay).opacity(hovering ? 0.7 : 0),
+                in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Motion.state, value: hovering)
+        .help(session.model.map { "\(label) — \($0)" } ?? label)
+        .accessibilityLabel("Conversation \(label)")
+    }
+}
+
+/// Compact elapsed-time labels for a 200pt column.
+///
+/// `SessionsView` renders "1 hr, 39 min" via a full `DateComponentsFormatter`,
+/// which is right for a table with a whole column to spend and wrong here — at
+/// this width it would truncate before the number. This is the same fact at
+/// glance length: `2m`, `3h`, `5d`.
+enum RelativeTime {
+    static func short(_ date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        switch seconds {
+        case ..<60: return "now"
+        case ..<3_600: return "\(Int(seconds / 60))m"
+        case ..<86_400: return "\(Int(seconds / 3_600))h"
+        case ..<604_800: return "\(Int(seconds / 86_400))d"
+        default: return "\(Int(seconds / 604_800))w"
+        }
     }
 }
 
@@ -570,18 +1034,12 @@ struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: Space.md) {
-            HStack(spacing: 6) {
-                Image(systemName: "hexagon.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(theme.color(\.accentDefault))
-                    .accessibilityHidden(true)
-                Text("NexusCode")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(theme.color(\.textPrimary))
-            }
-
+            // No wordmark here. The sidebar header already carries it, in this
+            // same window, and so do the Dock icon and the menu bar — a third
+            // instance 800pt away from the second was spending the bar's most
+            // valuable position (leading edge, read first) on the one fact the
+            // user is least likely to need.
             if let omcLabel {
-                StatusDivider()
                 HStack(spacing: 6) {
                     StatusDot(isRunning: workspace.omc?.isWatching == true, isFailed: false, size: 6, animate: false)
                     Text(omcLabel)
@@ -591,7 +1049,7 @@ struct StatusBar: View {
             }
 
             if let session = workspace.conversation?.view.session {
-                StatusDivider()
+                if omcLabel != nil { StatusDivider() }
                 Metric(label: "model", value: session.model, emphasis: true)
             }
 
@@ -712,6 +1170,21 @@ struct SettingsView: View {
     /// leaving it on to silently swap the pick back to its pair the instant
     /// this returns; if it agrees, following (if already on) keeps working
     /// exactly as before untouched.
+    private var darkThemes: [AppTheme] { AppTheme.all.filter(\.isDark) }
+    private var lightThemes: [AppTheme] { AppTheme.all.filter { !$0.isDark } }
+
+    private func themeGrid(_ themes: [AppTheme]) -> some View {
+        LazyVGrid(columns: columns, spacing: Space.md) {
+            ForEach(themes) { candidate in
+                ThemeSwatchButton(
+                    theme: candidate,
+                    isSelected: candidate.id == workspace.themeId,
+                    action: { selectTheme(candidate) }
+                )
+            }
+        }
+    }
+
     private func selectTheme(_ candidate: AppTheme) {
         workspace.themeId = candidate.id
         let systemWantsDark = systemScheme == .dark
@@ -732,29 +1205,30 @@ struct SettingsView: View {
             // `PageHeader`, not a hand-rolled title+subtitle stack — this was
             // the pattern every other screen's page title now shares
             // (`DESIGN.md`'s "one Type.title moment per screen").
-            PageHeader(
-                "Settings",
-                subtitle: "\(AppTheme.all.count) themes designed for this window — material, elevation and gradient a terminal palette can't express."
-            )
+            PageHeader("Settings")
         } content: {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     matchSystemAppearanceRow
 
-                    LazyVGrid(columns: columns, spacing: Space.md) {
-                        ForEach(AppTheme.all) { candidate in
-                            ThemeSwatchButton(
-                                theme: candidate,
-                                isSelected: candidate.id == workspace.themeId,
-                                action: { selectTheme(candidate) }
-                            )
-                        }
-                    }
+                    // Split by appearance rather than shown as one grid of
+                    // twelve. A theme picker is answered in two steps — "I want
+                    // a dark one" and then "which dark one" — and a single
+                    // twelve-up grid forces the eye to do the first step by
+                    // scanning swatch brightness. Two labelled groups answer it
+                    // before the user starts looking.
+                    SectionHeader("Dark", subtitle: "\(darkThemes.count) themes")
+                    themeGrid(darkThemes)
+
+                    SectionHeader("Light", subtitle: "\(lightThemes.count) themes")
+                        .padding(.top, Space.md)
+                    themeGrid(lightThemes)
 
                     SectionHeader(
                         "Terminal palettes",
                         subtitle: "The \(NexusTheme.all.count) palettes the CLI ships — same colours, rendered flat (no material, no elevation). Kept selectable for parity with the terminal, not because they suit a window."
                     )
+                    .padding(.top, Space.md)
 
                     LazyVGrid(columns: columns, spacing: Space.md) {
                         // Routed through the same bridge the environment itself
@@ -820,7 +1294,7 @@ struct SettingsView: View {
                 Text("Match system appearance")
                     .textStyle(Type.bodyStrong)
                     .foregroundStyle(theme.color(\.textPrimary))
-                Text("A paired theme (e.g. Meridian ↔ Studio) follows Light/Dark Mode. Off pins exactly the theme picked below.")
+                Text("A paired theme (e.g. Storm ↔ Porcelain) follows Light/Dark Mode. Off pins exactly the theme picked below.")
                     .textStyle(Type.caption)
                     .foregroundStyle(theme.color(\.textMuted))
             }
@@ -875,6 +1349,28 @@ struct ThemeSwatch: View {
                         .foregroundStyle(theme.color(\.accentDefault))
                 }
             }
+
+            // The surface ladder, as four butted blocks.
+            //
+            // The chips above say what the theme's ACCENTS are, which is what
+            // the old swatch showed and only ever answered "is it blue or
+            // orange". The ladder is the thing that actually decides whether a
+            // theme reads as flat — it is the property this catalogue was
+            // rebuilt around — and four adjacent fills is the only honest way to
+            // show whether its steps are visible before you pick it.
+            HStack(spacing: 0) {
+                ForEach(0...3, id: \.self) { level in
+                    Rectangle().fill(theme.surface(level))
+                }
+            }
+            .frame(height: 12)
+            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+            }
+            .accessibilityHidden(true)
+
             VStack(alignment: .leading, spacing: 1) {
                 Text(theme.name)
                     .textStyle(Type.bodyStrong)

@@ -79,7 +79,7 @@ private struct AuthContent: View {
             // This screen had no page title at all before — straight from
             // the window background into "Signed in"/"Available" subsection
             // labels, so its own name never appeared anywhere on it.
-            PageHeader("Accounts", subtitle: "Provider sign-in — nexus auth status/login")
+            PageHeader("Accounts")
 
             // Dismissible: whatever provider list is already loaded below
             // (or the empty/loading state) stays exactly as valid either
@@ -253,7 +253,7 @@ private struct ProviderRow: View {
     }
 
     var body: some View {
-        Card {
+        Card(fill: true) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 HStack(alignment: .top, spacing: Space.md) {
                     // Identity at rest, status while working. This row IS

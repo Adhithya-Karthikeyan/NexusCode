@@ -74,7 +74,7 @@ struct AgentsView: View {
             // nothing running yet showed no "Agents" identity anywhere on the
             // screen at all, just the hero empty state one region down.
             VStack(alignment: .leading, spacing: 0) {
-                PageHeader("Agents", subtitle: "Provider lanes, agent runs, and OMC subagents — everything working right now")
+                PageHeader("Agents")
 
                 if hasReadout {
                     HeaderStrip(lanes: lanes, roleRuns: roleRuns, omcAgents: omcAgents, hud: hud, conversation: workspace.conversation)

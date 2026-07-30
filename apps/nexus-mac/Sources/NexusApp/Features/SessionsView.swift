@@ -85,7 +85,6 @@ struct SessionsView: View {
     private var headerBar: some View {
         PageHeader(
             "Sessions",
-            subtitle: "Past conversations — nexus session list",
             accessory: AnyView(
                 HStack(spacing: Space.sm) {
                     if let controller {

@@ -1,0 +1,30 @@
+[
+  { "id": "mock", "kind": "mock", "available": true, "isTestFixture": true },
+  {
+    "id": "groq",
+    "kind": "openai-compat",
+    "available": true,
+    "detail": "needs key: GROQ_API_KEY",
+    "needsKey": true
+  },
+  {
+    "id": "lmstudio",
+    "kind": "openai-compat",
+    "available": true,
+    "detail": "local — no key needed (start the server to use)",
+    "needsKey": false
+  },
+  {
+    "id": "claude-code",
+    "kind": "subprocess",
+    "available": true,
+    "detail": "claude on PATH"
+  },
+  {
+    "id": "broken-provider",
+    "kind": "openai-compat",
+    "available": false,
+    "detail": "provider package not loadable: Cannot find module 'x'"
+  },
+  { "kind": "mystery-provider-missing-its-id", "available": true }
+]

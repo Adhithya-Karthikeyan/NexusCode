@@ -2,13 +2,27 @@ import SwiftUI
 import AppKit
 import NexusKit
 
-/// The comfortable reading measure the transcript AND the composer are both
-/// capped to. One shared constant, not two repeated `660`s: the composer sits
-/// directly beneath the transcript column and IS where the next message in
-/// it will appear, so drifting the two independently is how you get a
-/// composer floating ~165pt away from the text it's replying to — measured,
-/// not hypothetical, at the default 1280pt window before this existed.
-private let readingColumnWidth: CGFloat = 720
+/// The INK measure — the width prose actually occupies, before any gutter.
+///
+/// One shared constant, not two repeated `660`s: the composer sits directly
+/// beneath the transcript column and IS where the next message in it will
+/// appear, so drifting the two independently is how you get a composer
+/// floating ~165pt away from the text it's replying to — measured, not
+/// hypothetical, at the default 1280pt window before this existed.
+///
+/// **What changed, and why it is the whole fix for the alignment bug.** Both
+/// surfaces used to cap to 720 but applied the gutter on OPPOSITE sides of
+/// that cap: the transcript padded INSIDE it (720 box, 680 of ink), the
+/// composer padded OUTSIDE it (720 card, ink starting 20pt further in). Same
+/// number, two different meanings — so the composer card overhung the column
+/// it feeds by exactly one gutter on each side. Naming the ink measure rather
+/// than the box is what makes the ordering un-get-wrong-able: you cap
+/// `textColumnWidth` and THEN pad `columnGutter`, in that order, everywhere.
+/// The card's leading edge then lands exactly on the prose's first ink.
+private let textColumnWidth: CGFloat = 680
+
+/// The gutter padded around `textColumnWidth`. Applied AFTER the cap, always.
+private let columnGutter: CGFloat = Space.xl
 
 /// The identity `ConversationView`'s effort `.task(id:)` re-fires on.
 /// Every other `.task(id:)` in this app keys on a single `Equatable` value
@@ -38,6 +52,45 @@ struct ConversationView: View {
     @State private var draft = ""
     @State private var showsReasoning = false
     @FocusState private var composerFocused: Bool
+
+    // Clearing destroys an on-screen conversation with no undo, same class of
+    // action as "Delete task" (`TasksView.swift`) and "Sign out" (`AuthView.
+    // swift`) — both gated behind a `confirmationDialog` rather than firing on
+    // tap, so this matches instead of being a fourth, ungated dialect. Lives
+    // on the view rather than the footer because the footer's overflow menu is
+    // rebuilt on every draft keystroke; a `@State` flag owned there would be
+    // torn down mid-confirmation.
+    @State private var confirmingClear = false
+
+    // MARK: - Auto-scroll lock (§6.7)
+    //
+    // The transcript used to call `scrollTo(anchor, .bottom)` on EVERY event
+    // with no check for where the user actually was, which made reading
+    // scrollback during a long turn impossible — every delta yanked the view
+    // back to the tail. These three values are the whole lock: follow the tail
+    // only while the user is already at it, otherwise stop dead and count what
+    // they have not seen.
+
+    /// Distance in points from the bottom of the scrollable content, measured
+    /// by `transcriptMetrics` from geometry read in `.background`/`.overlay`
+    /// position only — those never influence the size of what they measure, so
+    /// this cannot become a layout feedback loop.
+    @State private var distanceFromBottom: CGFloat = 0
+    /// `eventCount` as of the last time the tail was actually on screen — the
+    /// baseline `unseenCount` counts up from.
+    @State private var seenEventCount = 0
+    /// Turn/receipt ids in render order, kept so ⌘↑/⌘↓ can step between turn
+    /// boundaries without re-deriving the timeline on every keypress.
+    @State private var anchorIds: [String] = []
+    /// Which anchor ⌘↑/⌘↓ last moved to. `nil` = the caret is at the tail.
+    @State private var focusedAnchor: String?
+
+    /// Within this many points of the bottom, the transcript is considered
+    /// "at the tail" and keeps following. 120pt is a little under three lines
+    /// of `Type.prose` — close enough that a user who scrolled up by one
+    /// wheel-notch still gets the tail-follow they expect, far enough that a
+    /// deliberate scroll into history is never overridden.
+    private static let tailLockThreshold: CGFloat = 120
 
     // MARK: - Role picker
     //
@@ -82,8 +135,9 @@ struct ConversationView: View {
     /// Whether EVERY model in `models` is an unconfirmed `.fallback` guess
     /// rather than a live-probed catalog — a fact about the whole list, set
     /// once by `ChatTab.loadModels` from the raw `NexusModel.isVerified`
-    /// before it gets erased mapping down to `PickerOption`. See
-    /// `ControlStrip.modelListVerificationCaption`.
+    /// before it gets erased mapping down to `PickerOption`. Surfaced as one
+    /// neutral caption inside `ProviderModelPicker`'s model section — see
+    /// there for why this is one marker on the SET, never one per row.
     var modelsAreUnverified = false
     var onLoadModels: (String) -> Void = { _ in }
 
@@ -134,20 +188,23 @@ struct ConversationView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            ControlStrip(
-                controller: controller,
-                showsReasoning: $showsReasoning,
-                providers: providers,
-                models: models,
-                isLoadingModels: isLoadingModels,
-                modelsAreUnverified: modelsAreUnverified,
-                onLoadModels: onLoadModels,
-                rolesController: rolesController,
-                effortController: effortController,
-                authController: authController
-            )
-        }
+            // The 71pt control band that used to sit here is gone (§6.5). It
+            // put eleven controls roughly 700pt above the field they
+            // configure, with ~270pt of dead air across the middle of the row
+            // and a full-window amber caption underneath. Every one of those
+            // controls now sits in `ComposerFooter`, directly beneath the text
+            // field they act on — configuration belongs next to the thing it
+            // configures, not at the opposite end of the window.
+            //
+            // Deleting the band also deletes `ViewThatFits`/`singleRow`/
+            // `twoRowStack`. That fallback never worked: `singleRow` contained
+            // a `Spacer(minLength:)`, which is infinitely flexible, so it
+            // reported that it fit at ANY width and `twoRowStack` could never
+            // be chosen — the two-row path was unreachable code defended by a
+            // long comment about a measurement it never actually performed.
+            // A single flat row of uniformly-sized controls needs no such
+            // decision in the first place.
+            //
             // A sheet, deliberately: a blocked tool call is modal in fact — the
             // turn is genuinely halted waiting on this answer — so making it
             // modal in the UI matches reality rather than letting the user keep
@@ -228,30 +285,21 @@ struct ConversationView: View {
             Spacer(minLength: Space.xl)
             emptyState
             composerCard
-                .frame(maxWidth: readingColumnWidth)
+                .frame(maxWidth: textColumnWidth)
                 .padding(.top, Space.section)
             composerFootnote
-                .frame(maxWidth: readingColumnWidth)
+                .frame(maxWidth: textColumnWidth)
                 .padding(.top, Space.lg)
             Spacer(minLength: Space.xl)
         }
-        .padding(.horizontal, Space.xl)
+        .padding(.horizontal, columnGutter)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
     private var transcript: some View {
         if controller.mode.isMultiLane && laneOrder.count > 1 {
-            // Fan-out: one column per lane, so answers are compared, not scrolled.
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: Space.md) {
-                    ForEach(laneOrder) { lane in
-                        LaneColumn(lane: lane, showsReasoning: showsReasoning)
-                            .frame(width: 400)
-                    }
-                }
-                .padding(Space.lg)
-            }
+            compareTranscript
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -265,7 +313,21 @@ struct ConversationView: View {
                             ForEach(controller.view.timeline(forLane: laneId)) { entry in
                                 switch entry {
                                 case .turn(let turn, let isLive):
-                                    TurnView(turn: turn, showsReasoning: showsReasoning, isStreaming: isLive)
+                                    TurnView(
+                                        turn: turn,
+                                        showsReasoning: showsReasoning,
+                                        isStreaming: isLive,
+                                        // Only the LIVE turn can carry this:
+                                        // `lastUsage`/`currentTurnCost` are
+                                        // conversation-level counters that
+                                        // describe whatever ran most recently,
+                                        // so hanging them on a settled turn
+                                        // would relabel old history with new
+                                        // numbers. See §6.11 in the report for
+                                        // the per-turn version this is waiting
+                                        // on.
+                                        liveUsage: isLive ? controller.view : nil
+                                    )
                                         .id(turn.id)
                                         .transition(.opacity.combined(with: .offset(y: Motion.enterOffset)))
                                 case .providerSwitch(let receipt):
@@ -274,44 +336,256 @@ struct ConversationView: View {
                                 }
                             }
                         }
+
+                        // Diagnostics are HISTORY, so they live at the end of
+                        // the transcript rather than inside the composer band
+                        // (§6.6). Gated on `streaming` inside the band, they
+                        // translated the text field down the instant a turn
+                        // started and back up when it ended — while the user
+                        // was typing into it.
+                        if !controller.presentedDiagnostics.isEmpty {
+                            DiagnosticsStrip(notes: controller.presentedDiagnostics)
+                                .id(Self.diagnosticsAnchorId)
+                        }
                     }
-                    .padding(.horizontal, Space.xl)
+                    // Cap the INK, then pad the gutter — the same two
+                    // statements in the same order as the composer below. See
+                    // `textColumnWidth`.
+                    .frame(maxWidth: textColumnWidth, alignment: .leading)
+                    .padding(.horizontal, columnGutter)
                     .padding(.top, Space.section)
                     .padding(.bottom, Space.xxl)
-                    // Capped and centred instead of stretched edge to edge.
-                    // 720pt, raised from 660: measured against the tools this
-                    // competes with, Claude and ChatGPT both run ~768 and
-                    // Perplexity ~720, and 660 at 15pt prose was landing under
-                    // 60 characters a line — short enough that paragraphs
-                    // fragment and the column looks starved on a wide window.
-                    .frame(maxWidth: readingColumnWidth, alignment: .leading)
                     .frame(maxWidth: .infinity)
+                    .background { transcriptContentProbe }
+                }
+                .coordinateSpace(name: Self.transcriptSpace)
+                .background { transcriptViewportProbe }
+                .onPreferenceChange(TranscriptMetricsKey.self) { metrics in
+                    distanceFromBottom = metrics.distanceFromBottom
+                    // Reaching the tail is what marks everything seen — including
+                    // when the user scrolls back down by hand, not just when the
+                    // pill is clicked.
+                    if metrics.distanceFromBottom <= Self.tailLockThreshold {
+                        seenEventCount = controller.view.eventCount
+                    }
                 }
                 .onChange(of: controller.view.eventCount) {
-                    // Anchor on the turn's own (deterministic) id rather than a
-                    // fixed "live" id — that id stops existing the instant a turn
-                    // finalizes, which would silently stop the auto-scroll on
-                    // exactly the event (`done`) that most needs it.
-                    guard let anchor = scrollAnchor else { return }
+                    anchorIds = currentAnchorIds
+                    // The lock. Anchor on the turn's own (deterministic) id
+                    // rather than a fixed "live" id — that id stops existing
+                    // the instant a turn finalizes, which would silently stop
+                    // the auto-scroll on exactly the event (`done`) that most
+                    // needs it.
+                    guard isTailPinned, let anchor = scrollAnchor else { return }
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(anchor, anchor: .bottom)
                     }
+                    seenEventCount = controller.view.eventCount
                 }
+                .onAppear {
+                    anchorIds = currentAnchorIds
+                    seenEventCount = controller.view.eventCount
+                }
+                // Zero-sized and invisible, but a real part of the hierarchy —
+                // that is what puts ⌘↑/⌘↓ on the responder chain. A bare
+                // `.keyboardShortcut` needs a `Button` to hang off.
+                .background { turnNavigationShortcuts(proxy: proxy) }
+                .overlay(alignment: .bottom) { newMessagesPill(proxy: proxy) }
             }
         }
     }
 
+    /// The id given to the trailing diagnostics block so `scrollAnchor` can
+    /// still find the true bottom of the transcript once it is present.
+    private static let diagnosticsAnchorId = "transcript-diagnostics"
+
+    private static let transcriptSpace = "transcript"
+
+    /// Whether the transcript should keep following the tail. True while the
+    /// user is at (or within `tailLockThreshold` of) the bottom.
+    private var isTailPinned: Bool { distanceFromBottom <= Self.tailLockThreshold }
+
+    /// Events that have arrived since the tail was last on screen.
+    private var unseenCount: Int { max(0, controller.view.eventCount - seenEventCount) }
+
     private var scrollAnchor: String? {
+        if !controller.presentedDiagnostics.isEmpty { return Self.diagnosticsAnchorId }
         guard let laneId = visibleLaneIds.last else { return nil }
         return controller.view.timeline(forLane: laneId).last?.id
     }
 
-    private static let suggestions: [(icon: String, text: String)] = [
-        ("text.book.closed", "Explain this codebase"),
-        ("arrow.triangle.branch", "Review my staged diff"),
-        ("arrow.left.arrow.right", "Compare two models on one prompt"),
-        ("ladybug", "Find the bug in the last commit"),
-    ]
+    /// Every scroll anchor in render order — turn ids and switch-receipt ids
+    /// interleaved exactly as the transcript draws them, so ⌘↑/⌘↓ step through
+    /// what the eye sees rather than through turns only.
+    private var currentAnchorIds: [String] {
+        visibleLaneIds.flatMap { controller.view.timeline(forLane: $0).map(\.id) }
+    }
+
+    /// Measures the scrollable content: its height, and how far its top has
+    /// been pushed above the viewport. Lives in `.background`, so it takes its
+    /// size FROM the content and can never contribute to it.
+    private var transcriptContentProbe: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: TranscriptMetricsKey.self,
+                value: TranscriptMetrics(
+                    contentHeight: geo.size.height,
+                    offset: -geo.frame(in: .named(Self.transcriptSpace)).minY,
+                    viewportHeight: 0
+                )
+            )
+        }
+    }
+
+    /// Measures the viewport. Separate from the content probe because the two
+    /// sizes come from different levels of the hierarchy; `TranscriptMetrics`
+    /// merges them in its `reduce`.
+    private var transcriptViewportProbe: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: TranscriptMetricsKey.self,
+                value: TranscriptMetrics(contentHeight: 0, offset: 0, viewportHeight: geo.size.height)
+            )
+        }
+    }
+
+    /// `↓ N new` — the counterpart to the lock. Once the transcript stops
+    /// following the tail, something has to say that the conversation is still
+    /// moving; without it, a detached reader cannot tell a finished turn from
+    /// one still streaming off-screen.
+    @ViewBuilder
+    private func newMessagesPill(proxy: ScrollViewProxy) -> some View {
+        if !isTailPinned && unseenCount > 0 {
+            Button {
+                guard let anchor = scrollAnchor else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(anchor, anchor: .bottom)
+                }
+                seenEventCount = controller.view.eventCount
+            } label: {
+                HStack(spacing: Space.xs) {
+                    Image(systemName: "arrow.down")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("\(unseenCount) new")
+                }
+            }
+            .buttonStyle(SoftButton(tone: .accent, size: .compact))
+            .padding(.bottom, Space.md)
+            .transition(.opacity.combined(with: .offset(y: Motion.enterOffset)))
+            .animation(Motion.state, value: unseenCount)
+        }
+    }
+
+    /// ⌘↑ / ⌘↓ — step to the previous/next turn boundary. Stable per-turn ids
+    /// already exist, so this needs no new identity scheme.
+    private func turnNavigationShortcuts(proxy: ScrollViewProxy) -> some View {
+        VStack(spacing: 0) {
+            Button("Previous turn") { stepAnchor(-1, proxy: proxy) }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+            Button("Next turn") { stepAnchor(1, proxy: proxy) }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+
+    private func stepAnchor(_ delta: Int, proxy: ScrollViewProxy) {
+        guard !anchorIds.isEmpty else { return }
+        // With no anchor focused the caret is conceptually at the tail, so ⌘↑
+        // starts from the end and ⌘↓ has nowhere further to go.
+        let current = focusedAnchor.flatMap { anchorIds.firstIndex(of: $0) } ?? anchorIds.count
+        let next = min(max(current + delta, 0), anchorIds.count - 1)
+        let id = anchorIds[next]
+        focusedAnchor = id
+        withAnimation(.easeOut(duration: 0.18)) {
+            proxy.scrollTo(id, anchor: .top)
+        }
+    }
+
+    // MARK: - Compare / Race (§6.13)
+
+    /// Fan-out: one column per lane, so answers are compared, not scrolled.
+    ///
+    /// The prompt is hoisted OUT of the lanes and shown once above them. Every
+    /// lane in a fan-out run answers the identical prompt by construction, so
+    /// repeating it per column spent the scarcest thing on this screen — column
+    /// width — on saying the same sentence three times.
+    private var comparePrompt: String? {
+        laneOrder.lazy.compactMap { $0.live?.prompt ?? $0.finalized.last?.prompt }.first
+    }
+
+    private var compareTranscript: some View {
+        VStack(alignment: .leading, spacing: Space.lg) {
+            if let comparePrompt {
+                HStack(alignment: .top, spacing: Space.sm) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.color(\.textMuted))
+                        .accessibilityHidden(true)
+                    Text(comparePrompt)
+                        .textStyle(Type.prose)
+                        .foregroundStyle(theme.color(\.textPrimary))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, columnGutter)
+                .padding(.top, Space.lg)
+            }
+
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: Space.md) {
+                    ForEach(laneOrder) { lane in
+                        LaneColumn(lane: lane, showsReasoning: showsReasoning)
+                            // Was a flat `width: 400`, which at 13pt markdown
+                            // gave every Compare answer ~45 characters a line —
+                            // a starved column for the one screen whose entire
+                            // purpose is reading several answers carefully. A
+                            // range instead of a fixed width lets 2–3 lanes sit
+                            // comfortably at 1440pt and still fit at 900pt.
+                            .frame(minWidth: 340, idealWidth: 460, maxWidth: 560)
+                    }
+                }
+                .padding(.horizontal, columnGutter)
+                .padding(.bottom, Space.lg)
+            }
+        }
+    }
+
+    /// The four opening suggestions.
+    ///
+    /// Only the Compare one is conditional, and it is conditional on a fact
+    /// this view already holds: `providers` is passed in from `ChatTab`'s live
+    /// `ProvidersController`. Offering "compare anthropic and openai" to
+    /// someone with one backend configured proposes a run that cannot happen,
+    /// and naming two real configured providers is strictly better than naming
+    /// none.
+    ///
+    /// The other three are static, deliberately. §6.14 also asks for "Review
+    /// the 7 staged files", "Explain ⟨largest recently-changed file⟩" and
+    /// "Resume: ⟨last session⟩" — each needs data this view is not given (a
+    /// git status, a file-tree walk, a session list). Guessing at those
+    /// strings without the data behind them would put a number on screen that
+    /// is not true, which is worse than a general prompt. See the report.
+    private var suggestions: [(icon: String, text: String)] {
+        var items: [(icon: String, text: String)] = [
+            ("text.book.closed", "Explain this codebase"),
+            ("arrow.triangle.branch", "Review my staged diff"),
+        ]
+        let configured = providers.filter(\.available).map(\.id)
+        if configured.count >= 2 {
+            // No trailing "on one prompt" here: two real provider ids are
+            // already long, and the pair together overran the card onto a
+            // second line, leaving one suggestion taller than the three beside
+            // it. The mode name carries the rest of the meaning.
+            items.append(("arrow.left.arrow.right", "Compare \(configured[0]) and \(configured[1])"))
+        } else {
+            items.append(("arrow.left.arrow.right", "Compare two models on one prompt"))
+        }
+        items.append(("ladybug", "Find the bug in the last commit"))
+        return items
+    }
 
     private var heroTitle: String {
         switch controller.mode {
@@ -387,7 +661,7 @@ struct ConversationView: View {
         // it read as floating regardless of how much padding surrounded it.
         // A single shared left margin, aligned with the composer directly
         // beneath, is what makes the group read as one deliberate block.
-        .frame(maxWidth: readingColumnWidth, alignment: .leading)
+        .frame(maxWidth: textColumnWidth, alignment: .leading)
     }
 
     /// `nexus ask -p anthropic` — the invocation, trimmed to the part that
@@ -399,10 +673,13 @@ struct ConversationView: View {
         return parts.joined(separator: " ")
     }
 
+    @ViewBuilder
     private func suggestionCard(_ index: Int) -> some View {
-        let suggestion = Self.suggestions[index]
-        return SuggestionCard(icon: suggestion.icon, text: suggestion.text) {
-            fillComposer(with: suggestion.text)
+        let items = suggestions
+        if index < items.count {
+            SuggestionCard(icon: items[index].icon, text: items[index].text) {
+                fillComposer(with: items[index].text)
+            }
         }
     }
 
@@ -441,25 +718,26 @@ struct ConversationView: View {
                 .fill(theme.hairline)
                 .frame(height: 1)
 
-            VStack(alignment: .leading, spacing: Space.lg) {
-                if !controller.presentedDiagnostics.isEmpty {
-                    DiagnosticsStrip(notes: controller.presentedDiagnostics)
-                }
-
-                if controller.view.streaming {
-                    UsageReadout(view: controller.view)
-                }
-
+            // NOTHING conditional lives in this stack any more, and that is
+            // the entire point of §6.6. `DiagnosticsStrip` and `UsageReadout`
+            // both used to sit here gated on `streaming`, so the text field
+            // translated down the instant a turn began and jumped back when it
+            // ended — while the user was typing into it. Both facts moved to
+            // where they belong (diagnostics to the end of the transcript,
+            // usage onto the live turn's own attribution row), which leaves
+            // this band's height a pure function of the draft's line count.
+            VStack(alignment: .leading, spacing: Space.md) {
                 composerCard
                 composerFootnote
             }
-            // Capped to the SAME measure as the transcript above it, so the
-            // composer sits directly under the text it is replying to instead
-            // of drifting into its own gutter. Only the CONTENT is capped; the
-            // band behind it stays full-bleed, which is ordinary chrome.
-            .frame(maxWidth: readingColumnWidth, alignment: .leading)
+            // Cap the INK, then pad the gutter — same two statements in the
+            // same order as the transcript above. This is what puts the card's
+            // leading edge exactly on the prose's first ink instead of one
+            // gutter outside it. Only the CONTENT is capped; the band behind
+            // it stays full-bleed, which is ordinary chrome.
+            .frame(maxWidth: textColumnWidth, alignment: .leading)
+            .padding(.horizontal, columnGutter)
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, Space.xl)
             .padding(.top, Space.lg)
             .padding(.bottom, Space.lg)
             .background(theme.surface(1))
@@ -505,7 +783,7 @@ struct ConversationView: View {
     /// perfectly flat (Basalt, Vantage — no material anywhere, by design)
     /// gets exactly the plain fill this already was.
     private var composerCard: some View {
-        HStack(alignment: .bottom, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.md) {
             // **Cannot be driven via the accessibility API — verified, not a
             // defect. Do not re-investigate this.** Setting this field's
             // `kAXValueAttribute` via `AXUIElementSetAttributeValue` updates
@@ -546,7 +824,12 @@ struct ConversationView: View {
             // this.
             TextField("Message NexusCode…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .lineLimit(1...10)
+                // Was `1...10`. A vertical-axis `TextField` grows to its line
+                // ceiling and then scrolls internally, so this number IS the
+                // growth cap: 8 lines of `Type.prose` (15pt on 5.5pt extra
+                // leading) is ~180pt, past which the composer would start
+                // taking real height from the transcript it is replying to.
+                .lineLimit(1...Self.composerMaxLines)
                 // 15pt, matching the transcript's own prose: what you type
                 // here becomes a turn in that column, and typing at 13pt into
                 // a field whose output renders at 15pt is a seam the eye
@@ -556,18 +839,40 @@ struct ConversationView: View {
                 .focused($composerFocused)
                 .onSubmit(send)
 
-            composerButton
+            ComposerFooter(
+                controller: controller,
+                showsReasoning: $showsReasoning,
+                confirmingClear: $confirmingClear,
+                providers: providers,
+                models: models,
+                isLoadingModels: isLoadingModels,
+                modelsAreUnverified: modelsAreUnverified,
+                onLoadModels: onLoadModels,
+                rolesController: rolesController,
+                effortController: effortController,
+                authController: authController,
+                canSend: canSend,
+                onSend: send
+            )
         }
         // Substantially taller than before. The composer is the one control
         // the whole screen exists to serve, and at 6pt vertical padding it
         // read as an afterthought strip below a huge empty canvas. This is
         // the single most-used target in the app and now has the presence to
         // match.
-        .padding(.horizontal, Space.xl)
-        .padding(.vertical, Space.lg + 2)
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.lg)
         .background {
             themedFill(
-                theme.color(\.surfaceRaised),
+                // `surface(2)`, not the `surfaceRaised` token. Measured, the
+                // card sat at 1.012:1 against the band behind it — a delta of
+                // two values in 255 per channel, which is not a step anyone
+                // can see. Going through the ladder accessor puts it a real
+                // rung above the canvas and keeps it there when the ladder is
+                // re-derived, instead of pinning it to one token's current
+                // value. This is a solid fill: the gradient scrim was tried
+                // here twice and both attempts are recorded in `composer`.
+                theme.surface(2),
                 treatment: theme.materials.composer,
                 in: Rectangle(),
                 isDark: theme.isDark
@@ -602,27 +907,9 @@ struct ConversationView: View {
         .animation(.easeOut(duration: 0.15), value: composerFocused)
     }
 
-    @ViewBuilder
-    private var composerButton: some View {
-        if controller.isRunning {
-            Button(action: controller.cancel) {
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 26, height: 26)
-            }
-            .buttonStyle(SoftButton(tone: .danger, size: .compact))
-            .help("Stop the run (⌘.)")
-        } else {
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(width: 26, height: 26)
-            }
-            .buttonStyle(SoftButton(tone: canSend ? .accent : .neutral, size: .compact))
-            .disabled(!canSend)
-            .help("Send (⏎)")
-        }
-    }
+    /// The composer's growth ceiling, in lines — see the `.lineLimit` call
+    /// above for why this number is the cap rather than a hint.
+    private static let composerMaxLines = 8
 
     private var canSend: Bool {
         controller.canSubmit && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -632,8 +919,8 @@ struct ConversationView: View {
         // No special-casing here: this is the exact same array the real spawn
         // builds from (`plannedCommand`), not a second copy that can drift
         // from it — including `--effort`, which only appears when
-        // `controller.effort` was explicitly set via the control strip's
-        // effort picker (see `runConfigGroup`'s doc); otherwise the
+        // `controller.effort` was explicitly set via the composer footer's
+        // effort picker (see `ComposerFooter.effortPicker`); otherwise the
         // provider's own configured default governs, exactly as this
         // preview shows.
         let args = controller.plannedCommand(for: draft.isEmpty ? "…" : draft).arguments
@@ -649,44 +936,41 @@ struct ConversationView: View {
     }
 }
 
-/// Mode, provider/model or backends, reasoning effort, the approval
-/// indicator, and the reasoning-TRACES toggle — grouped by what they
-/// actually MEAN, not just placed left to right in declaration order.
+/// Every control that configures the next run, on one flat row directly
+/// beneath the field it configures.
 ///
-/// Four categories, in this order: what the run IS (`ModePicker`), what
-/// answers it (provider/model, or backend chips in Compare/Race), how hard
-/// it reasons (`effortPicker`, single-lane only), and what it is allowed to
-/// do (`approvalControl`). The effort picker is a deliberate RE-addition —
-/// an earlier `EffortPicker` here was removed because it offered a fixed
-/// four-value scale (`off`/`low`/`medium`/`high`) that fought whatever the
-/// owner had already configured at the provider level (codex's
-/// `model_reasoning_effort` in particular). This one is different in the way
-/// that matters: it is built from `nexus effort <provider>`'s live,
-/// per-provider probe (`EffortCapability`, `Effort.swift` — real scales,
-/// e.g. claude-code's seven levels, not a guessed universal one) and it
-/// NEVER auto-selects a value — see `ConversationController.effort`'s doc —
-/// so an untouched picker still leaves the provider's own default fully in
-/// control, exactly like before this control existed. `GroupDivider`
-/// hairlines make the grouping visible instead of leaving differently-shaped
-/// controls to read as "placed" rather than designed. Session/reasoning-
-/// traces/clear are deliberately NOT part of that sequence — they are
-/// utility actions on the conversation as a whole, not part of configuring
-/// the next run, so they stay a separate trailing tray.
+/// This replaces `ControlStrip`, a 71pt band pinned to the TOP of the window.
+/// Three things were wrong with that arrangement and all three are structural
+/// rather than cosmetic. The controls sat roughly 700pt above the text field
+/// whose behaviour they decide, so the two never appeared in one glance. The
+/// row was `[run config] … Spacer … [utility tray]`, which at any real window
+/// width left ~270pt of empty band across the middle. And its two failure
+/// captions rendered full-width underneath, so a note about ONE picker became
+/// a banner across the entire window.
 ///
-/// `ViewThatFits` (not a hand-picked width breakpoint) decides whether that
-/// whole sequence fits one row or needs two: a real measurement at this
-/// file's required-clean width (900pt, `NexusApp.swift`'s `minWidth`) found
-/// the leading run-config cluster alone needing ~636pt against ~345pt
-/// available there once the trailing tray and its `Spacer` claimed the
-/// rest — which pushed the provider and model pickers behind a horizontal
-/// scroll with no visible indication they existed at all. Wrapping the same
-/// controls onto a second line at that width keeps every one of them
-/// visible without requiring the user to discover a hidden scroll; a scroll
-/// INDICATOR alone would only have advertised the defect, not fixed it.
-struct ControlStrip: View {
+/// The categories the old strip's doc comment named are still right — what the
+/// run IS, what answers it, how hard it reasons, what it is allowed to do —
+/// and they are still in that order here. What changed is that the sequence no
+/// longer needs `GroupDivider` hairlines to be legible, because every control
+/// is now the same height and radius and reads as one row of one kind of
+/// thing. Divider hairlines between differently-shaped controls were
+/// compensating for the shapes not matching in the first place.
+///
+/// **No `ViewThatFits` here, deliberately.** The old strip wrapped its
+/// contents in `ViewThatFits { singleRow; twoRowStack }`, and `singleRow`
+/// contained a `Spacer(minLength:)` — infinitely flexible, so it always
+/// reported that it fit and `twoRowStack` was unreachable at every width. This
+/// row instead compresses in one defined place: the model half of the combined
+/// provider control truncates, exactly as the old `modelPicker` doc already
+/// argued it should ("the long, technical value — this is where truncation
+/// belongs if the strip is tight, never the provider id beside it"). One flat
+/// `HStack` of fixed-height controls also has no nested flexible children for
+/// SwiftUI to re-measure combinatorially.
+struct ComposerFooter: View {
     @Environment(\.nexusTheme) private var theme
     @Bindable var controller: ConversationController
     @Binding var showsReasoning: Bool
+    @Binding var confirmingClear: Bool
     let providers: [PickerOption]
     let models: [PickerOption]
     let isLoadingModels: Bool
@@ -699,78 +983,198 @@ struct ControlStrip: View {
     /// `ConversationView.effortController`'s doc for why this is fetched
     /// per-provider rather than joined off `providers`.
     let effortController: EffortController?
-    /// Backs `effortUnavailableCaption` — every provider's sign-in state
+    /// Backs `effortUnavailableWarning` — every provider's sign-in state
     /// from `nexus auth status`, used to detect the one case this control
     /// must warn about rather than silently offer: anthropic while signed
     /// in via Claude subscription OAuth. See that property's doc.
     let authController: AuthController?
+    let canSend: Bool
+    let onSend: () -> Void
 
-    // Clearing destroys an on-screen conversation with no undo, same class of
-    // action as "Delete task" (`TasksView.swift`) and "Sign out" (`AuthView.
-    // swift`) — both gated behind a `confirmationDialog` rather than firing on
-    // tap, so this matches instead of being a fourth, ungated dialect.
-    @State private var confirmingClear = false
+    /// ONE control height for the entire row. Every control in this file goes
+    /// through it; nothing sets its own vertical padding any more. The old
+    /// strip mixed a segmented tab bar, three dropdowns and two icon buttons
+    /// at four different heights, which is most of why it read as parts placed
+    /// beside each other rather than one designed row.
+    static let controlHeight: CGFloat = 28
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            ViewThatFits(in: .horizontal) {
-                singleRow
-                twoRowStack
-            }
-            if modelsAreUnverified {
-                modelListVerificationCaption
-            }
-            if let warning = effortUnavailableCaption {
-                effortUnavailableCaptionView(warning)
-            }
-        }
-        .padding(.horizontal, Space.xl)
-        .padding(.vertical, Space.lg)
-        // Transparent over the canvas with a single hairline beneath, not its
-        // own `surfaceSunken` band.
-        //
-        // Measured on the old build, the strip rendered DARKER than the canvas
-        // below it while the composer band rendered LIGHTER, so a window read
-        // top to bottom as four surfaces in essentially random luminance
-        // order. Letting the strip share the canvas's surface removes one
-        // competing band outright and leaves the hairline to do the only job
-        // that was ever needed: say where chrome ends and content begins.
-        .background(theme.surface(1))
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(theme.hairline).frame(height: 1)
-        }
-    }
+        HStack(spacing: Space.sm) {
+            modePicker
 
-    private var singleRow: some View {
-        HStack(spacing: Space.md) {
-            runConfigGroup
-            GroupDivider()
+            if controller.mode.isMultiLane {
+                backendControls
+            } else {
+                providerModelPicker
+            }
+
+            // Multi-lane (compare/race) has no SINGLE active provider for a
+            // level to be scoped to — mirrors provider/model being withheld
+            // the same way in `backendControls`/`oneShotArguments`.
+            if !controller.mode.isMultiLane, showsEffortPicker {
+                effortPicker
+            }
+
+            // Role only means anything in `.agent` mode — everywhere else
+            // `ConversationController.role` is simply never read (see
+            // `usesPersistentSession`/`oneShotArguments`), so showing the
+            // picker outside `.agent` would offer a control with no effect,
+            // exactly the kind of "looks interactive, does nothing" control
+            // the approvals toggle was fixed to stop being.
+            if controller.mode == .agent {
+                rolePicker
+            }
+
+            Spacer(minLength: Space.sm)
+
+            overflowMenu
             approvalControl
-            Spacer(minLength: Space.lg)
-            utilityTray
+            sendButton
         }
     }
 
-    /// ONE quiet line for the whole model list, not a warning per row.
+    // MARK: - Mode
+
+    /// The four modes as one dropdown, replacing a four-tab segmented control.
     ///
-    /// `no-mocks` proposed reusing `PickerOption.warning` (the amber
-    /// triangle `rolePicker` already puts on a write-capable role) per
-    /// unverified model. Overruled: that mechanism is for a PER-ROW
-    /// condition — this provider's circuit is open, that local server is
-    /// unreachable. Verification isn't per-row: when a probe can't run,
-    /// EVERY model in the list is `.fallback` together (confirmed: `nexus
-    /// models gemini -o json` returns six models, every one `"fallback"`),
-    /// so six amber triangles would paint one fact as six, spending the
-    /// attention budget `DESIGN.md`'s colour system rations for nothing.
-    /// The general rule this establishes: a condition that applies to an
-    /// entire SET gets one marker on the set, never one per member.
+    /// The tabs cost ~250pt of the row to render four words, three of which
+    /// are always the wrong answer — and mode is the control a user touches
+    /// least often in a session, not most. Collapsing it to a dropdown is the
+    /// same trade Cursor made for the same reason. The lifted-segment
+    /// treatment the tabs used is not lost so much as no longer needed: a
+    /// dropdown states the current mode in words.
+    private var modePicker: some View {
+        DropdownPicker(
+            placeholder: "mode",
+            options: RunMode.allCases.map { PickerOption(id: $0.rawValue, label: $0.title, detail: $0.detail) },
+            selection: controller.mode.rawValue,
+            selectionLabel: controller.mode.title,
+            minWidth: 92,
+            maxWidth: 110,
+            truncates: false
+        ) { id in
+            guard let picked = RunMode(rawValue: id) else { return }
+            controller.mode = picked
+        }
+        .help(controller.mode.detail)
+    }
+
+    // MARK: - Provider + model
+
+    /// Provider and model as ONE control carrying the identity dot.
     ///
-    /// Neutral caption, no icon, no amber — appears only while
-    /// `modelsAreUnverified`, gone the instant a real probe succeeds.
-    private var modelListVerificationCaption: some View {
-        Text("Unverified — sign in to load the real model list")
-            .textStyle(Type.caption)
-            .foregroundStyle(theme.color(\.textMuted))
+    /// They were two adjacent dropdowns with a combined ~310pt appetite for
+    /// what is really one fact — which backend, on which model, is answering.
+    /// Merging them reclaims roughly 150pt of the row and removes one of the
+    /// six shapes it had to hold. It is also honest about the dependency the
+    /// two controls always had: a model is only meaningful relative to its
+    /// provider, and the old pair expressed that with a disabled second picker
+    /// and a "Pick a provider first" tooltip.
+    private var providerModelPicker: some View {
+        ProviderModelPicker(
+            providers: providers,
+            models: models,
+            provider: controller.provider,
+            model: controller.model,
+            isLoadingModels: isLoadingModels,
+            modelsAreUnverified: modelsAreUnverified,
+            isDefaultModelSelected: isDefaultModelSelected,
+            onSelectProvider: { id in
+                controller.provider = id
+                controller.model = nil
+                // A level picked for the OLD provider's scale (e.g.
+                // claude-code's `"xhigh"`) is meaningless — or actively
+                // wrong — the instant a different provider is selected;
+                // `effortController`'s own `.task(id:)` will re-probe the
+                // new provider's scale separately (see `ConversationView
+                // .effortController`'s doc), but nothing else resets a
+                // stale explicit pick.
+                controller.effort = nil
+                onLoadModels(id)
+            },
+            onSelectModel: { controller.model = $0 }
+        )
+    }
+
+    /// Whether `controller.model` is still the provider's first model —
+    /// i.e. what `ChatTab.loadModels` auto-selected, not a deliberate pick.
+    private var isDefaultModelSelected: Bool {
+        controller.model != nil && controller.model == models.first?.id
+    }
+
+    private var backendControls: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Space.xs) {
+                ForEach(controller.backends, id: \.self) { backend in
+                    Chip(text: backend) {
+                        controller.backends.removeAll { $0 == backend }
+                    }
+                }
+                DropdownPicker(
+                    placeholder: "+ add",
+                    options: providers.filter { !controller.backends.contains($0.id) },
+                    selection: nil,
+                    minWidth: 72,
+                    maxWidth: 72,
+                    emptyHint: providers.isEmpty ? "No providers loaded yet" : "All providers already added"
+                ) { id in
+                    if !controller.backends.contains(id) { controller.backends.append(id) }
+                }
+            }
+        }
+        // Bounded, rather than left to size itself: backend chip count has
+        // no upper bound (a Compare run can grow past what any fixed width
+        // holds), so this is the one piece of the row that keeps its own
+        // scroll rather than compressing its neighbours.
+        .frame(maxWidth: 260, maxHeight: Self.controlHeight)
+    }
+
+    // MARK: - Effort
+
+    /// Whether `effortPicker` should render at all — hidden outright (never
+    /// a disabled dead control, per this feature's "no dead controls" rule,
+    /// same as `NexusProvider`/`EffortCapability`'s "hide, don't grey out"
+    /// discipline elsewhere) until the live probe CONFIRMS the active
+    /// provider has a reasoning-effort concept with at least one real level
+    /// to offer. `nil` (no provider selected yet, still loading, or the
+    /// probe failed) and a confirmed `supported == false` read identically
+    /// here — neither is a reason to show anything.
+    private var showsEffortPicker: Bool {
+        guard let capability = effortController?.capability else { return false }
+        return capability.supported && !capability.levels.isEmpty
+    }
+
+    /// A sentinel id for "nothing explicitly picked" — mirrors
+    /// `nativeToolLoopId` below exactly, including WHY: `controller.effort
+    /// == nil` is a real, first-class choice (leave the provider's own
+    /// default alone, see that property's doc), not merely "nothing picked
+    /// yet", so the picker needs an explicit row to return TO it.
+    private static let effortDefaultId = "default"
+
+    /// `nexus effort <provider>`'s live per-provider scale, never a shared
+    /// lowest-common-denominator list (see `EffortCapability`'s doc for why
+    /// that assumption is exactly what got this control deleted once
+    /// already) — driven entirely by `effortController.capability`, with NO
+    /// per-provider special-casing in this view beyond the one documented,
+    /// narrowly-scoped exception (`effortUnavailableWarning`).
+    private var effortPicker: some View {
+        DropdownPicker(
+            placeholder: "effort",
+            options: effortOptions,
+            selection: controller.effort ?? Self.effortDefaultId,
+            isLoading: effortController?.isLoading ?? false,
+            minWidth: 84,
+            maxWidth: 128,
+            // The warning that used to be a full-window amber banner under
+            // the whole strip. It concerns exactly this control, so it lives
+            // ON it — a triangle on the closed button and the full sentence
+            // in the popover the button opens.
+            controlWarning: effortUnavailableWarning,
+            emptyHint: effortController?.error ?? "No reasoning-effort levels"
+        ) { id in
+            controller.effort = id == Self.effortDefaultId ? nil : id
+        }
+        .help("Reasoning effort for \(controller.provider ?? "the active provider") — the provider's own default is used unless you pick a level here")
     }
 
     /// A caution that reasoning is silently unusable on the CURRENT
@@ -791,202 +1195,18 @@ struct ControlStrip: View {
     /// against making.
     ///
     /// Same "visible, not blocking" contract as `circuitWarning`/
-    /// `localServerWarning` (`SelectableProvider`, `Providers.swift`) and
-    /// `modelListVerificationCaption` above: the picker stays fully
-    /// selectable — this app is advisory, never the enforcement point — but
-    /// the reason a level does nothing is never left for the user to
-    /// discover only by watching nothing happen. Amber, not neutral, unlike
-    /// `modelListVerificationCaption`: that caption flags a data-provenance
-    /// gap (an unconfirmed guess), this one flags a real dead end, the same
-    /// weight `circuitWarning` earns for a tripped circuit.
-    private var effortUnavailableCaption: String? {
+    /// `localServerWarning` (`SelectableProvider`, `Providers.swift`): the
+    /// picker stays fully selectable — this app is advisory, never the
+    /// enforcement point — but the reason a level does nothing is never left
+    /// for the user to discover only by watching nothing happen. What changed
+    /// is placement, not weight: amber still, but attached to the control it
+    /// describes instead of spanning the window above an unrelated transcript.
+    private var effortUnavailableWarning: String? {
         guard controller.provider == "anthropic",
               effortController?.capability?.offDisablesReasoning == true,
               authController?.providers.first(where: { $0.providerId == "anthropic" })?.kind == .oauth
         else { return nil }
         return "Extended thinking isn't available for a Claude subscription (OAuth) sign-in — picking a level below has no effect. Sign in with an API key instead to use it."
-    }
-
-    private func effortUnavailableCaptionView(_ warning: String) -> some View {
-        HStack(alignment: .top, spacing: 4) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 8))
-                .padding(.top, 2)
-            Text(warning)
-                .textStyle(Type.caption)
-        }
-        .foregroundStyle(theme.color(\.warningFg))
-    }
-
-    /// `approvalControl` moved onto ROW ONE with `runConfigGroup` here — it
-    /// is the third of the three run-configuration categories this file's
-    /// own doc comment already names (what the run IS / what answers it /
-    /// what it's allowed to do), so it belongs beside the other two, not
-    /// alone on row two. Before this, row two was `approvalControl` pinned
-    /// leading, a `Spacer`, then `utilityTray` pinned trailing — one small
-    /// control on the left, two on the right, a long empty gap between:
-    /// coherent controls split across the full width for no reason. Row two
-    /// is now `utilityTray` alone, reading as its own row rather than half
-    /// of a broken one.
-    private var twoRowStack: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(spacing: Space.md) {
-                runConfigGroup
-                GroupDivider()
-                approvalControl
-            }
-            utilityTray
-        }
-    }
-
-    /// What the run IS, what answers it, and how hard it reasons — the
-    /// three categories that together decide what `plannedCommand` builds.
-    ///
-    /// The effort picker (third here) used to live as a fixed four-value
-    /// `EffortPicker` — removed per the owner's direction at the time
-    /// ("also thinking i enabled by default in all these models - so lets
-    /// not have it separate"), because it fought whatever `--effort`/
-    /// reasoning was already configured at the PROVIDER level (e.g.
-    /// `~/.codex/config.toml`'s `model_reasoning_effort`) with a guessed
-    /// universal scale. `effortPicker` below is a deliberate re-addition,
-    /// not a revert: it is built from `nexus effort <provider>`'s live,
-    /// per-provider probe (real scales — claude-code's seven levels, not a
-    /// hardcoded four), hidden outright for a provider with no reasoning
-    /// concept at all (never a disabled dead control), and — critically —
-    /// never auto-populates a selection, so an untouched picker leaves the
-    /// provider's own configured default in full control exactly like
-    /// before this control existed; see `ConversationController.effort`'s
-    /// doc for the full "why this doesn't repeat the old harm" reasoning.
-    private var runConfigGroup: some View {
-        HStack(spacing: Space.md) {
-            ModePicker(mode: $controller.mode)
-                .help(controller.mode.detail)
-
-            GroupDivider()
-
-            if controller.mode.isMultiLane {
-                backendControls
-            } else {
-                singleLaneControls
-            }
-
-            // Multi-lane (compare/race) has no SINGLE active provider for a
-            // level to be scoped to — mirrors provider/model being withheld
-            // the same way in `backendControls`/`oneShotArguments`.
-            if !controller.mode.isMultiLane, showsEffortPicker {
-                GroupDivider()
-                effortPicker
-            }
-
-            // Role only means anything in `.agent` mode — everywhere else
-            // `ConversationController.role` is simply never read (see
-            // `usesPersistentSession`/`oneShotArguments`), so showing the
-            // picker outside `.agent` would offer a control with no effect,
-            // exactly the kind of "looks interactive, does nothing" control
-            // the approvals toggle was fixed to stop being.
-            if controller.mode == .agent {
-                GroupDivider()
-                rolePicker
-            }
-        }
-    }
-
-    /// The OODA role picker — `nexus agent --role <id>`'s only UI entry
-    /// point today. Backed by `RolesController` (`nexus roles`), never a
-    /// hardcoded Swift list (see `NexusRole`'s doc for why). A role whose
-    /// `permissionMode` is anything but `"read-only"` gets a visible warning
-    /// on both the closed picker and its row in the popover — see
-    /// `PickerOption.warning` — per the house rule that a client warns
-    /// BEFORE running something that can write: four of the nine shipped
-    /// roles (coordinator, coder, tester, doc-writer) are `workspace-write`.
-    private var rolePicker: some View {
-        DropdownPicker(
-            placeholder: "role",
-            options: roleOptions,
-            selection: controller.role ?? Self.nativeToolLoopId,
-            isLoading: rolesController?.isLoading ?? false,
-            minWidth: 148,
-            maxWidth: 148,
-            emptyHint: rolesController?.error ?? "No roles found"
-        ) { id in
-            controller.role = id == Self.nativeToolLoopId ? nil : id
-        }
-        .help("OODA role for the tool loop — the fast native loop runs when none is picked")
-    }
-
-    /// A sentinel id, not a real role: no shipped role preset is this short,
-    /// plain a word (they're all multi-syllable descriptive names — coder,
-    /// reviewer, tester, …), so this can't collide with anything `nexus
-    /// roles` ever returns. Maps back to `role == nil` in `rolePicker`'s
-    /// `onSelect` — the native tool loop is a first-class, default CHOICE
-    /// here, not merely "nothing picked yet".
-    private static let nativeToolLoopId = "native"
-
-    private var roleOptions: [PickerOption] {
-        let native = PickerOption(
-            id: Self.nativeToolLoopId,
-            detail: "Fast native tool loop — no plan/reflect/replan"
-        )
-        let roles = (rolesController?.roles ?? []).map { role in
-            PickerOption(
-                id: role.id,
-                detail: role.description,
-                warning: role.canWrite ? "Can write files and run shell commands" : nil
-            )
-        }
-        return [native] + roles
-    }
-
-    // MARK: - Effort picker
-    //
-    // See `runConfigGroup`'s doc for why this control exists a second time
-    // after an earlier version was removed, and `ConversationController
-    // .effort`'s doc for the "never auto-selects" guarantee that keeps it
-    // from repeating the harm the first one caused.
-
-    /// Whether `effortPicker` should render at all — hidden outright (never
-    /// a disabled dead control, per this feature's "no dead controls" rule,
-    /// same as `NexusProvider`/`EffortCapability`'s "hide, don't grey out"
-    /// discipline elsewhere) until the live probe CONFIRMS the active
-    /// provider has a reasoning-effort concept with at least one real level
-    /// to offer. `nil` (no provider selected yet, still loading, or the
-    /// probe failed) and a confirmed `supported == false` read identically
-    /// here — neither is a reason to show anything.
-    private var showsEffortPicker: Bool {
-        guard let capability = effortController?.capability else { return false }
-        return capability.supported && !capability.levels.isEmpty
-    }
-
-    /// A sentinel id for "nothing explicitly picked" — mirrors
-    /// `nativeToolLoopId` above exactly, including WHY: `controller.effort
-    /// == nil` is a real, first-class choice (leave the provider's own
-    /// default alone, see that property's doc), not merely "nothing picked
-    /// yet", so the picker needs an explicit row to return TO it. A plain
-    /// word, not a placeholder-style token, because `DropdownPicker` renders
-    /// `selection` directly as the closed button's text when non-nil (see
-    /// `rolePicker`'s identical `"native"` sentinel) — "default" reads fine
-    /// there and cannot collide with a real provider-native level name.
-    private static let effortDefaultId = "default"
-
-    /// `nexus effort <provider>`'s live per-provider scale, never a shared
-    /// lowest-common-denominator list (see `EffortCapability`'s doc for why
-    /// that assumption is exactly what got this control deleted once
-    /// already) — driven entirely by `effortController.capability`, with NO
-    /// per-provider special-casing in this view beyond the one documented,
-    /// narrowly-scoped exception (`effortUnavailableCaption`).
-    private var effortPicker: some View {
-        DropdownPicker(
-            placeholder: "effort",
-            options: effortOptions,
-            selection: controller.effort ?? Self.effortDefaultId,
-            isLoading: effortController?.isLoading ?? false,
-            minWidth: 84,
-            maxWidth: 128,
-            emptyHint: effortController?.error ?? "No reasoning-effort levels"
-        ) { id in
-            controller.effort = id == Self.effortDefaultId ? nil : id
-        }
-        .help("Reasoning effort for \(controller.provider ?? "the active provider") — the provider's own default is used unless you pick a level here")
     }
 
     /// Options for `effortPicker`, built from the live probe:
@@ -1030,160 +1250,55 @@ struct ControlStrip: View {
         }
     }
 
-    /// Conversation-wide utility actions — not part of configuring the next
-    /// run, so kept visually separate from `runConfigGroup` rather than
-    /// chained onto the end of it.
-    private var utilityTray: some View {
-        HStack(spacing: Space.md) {
-            if let session = controller.sessionId {
-                Metric(label: "session", value: String(session.suffix(8)))
-                    .help("Follow-up turns resume this session: \(session)")
-            }
+    // MARK: - Role
 
-            Button {
-                showsReasoning.toggle()
-            } label: {
-                Image(systemName: showsReasoning ? "brain.head.profile.fill" : "brain.head.profile")
-                    .font(.system(size: 12))
-            }
-            // Neutral, not accent: this is a persistent setting toggle, not
-            // one of the three things accent is rationed to (selection /
-            // primary action / live state) — the filled vs. outline glyph
-            // already carries on/off on its own.
-            .buttonStyle(SoftButton(tone: .neutral, size: .compact))
-            .help(showsReasoning ? "Hide reasoning traces" : "Show reasoning traces")
-
-            Button {
-                confirmingClear = true
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11))
-            }
-            .buttonStyle(SoftButton(tone: .neutral, size: .compact))
-            .help("Clear the transcript (the durable session is kept)")
-            .confirmationDialog("Clear the transcript?", isPresented: $confirmingClear) {
-                Button("Clear", role: .destructive) { controller.clear() }
-            } message: {
-                Text("Removes this conversation from view. The durable session on disk is kept.")
-            }
-        }
-    }
-
-    private var backendControls: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Space.xs) {
-                ForEach(controller.backends, id: \.self) { backend in
-                    Chip(text: backend) {
-                        controller.backends.removeAll { $0 == backend }
-                    }
-                }
-                DropdownPicker(
-                    placeholder: "+ add",
-                    options: providers.filter { !controller.backends.contains($0.id) },
-                    selection: nil,
-                    minWidth: 72,
-                    maxWidth: 72,
-                    emptyHint: providers.isEmpty ? "No providers loaded yet" : "All providers already added"
-                ) { id in
-                    if !controller.backends.contains(id) { controller.backends.append(id) }
-                }
-            }
-        }
-        // Bounded, rather than left to size itself: backend chip count has
-        // no upper bound (a Compare run can grow past what any fixed width
-        // holds), so this is the one piece of `runConfigGroup` that keeps
-        // its own scroll. Bounding it also gives `ViewThatFits` an honest
-        // width to measure — an unbounded `ScrollView` always reports
-        // "fits" by clipping its content instead of overflowing, which
-        // would have silently defeated the single-row/two-row decision
-        // above exactly the way the old single, all-encompassing
-        // `ScrollView` did for provider/model.
-        .frame(maxWidth: 260)
-    }
-
-    private var singleLaneControls: some View {
-        HStack(spacing: Space.xs) {
-            DropdownPicker(
-                placeholder: "provider",
-                leadingDot: providerDotColor(for: controller.provider, in: providers, theme: theme),
-                options: providers,
-                selection: controller.provider,
-                // A real ceiling, not `nil`: the provider id is short and
-                // human-facing ("anthropic," "openai") and must never
-                // truncate, but an UNBOUNDED max let it expand to fill
-                // whatever space existed — confirmed on screen eating over
-                // half the strip's width with a long empty gap before its
-                // own chevron. 150pt comfortably fits the longest real
-                // provider id this CLI ships (`azure-openai`, 12 characters)
-                // with room to spare, without growing past its content.
-                minWidth: 88,
-                maxWidth: 150,
-                // `truncates: false` is what actually MAKES the "must never
-                // truncate" claim above true, rather than merely stating it.
-                // `minWidth`/`maxWidth` alone never enforced it — a squeezed
-                // `HStack` can compress plain `Text` well below `minWidth`
-                // regardless of what the frame declares, and adding the
-                // effort picker as a fourth control did exactly that,
-                // reproducing "ant…opic" live. See `DropdownPicker
-                // .truncates`'s doc for the mechanism.
-                truncates: false,
-                emptyHint: "No providers loaded yet"
-            ) { id in
-                controller.provider = id
-                controller.model = nil
-                // A level picked for the OLD provider's scale (e.g.
-                // claude-code's `"xhigh"`) is meaningless — or actively
-                // wrong — the instant a different provider is selected;
-                // `effortController`'s own `.task(id:)` will re-probe the
-                // new provider's scale separately (see `ConversationView
-                // .effortController`'s doc), but nothing else resets a
-                // stale explicit pick.
-                controller.effort = nil
-                onLoadModels(id)
-            }
-
-            modelPicker
-        }
-    }
-
-    @ViewBuilder
-    private var modelPicker: some View {
-        let picker = DropdownPicker(
-            placeholder: "model",
-            options: models,
-            selection: controller.model,
-            isLoading: isLoadingModels,
-            // The long, technical value — this is where truncation belongs
-            // if the strip is tight, never the provider id beside it.
-            minWidth: 96,
-            maxWidth: 160,
-            emptyHint: isLoadingModels ? "Loading models…" : "No models for this provider yet"
+    /// The OODA role picker — `nexus agent --role <id>`'s only UI entry
+    /// point today. Backed by `RolesController` (`nexus roles`), never a
+    /// hardcoded Swift list (see `NexusRole`'s doc for why). A role whose
+    /// `permissionMode` is anything but `"read-only"` gets a visible warning
+    /// on both the closed picker and its row in the popover — see
+    /// `PickerOption.warning` — per the house rule that a client warns
+    /// BEFORE running something that can write: four of the nine shipped
+    /// roles (coordinator, coder, tester, doc-writer) are `workspace-write`.
+    private var rolePicker: some View {
+        DropdownPicker(
+            placeholder: "role",
+            options: roleOptions,
+            selection: controller.role ?? Self.nativeToolLoopId,
+            isLoading: rolesController?.isLoading ?? false,
+            minWidth: 110,
+            maxWidth: 148,
+            emptyHint: rolesController?.error ?? "No roles found"
         ) { id in
-            controller.model = id
+            controller.role = id == Self.nativeToolLoopId ? nil : id
         }
-        .disabled(controller.provider == nil)
-        .opacity(controller.provider == nil ? 0.5 : 1)
-
-        if controller.provider == nil {
-            picker.help("Pick a provider first")
-        } else if isDefaultModelSelected {
-            // The value shown is real either way — `ChatTab.loadModels`
-            // preselects `models.first` so this is never blank — but the
-            // tooltip still tells the two states apart: a provider default
-            // the user never looked at vs. a deliberate pick, without
-            // spending the width a visible "(default)" label would cost
-            // right after the truncation fix on this same row.
-            picker.help("Provider default — not explicitly chosen. Click to pick a specific model.")
-        } else {
-            picker
-        }
+        .help("OODA role for the tool loop — the fast native loop runs when none is picked")
     }
 
-    /// Whether `controller.model` is still the provider's first model —
-    /// i.e. what `ChatTab.loadModels` auto-selected, not a deliberate pick.
-    private var isDefaultModelSelected: Bool {
-        controller.model != nil && controller.model == models.first?.id
+    /// A sentinel id, not a real role: no shipped role preset is this short,
+    /// plain a word (they're all multi-syllable descriptive names — coder,
+    /// reviewer, tester, …), so this can't collide with anything `nexus
+    /// roles` ever returns. Maps back to `role == nil` in `rolePicker`'s
+    /// `onSelect` — the native tool loop is a first-class, default CHOICE
+    /// here, not merely "nothing picked yet".
+    private static let nativeToolLoopId = "native"
+
+    private var roleOptions: [PickerOption] {
+        let native = PickerOption(
+            id: Self.nativeToolLoopId,
+            detail: "Fast native tool loop — no plan/reflect/replan"
+        )
+        let roles = (rolesController?.roles ?? []).map { role in
+            PickerOption(
+                id: role.id,
+                detail: role.description,
+                warning: role.canWrite ? "Can write files and run shell commands" : nil
+            )
+        }
+        return [native] + roles
     }
+
+    // MARK: - Approvals
 
     /// A real toggle. `ConversationController.approvalsEnabled` already drives
     /// `-t --ask` on the actual `chat --persistent` argv (see
@@ -1201,17 +1316,28 @@ struct ControlStrip: View {
         Button {
             controller.approvalsEnabled.toggle()
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: Space.xs) {
                 Image(systemName: controller.approvalsEnabled ? "hand.raised.fill" : "hand.raised.slash")
-                    .font(.system(size: 9))
+                    .font(.system(size: 10))
                 // Prose UI label, not machine output — `Type.mono` is
                 // reserved for literal CLI/JSON text (the command preview,
                 // provider/model ids), not English button copy.
                 Text("Ask first")
                     .textStyle(Type.caption)
+                    .lineLimit(1)
+                    .fixedSize()
             }
+            .padding(.horizontal, Space.sm)
+            .frame(height: Self.controlHeight)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(SoftButton(tone: .neutral, size: .compact))
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.color(\.textSecondary))
+        .background(theme.color(\.surfaceInset), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+        }
         .disabled(!approvalsApply)
         .opacity(approvalsApply ? 1 : 0.5)
         .help(
@@ -1231,23 +1357,251 @@ struct ControlStrip: View {
     private var approvalsApply: Bool {
         !controller.mode.isMultiLane && !(controller.mode == .agent && controller.role != nil)
     }
-}
 
-/// A hairline separating two `ControlStrip` groups by MEANING — mode,
-/// provider/model, approvals. Differently-shaped controls placed side by
-/// side with nothing marking where one category ends and the next begins is
-/// what made the strip read as controls dropped into a row rather than a
-/// designed sequence; this is the one visual device that
-/// fixes that without inventing a new spacing or color token.
-private struct GroupDivider: View {
-    @Environment(\.nexusTheme) private var theme
+    // MARK: - Overflow
 
-    var body: some View {
-        Rectangle()
-            .fill(theme.color(\.chromeDivider))
-            .frame(width: 1, height: 20)
+    /// Conversation-wide utility actions — the session id, the reasoning-
+    /// traces toggle, and clear.
+    ///
+    /// These are NOT part of configuring the next run (which is what every
+    /// other control on this row does), and the old strip already kept them
+    /// visually separate for that reason. Behind a `···` they keep that
+    /// separation while costing one control's width instead of three. A
+    /// native `Menu` is right here specifically because the objection that
+    /// ruled menus out for `DropdownPicker` — no reliable hover tooltip on a
+    /// DISABLED row — does not apply: nothing in here is ever disabled.
+    private var overflowMenu: some View {
+        Menu {
+            if let session = controller.sessionId {
+                Button("Copy session id — …\(session.suffix(8))") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(session, forType: .string)
+                }
+            }
+            Toggle("Reasoning traces", isOn: $showsReasoning)
+            Divider()
+            Button("Clear transcript…", role: .destructive) { confirmingClear = true }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(theme.color(\.textSecondary))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        // An EXPLICIT frame, then the chrome — not `.fixedSize()` and not a
+        // background inside the label. A `Menu` reserves its own layout box
+        // independently of its label, so both of those paint a rectangle that
+        // does not line up with the glyph; the observable result was a
+        // borderless ellipsis sitting beside four boxed controls. Pinning the
+        // menu itself to `controlHeight` square is what makes the box and the
+        // glyph the same object.
+        .frame(width: Self.controlHeight, height: Self.controlHeight)
+        .background(theme.color(\.surfaceInset), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+        }
+        .help("Session, reasoning traces, clear")
+    }
+
+    // MARK: - Send
+
+    /// `SoftButton(size: .compact)` adds 8pt of horizontal and 5pt of vertical
+    /// padding of its own, so the glyph frame is sized to what is LEFT of
+    /// `controlHeight` after that padding — 18pt tall, 12pt wide. Framing the
+    /// glyph at the full 28 instead produced a 38pt-tall button sitting beside
+    /// four 28pt ones, which is the exact defect ("one control height") this
+    /// row was rebuilt to remove.
+    private static let sendGlyph = (width: controlHeight - 16, height: controlHeight - 10)
+
+    @ViewBuilder
+    private var sendButton: some View {
+        if controller.isRunning {
+            Button(action: controller.cancel) {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: Self.sendGlyph.width, height: Self.sendGlyph.height)
+            }
+            .buttonStyle(SoftButton(tone: .danger, size: .compact))
+            .help("Stop the run (⌘.)")
+        } else {
+            Button(action: onSend) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 12, weight: .bold))
+                    .frame(width: Self.sendGlyph.width, height: Self.sendGlyph.height)
+            }
+            .buttonStyle(SoftButton(tone: canSend ? .accent : .neutral, size: .compact))
+            .disabled(!canSend)
+            .help("Send (⏎)")
+        }
     }
 }
+
+/// Provider and model in ONE control — see `ComposerFooter
+/// .providerModelPicker` for why they merged.
+///
+/// The popover holds both lists, provider above model, because picking a
+/// provider is nearly always immediately followed by looking at what models it
+/// has. Keeping the popover open across a provider pick is what makes that one
+/// gesture instead of two: the model list reloads underneath (`isLoadingModels`
+/// drives the spinner in place) and the user chooses without reopening
+/// anything.
+private struct ProviderModelPicker: View {
+    @Environment(\.nexusTheme) private var theme
+    let providers: [PickerOption]
+    let models: [PickerOption]
+    let provider: String?
+    let model: String?
+    let isLoadingModels: Bool
+    /// Whether EVERY model in `models` is an unconfirmed `.fallback` guess
+    /// rather than a live-probed catalog.
+    let modelsAreUnverified: Bool
+    let isDefaultModelSelected: Bool
+    let onSelectProvider: (String) -> Void
+    let onSelectModel: (String) -> Void
+
+    @State private var isOpen = false
+
+    private var dotColor: Color { ProviderIdentity.color(provider, theme: theme) }
+
+    var body: some View {
+        Button { isOpen = true } label: {
+            HStack(spacing: 5) {
+                Circle().fill(dotColor).frame(width: 6, height: 6)
+                // The provider id never truncates — it is short, human-facing
+                // and the identity half of this control. `.fixedSize` makes it
+                // report its true unwrapped width during layout negotiation
+                // rather than accepting a too-small proposal, which is what
+                // reproduced "ant…opic" the last time a control was added to
+                // this row. See `DropdownPicker.truncates`.
+                Text(provider ?? "provider")
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                if let model {
+                    Text("·")
+                        .foregroundStyle(theme.color(\.textMuted))
+                    // The model is the long technical value and therefore the
+                    // one place this control gives ground when the row is
+                    // tight.
+                    Text(model)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if isLoadingModels {
+                    ProgressView().controlSize(.mini).scaleEffect(0.6)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(theme.color(\.textMuted))
+            }
+            .textStyle(Type.monoMicro)
+            .foregroundStyle(provider == nil ? theme.color(\.textMuted) : theme.color(\.textSecondary))
+            .padding(.horizontal, Space.sm)
+            .frame(minWidth: 128, maxWidth: 232, alignment: .leading)
+            .frame(height: ComposerFooter.controlHeight)
+            .background(theme.color(\.surfaceInset), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .help(helpText)
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) { popoverBody }
+    }
+
+    private var helpText: String {
+        if provider == nil { return "Pick a provider and model" }
+        if isDefaultModelSelected {
+            // The value shown is real either way — `ChatTab.loadModels`
+            // preselects `models.first` so this is never blank — but the
+            // tooltip still tells the two states apart: a provider default
+            // the user never looked at vs. a deliberate pick.
+            return "Provider default — not explicitly chosen. Click to pick a specific model."
+        }
+        return "Provider and model for this run"
+    }
+
+    private var popoverBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 1) {
+                sectionHeader("Provider")
+                if providers.isEmpty {
+                    hint("No providers loaded yet")
+                } else {
+                    ForEach(providers) { option in
+                        PickerRow(option: option, isSelected: option.id == provider) {
+                            onSelectProvider(option.id)
+                        }
+                    }
+                }
+
+                sectionHeader("Model")
+                // ONE quiet line for the whole model list, not a warning per
+                // row — and now attached to the list it describes rather than
+                // stretched across the window.
+                //
+                // `no-mocks` proposed reusing `PickerOption.warning` (the amber
+                // triangle `rolePicker` puts on a write-capable role) per
+                // unverified model. Overruled: that mechanism is for a PER-ROW
+                // condition. Verification isn't per-row — when a probe can't
+                // run, EVERY model in the list is `.fallback` together
+                // (confirmed: `nexus models gemini -o json` returns six models,
+                // every one `"fallback"`), so six amber triangles would paint
+                // one fact as six. The general rule: a condition that applies
+                // to an entire SET gets one marker on the set, never one per
+                // member. Neutral, no icon, no amber — this is a
+                // data-provenance gap, not a dead end.
+                if modelsAreUnverified && !models.isEmpty {
+                    Text("Unverified — sign in to load the real model list")
+                        .textStyle(Type.micro)
+                        .foregroundStyle(theme.color(\.textMuted))
+                        .padding(.horizontal, Space.sm)
+                        .padding(.bottom, 3)
+                }
+                if provider == nil {
+                    hint("Pick a provider first")
+                } else if models.isEmpty {
+                    hint(isLoadingModels ? "Loading models…" : "No models for this provider yet")
+                } else {
+                    ForEach(models) { option in
+                        PickerRow(option: option, isSelected: option.id == model) {
+                            isOpen = false
+                            onSelectModel(option.id)
+                        }
+                    }
+                }
+            }
+            .padding(4)
+        }
+        .frame(minWidth: 260, maxHeight: 340)
+        .background(theme.color(\.surfaceOverlay))
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .textStyle(Type.eyebrow)
+            .foregroundStyle(theme.color(\.textMuted))
+            .padding(.horizontal, Space.sm)
+            .padding(.top, Space.sm)
+            .padding(.bottom, 3)
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .textStyle(Type.caption)
+            .foregroundStyle(theme.color(\.textMuted))
+            .padding(Space.sm)
+    }
+}
+
+// `GroupDivider` used to live here — a 1x20 hairline placed between the
+// control strip's groups. It is deleted rather than moved: it existed to make
+// a sequence of differently-shaped, differently-sized controls read as
+// deliberate groups, and `ComposerFooter` removed the thing it was
+// compensating for by giving every control one height and one radius. A
+// divider between controls that already match is just another mark to explain.
 
 /// One row in a `DropdownPicker` — a provider, a model, a role (for the
 /// `.agent` role picker), or (for the compare/race "add backend" control) a
@@ -1258,6 +1612,12 @@ private struct GroupDivider: View {
 /// binds live `ProvidersController`/`RolesController` data into these.
 struct PickerOption: Identifiable, Equatable {
     let id: String
+    /// Display text, when the id is not what a human should read. `nil` for
+    /// every provider/model/role/backend option — those ARE their ids, and
+    /// showing anything else would hide the exact string that ends up on the
+    /// `nexus` command line. Set only by the mode picker, whose ids are wire
+    /// values (`ask`) with real titles beside them (`Ask`).
+    var label: String?
     var detail: String?
     var available: Bool
     var disabledReason: String?
@@ -1268,11 +1628,12 @@ struct PickerOption: Identifiable, Equatable {
     /// and the closed picker button once selected — never buried behind a
     /// click. `nil` for every provider/model/backend option today; only a
     /// `.agent` role whose `permissionMode` isn't `"read-only"` sets this
-    /// (see `NexusRole.canWrite` and `ControlStrip.rolePicker`).
+    /// (see `NexusRole.canWrite` and `ComposerFooter.rolePicker`).
     var warning: String?
 
     init(
         id: String,
+        label: String? = nil,
         detail: String? = nil,
         available: Bool = true,
         disabledReason: String? = nil,
@@ -1280,6 +1641,7 @@ struct PickerOption: Identifiable, Equatable {
         warning: String? = nil
     ) {
         self.id = id
+        self.label = label
         self.detail = detail
         self.available = available
         self.disabledReason = disabledReason
@@ -1320,10 +1682,10 @@ extension PickerOption {
     /// LIST, not about any one row in it — when a probe can't run, EVERY
     /// model in that provider's list is `.fallback` together, so a per-row
     /// treatment would paint N identical amber warnings for ONE fact. See
-    /// `ControlStrip.modelListVerificationCaption` for the set-level caption
-    /// that replaced it, and `DESIGN.md`'s colour system for the rule this
-    /// established: a condition that applies to an entire set gets one
-    /// marker on the set, never one per member.
+    /// `ProviderModelPicker`'s model-section caption for the set-level
+    /// treatment that replaced it, and `DESIGN.md`'s colour system for the
+    /// rule this established: a condition that applies to an entire set gets
+    /// one marker on the set, never one per member.
     init(model: NexusModel) {
         self.init(
             id: model.id,
@@ -1367,6 +1729,10 @@ private struct DropdownPicker: View {
     var leadingDot: Color?
     var options: [PickerOption]
     var selection: String?
+    /// Display text for the current selection, when the id is not what should
+    /// be read back. Mirrors `PickerOption.label`; see that property for why
+    /// only the mode picker sets it.
+    var selectionLabel: String?
     var isLoading = false
     /// A floor, not a fixed size — the button grows to fit whatever
     /// `displayText` actually is, up to `maxWidth` (`nil` = unbounded). Before
@@ -1382,32 +1748,47 @@ private struct DropdownPicker: View {
     /// Whether `displayText` may compress under pressure — `true` (the
     /// default) for every ordinary picker (model/role/backend), which may
     /// legitimately give ground when the strip is tight. `false` for the
-    /// PROVIDER picker specifically (see `singleLaneControls`): the doc
-    /// above already names "ant…opic" as a fixed, closed defect, and a
-    /// squeezed `HStack` reproduced it again the instant a fourth control
-    /// (the effort picker) was added — not by lying about `minWidth`/
-    /// `maxWidth`, but because `Text` alone is flexible enough to shrink
-    /// and truncate well below either bound while `.frame` stayed silent
-    /// about it. `false` wraps the text in `.fixedSize(horizontal:)`, which
-    /// makes it report its TRUE unwrapped width during layout negotiation
-    /// instead of accepting a too-small proposal — the same mechanism
-    /// `ModePicker`'s tab labels needed for the identical reason. That
-    /// forces the real deficit up to `ViewThatFits` (`ControlStrip.body`),
-    /// which can then correctly choose `twoRowStack`, rather than this
-    /// picker silently absorbing the squeeze.
+    /// MODE picker specifically, and for the provider half of
+    /// `ProviderModelPicker`: the doc above already names "ant…opic" as a
+    /// fixed, closed defect, and a squeezed `HStack` reproduced it again the
+    /// instant a fourth control (the effort picker) was added — not by lying
+    /// about `minWidth`/`maxWidth`, but because `Text` alone is flexible
+    /// enough to shrink and truncate well below either bound while `.frame`
+    /// stayed silent about it. `false` wraps the text in
+    /// `.fixedSize(horizontal:)`, which makes it report its TRUE unwrapped
+    /// width during layout negotiation instead of accepting a too-small
+    /// proposal.
+    ///
+    /// This used to exist to force the deficit up to a `ViewThatFits` that
+    /// would then pick a two-row layout. That mechanism is gone (see
+    /// `ComposerFooter`'s doc — the two-row candidate was unreachable), and
+    /// the flag's job is now simpler and entirely local: name the ONE control
+    /// on the row that is allowed to give ground, and hold every other one to
+    /// its real width.
     var truncates: Bool = true
+    /// A caution about this CONTROL as a whole, rather than about one option
+    /// in it — e.g. "the effort scale is real but your credential silently
+    /// ignores it". Renders as a triangle on the closed button plus the full
+    /// sentence at the top of the popover.
+    ///
+    /// This is what the full-window amber caption under the old control strip
+    /// became. The fact never justified a banner across the window: it is
+    /// about one picker, so it belongs on that picker, where it is legible in
+    /// the same glance as the control it invalidates.
+    var controlWarning: String?
     var emptyHint: String?
     var onSelect: (String) -> Void
 
     @State private var isOpen = false
 
-    private var displayText: String { selection ?? placeholder }
+    private var displayText: String { selectionLabel ?? selection ?? placeholder }
 
-    /// The current selection's caution, if it has one — surfaced on the
-    /// CLOSED button too (not just inside the popover), so picking a
-    /// role that can write is never one click away from being invisible.
+    /// The caution to surface on the CLOSED button — the control-level one if
+    /// there is one, otherwise the current selection's own. Surfaced on the
+    /// closed button, not just inside the popover, so picking a role that can
+    /// write is never one click away from being invisible.
     private var selectedWarning: String? {
-        options.first(where: { $0.id == selection })?.warning
+        controlWarning ?? options.first(where: { $0.id == selection })?.warning
     }
 
     var body: some View {
@@ -1441,8 +1822,10 @@ private struct DropdownPicker: View {
             .textStyle(Type.monoMicro)
             .foregroundStyle(selection == nil ? theme.color(\.textMuted) : theme.color(\.textSecondary))
             .padding(.horizontal, Space.sm)
-            .padding(.vertical, 5)
             .frame(minWidth: minWidth, maxWidth: maxWidth, alignment: .leading)
+            // One height for every control on the composer footer, set here
+            // rather than by each caller's own vertical padding.
+            .frame(height: ComposerFooter.controlHeight)
             .background(theme.color(\.surfaceInset))
             .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
             .overlay {
@@ -1455,7 +1838,12 @@ private struct DropdownPicker: View {
         }
         .buttonStyle(.plain)
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
-            DropdownList(options: options, selection: selection, emptyHint: emptyHint) { id in
+            DropdownList(
+                options: options,
+                selection: selection,
+                emptyHint: emptyHint,
+                controlWarning: controlWarning
+            ) { id in
                 isOpen = false
                 onSelect(id)
             }
@@ -1470,11 +1858,28 @@ private struct DropdownList: View {
     let options: [PickerOption]
     let selection: String?
     let emptyHint: String?
+    /// See `DropdownPicker.controlWarning`. Rendered above the rows, in full,
+    /// because a caution that invalidates every row is not something to learn
+    /// one row at a time.
+    var controlWarning: String?
     let onSelect: (String) -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
+                if let controlWarning {
+                    HStack(alignment: .top, spacing: Space.xs) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 8))
+                            .padding(.top, 2)
+                        Text(controlWarning)
+                            .textStyle(Type.micro)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .foregroundStyle(theme.color(\.warningFg))
+                    .padding(.horizontal, Space.sm)
+                    .padding(.vertical, Space.sm)
+                }
                 if options.isEmpty {
                     Text(emptyHint ?? "Nothing available")
                         .textStyle(Type.caption)
@@ -1482,28 +1887,39 @@ private struct DropdownList: View {
                         .padding(Space.md)
                 } else {
                     ForEach(options) { option in
-                        row(option)
+                        PickerRow(option: option, isSelected: option.id == selection) {
+                            onSelect(option.id)
+                        }
                     }
                 }
             }
             .padding(4)
         }
-        .frame(minWidth: 220, maxHeight: 260)
+        .frame(minWidth: 220, maxHeight: 300)
         .background(theme.color(\.surfaceOverlay))
     }
+}
 
-    @ViewBuilder
-    private func row(_ option: PickerOption) -> some View {
-        let button = Button {
-            onSelect(option.id)
-        } label: {
+/// One selectable row, shared by `DropdownList` and `ProviderModelPicker`'s
+/// two-section popover so the two cannot drift into different row treatments
+/// for the same kind of choice. Unavailable options stay visible, dimmed and
+/// inert, with their reason on hover — the behaviour a native `Menu` could not
+/// provide and the reason this control is hand-rolled at all.
+private struct PickerRow: View {
+    @Environment(\.nexusTheme) private var theme
+    let option: PickerOption
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        let button = Button(action: onSelect) {
             HStack(spacing: Space.sm) {
                 if let dot = option.dotColor(theme: theme) {
                     Circle().fill(dot).frame(width: 6, height: 6)
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
-                        Text(option.id)
+                        Text(option.label ?? option.id)
                             .textStyle(Type.monoMicro)
                         if option.warning != nil {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -1523,7 +1939,7 @@ private struct DropdownList: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if option.id == selection {
+                if isSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 9, weight: .bold))
                 }
@@ -1553,17 +1969,35 @@ private struct UsageReadout: View {
     let view: ViewState
 
     var body: some View {
-        HStack(spacing: Space.md) {
-            Metric(label: "in", value: "\(view.lastUsage.inputTokens)")
-            Metric(label: "out", value: "\(view.lastUsage.outputTokens)")
-            Metric(label: "turn cost", value: turnCostText, emphasis: true)
-            Spacer(minLength: 0)
-            Metric(
-                label: "session total",
-                value: formatted(view.totals.costUsd, incomplete: view.totals.costIncomplete)
-            )
-        }
-        .foregroundStyle(theme.color(\.textMuted))
+        Text(summary)
+            .textStyle(Type.monoMicro)
+            .monospacedDigit()
+            .foregroundStyle(theme.color(\.textMuted))
+            .lineLimit(1)
+            .fixedSize()
+            .help("This turn: \(view.lastUsage.inputTokens) in, \(view.lastUsage.outputTokens) out, \(turnCostText). Session total \(formatted(view.totals.costUsd, incomplete: view.totals.costIncomplete)).")
+    }
+
+    /// `8.2k in · 1.1k out · $0.04` — one line, dimmed, sized to its content.
+    ///
+    /// Compact because of where this now renders. It used to be a four-`Metric`
+    /// row INSIDE the composer band, gated on `streaming`, which is what made
+    /// the text field jump the moment a turn began. On the live turn's own
+    /// attribution row it has to share a line with the provider label and the
+    /// copy button, so it is one string rather than four labelled readouts.
+    private var summary: String {
+        [
+            "\(abbreviated(view.lastUsage.inputTokens)) in",
+            "\(abbreviated(view.lastUsage.outputTokens)) out",
+            turnCostText,
+        ].joined(separator: " · ")
+    }
+
+    /// `8231` → `8.2k`. A token count's exact units are never the question
+    /// being asked of this readout; its order of magnitude always is.
+    private func abbreviated(_ count: Int) -> String {
+        guard count >= 1_000 else { return "\(count)" }
+        return String(format: "%.1fk", Double(count) / 1_000)
     }
 
     /// Display text for `view.currentTurnCost` — see that property's doc for
@@ -1593,73 +2027,14 @@ private struct UsageReadout: View {
     }
 }
 
-/// A themed stand-in for `.pickerStyle(.segmented)`. The native control draws
-/// its selected segment from the system accent, which would ignore this app's
-/// 16 palettes exactly where the mode switch is most prominent.
-private struct ModePicker: View {
-    @Environment(\.nexusTheme) private var theme
-    @Binding var mode: RunMode
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(RunMode.allCases) { candidate in
-                let selected = candidate == mode
-                Button {
-                    mode = candidate
-                } label: {
-                    Text(candidate.title)
-                        .font(.system(size: 12, weight: .medium))
-                        // Without this, a squeezed `HStack` lets the label
-                        // WRAP mid-word ("Agent" -> "Agen"/"t") instead of
-                        // reporting its true unwrapped width — which is
-                        // exactly what fooled `ViewThatFits` (`ControlStrip
-                        // .body`) into picking `singleRow` at 900pt once a
-                        // fourth control (`effortPicker`) pushed the row past
-                        // its real intrinsic width: the WRAPPED, artificially
-                        // shrunk measurement fit, so `ViewThatFits` never saw
-                        // the overflow that should have selected
-                        // `twoRowStack` instead. `.lineLimit(1)` forbids the
-                        // wrap; `.fixedSize` makes the view report that
-                        // un-wrapped size as its ideal width rather than
-                        // accepting a proposed width smaller than it needs.
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .foregroundStyle(selected ? theme.color(\.textPrimary) : theme.color(\.textMuted))
-                        .padding(.horizontal, Space.lg)
-                        .padding(.vertical, 5)
-                        .background {
-                            // The selected segment RISES out of the track
-                            // instead of filling with accent. A solid accent
-                            // segment made the mode switch the second-loudest
-                            // object on the chat screen — competing with Send,
-                            // which is the one action the accent is actually
-                            // reserved for. A lifted level-2 surface reads as
-                            // "this one is on top" using the same depth
-                            // language as the rest of the app, and leaves the
-                            // accent free to mean one thing.
-                            if selected {
-                                RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
-                                    .fill(theme.surface(2))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
-                                            .strokeBorder(Depth.specular(theme, level: 2, strength: 0.9), lineWidth: 1)
-                                    }
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(2)
-        .background(theme.color(\.surfaceInset))
-        .clipShape(RoundedRectangle(cornerRadius: Radius.control + 1, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.control + 1, style: .continuous)
-                .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
-        }
-        .animation(Motion.state, value: mode)
-    }
-}
+// `ModePicker` — a themed stand-in for `.pickerStyle(.segmented)` — used to
+// live here. It is deleted with the control strip it belonged to: four tabs
+// spent ~250pt of a row to render four words, three of which are always the
+// wrong answer, for the control a session touches least often. `ComposerFooter
+// .modePicker` states the current mode in words at a fifth of the width. The
+// judgement the tabs encoded is not lost — a selected segment RISES on a
+// level-2 surface rather than filling with accent, so the accent stays
+// reserved for Send — because there is no longer a segment to treat.
 
 /// One row of the empty state's "try asking" grid — a full-width card rather
 /// than the small capsule this used to be, so the four suggestions read as
@@ -1806,7 +2181,25 @@ struct TurnView: View {
     let turn: Turn
     var showsReasoning = false
     var isStreaming = false
+    /// Lane rendering: the prompt is suppressed (a fan-out run shows it once
+    /// above all lanes — see `ConversationView.compareTranscript`) and turns
+    /// sit closer together to fit a column.
+    ///
+    /// It no longer suppresses `attributionRow`. That was the single most
+    /// self-defeating thing about Compare: the screen whose entire purpose is
+    /// telling you WHICH backend said what was the one screen that dropped the
+    /// provider label, the cost, and the copy button. Compare now renders
+    /// identically to the single-lane transcript in every respect except the
+    /// prompt.
     var compact = false
+    /// The live token/cost counters, passed ONLY for a streaming turn.
+    ///
+    /// `ViewState.lastUsage`/`currentTurnCost` describe whatever ran most
+    /// recently at conversation scope, not this turn specifically, so handing
+    /// them to a settled turn would relabel finished history with the numbers
+    /// from a later run. `Turn` carries no usage of its own yet, which is the
+    /// one thing standing between this and §6.11's per-turn receipt.
+    var liveUsage: ViewState?
     @State private var hoveringAnswer = false
     @State private var copied = false
 
@@ -1829,11 +2222,7 @@ struct TurnView: View {
                 promptBlock(prompt)
             }
             if hasAnswerContent {
-                if compact {
-                    innerContent
-                } else {
-                    answerBlock
-                }
+                answerBlock
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1875,7 +2264,7 @@ struct TurnView: View {
                 // answer rather than the other speaker's turn. The indent is
                 // the entire signal, so it has to survive the longest prompt,
                 // not just short ones.
-                .frame(maxWidth: readingColumnWidth * 0.78, alignment: .trailing)
+                .frame(maxWidth: textColumnWidth * 0.78, alignment: .trailing)
         }
     }
 
@@ -1929,6 +2318,14 @@ struct TurnView: View {
                     .foregroundStyle(theme.color(\.successFg))
             }
             Spacer(minLength: Space.sm)
+            // Cost lives on the turn, not in the composer. Gated on
+            // `streaming` down there, what a turn cost vanished the instant it
+            // finished — the one moment the number becomes final and worth
+            // keeping. Right-aligned and dimmed so it reads as a receipt on
+            // the turn rather than a second label competing with the provider.
+            if let liveUsage {
+                UsageReadout(view: liveUsage)
+            }
             if hoveringAnswer && !turn.text.isEmpty {
                 copyButton
             }
@@ -1981,12 +2378,7 @@ struct TurnView: View {
             }
 
             ForEach(Array(turn.diffs.enumerated()), id: \.offset) { _, diff in
-                VStack(alignment: .leading, spacing: Space.sm) {
-                    Text(diff.path)
-                        .textStyle(Type.monoMicro)
-                        .foregroundStyle(theme.color(\.textLink))
-                    CodeBlock(text: diff.patch, isDiff: true)
-                }
+                DiffCard(diff: diff)
             }
 
             if let error = turn.error {
@@ -2058,28 +2450,60 @@ struct SwitchReceiptView: View {
 
     // MARK: - Accepted
 
+    /// A hairline across the measure, broken by a centred chip naming the two
+    /// endpoints.
+    ///
+    /// This was a 22-word sentence at `Type.caption` that wrapped to two lines
+    /// and so outweighed the attribution row of the turn above it — a
+    /// successful switch, the least eventful thing in the transcript, drawn
+    /// heavier than the answers around it. It also carried a stray
+    /// `.padding(.leading, Space.md)` that aligned it to nothing: not the
+    /// prose, not the slab, not the gutter.
+    ///
+    /// A rule broken by a chip is the conventional typographic mark for "the
+    /// document continues, under new conditions", and it states the one fact
+    /// that matters — from what, to what — at a weight matching how much the
+    /// reader needs to care. The caveat about what carries over is real and
+    /// kept verbatim, but it answers a question the reader only sometimes
+    /// asks, so it moves to the tooltip.
     private var acceptedRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: Space.sm) {
+        HStack(spacing: Space.md) {
+            rule
+            HStack(spacing: Space.xs) {
                 Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 10))
-                    .foregroundStyle(theme.color(\.textMuted))
-                // The exact wording `SwitchReceipt.preserved`'s doc comment
-                // asks for — honest about what carries over and what never
-                // did (tool-call history isn't in the transcript at ANY
-                // turn boundary, switch or not), rather than a bare "done"
-                // that implies more than it should.
-                Text("switched to \(receipt.to.label) — conversation and context carried over; tool-call history is not (never was, any turn boundary).")
-                    .textStyle(Type.caption)
-                    .foregroundStyle(theme.color(\.textMuted))
-                    .fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: 9))
+                Text(receipt.from.label)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 8, weight: .bold))
+                Text(receipt.to.label)
             }
-            if !receipt.warnings.isEmpty {
-                warningsList(receipt.warnings)
-            }
+            .textStyle(Type.monoMicro)
+            .foregroundStyle(theme.color(\.textMuted))
+            .lineLimit(1)
+            .fixedSize()
+            rule
         }
-        .padding(.leading, Space.md)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
+        .help(caveat)
+    }
+
+    private var rule: some View {
+        Rectangle()
+            .fill(theme.color(\.chromeDivider))
+            .frame(height: 1)
+    }
+
+    /// The exact wording `SwitchReceipt.preserved`'s doc comment asks for —
+    /// honest about what carries over and what never did (tool-call history
+    /// isn't in the transcript at ANY turn boundary, switch or not), rather
+    /// than a bare "done" that implies more than it should. Non-fatal
+    /// warnings join it here rather than rendering as their own row: on an
+    /// ACCEPTED switch the conversation underneath did not change shape, so
+    /// nothing here has earned space in the column.
+    private var caveat: String {
+        var parts = ["Conversation and context carried over; tool-call history is not (never was, any turn boundary)."]
+        parts.append(contentsOf: receipt.warnings)
+        return parts.joined(separator: "\n")
     }
 
     // MARK: - Blocked
@@ -2145,6 +2569,208 @@ struct SwitchReceiptView: View {
     }
 }
 
+/// One file's patch, as a card in the same family as `ToolRow` (§6.9).
+///
+/// What this replaces was a bare path label above a `CodeBlock` — and
+/// `CodeBlock` is a `ScrollView([.horizontal, .vertical])` capped at 300pt.
+/// Nesting a bidirectional scroll view inside the transcript's own scroll view
+/// has two specific consequences on macOS: a trackpad gesture that begins over
+/// the patch is captured by the inner view, so the transcript stops scrolling
+/// under the pointer for no visible reason; and the 300pt cap guillotines the
+/// patch mid-line with no indication of how much is below.
+///
+/// A card fixes both by not competing. The body scrolls in NO direction: long
+/// lines wrap, and the line count is capped with a stated remainder the reader
+/// can lift. The same chevron affordance as `ToolRow` is deliberate — a diff
+/// and a tool call are both "something the model did, expandable", and they
+/// should read as one family rather than two conventions.
+private struct DiffCard: View {
+    @Environment(\.nexusTheme) private var theme
+    /// Optional because `TurnView` is rendered wherever a transcript is, and
+    /// binding a hard requirement on `WorkspaceModel` here would make the view
+    /// uninstantiable outside the one tree that provides it. `Open` is simply
+    /// withheld when there is no project to resolve a relative path against.
+    @Environment(WorkspaceModel.self) private var workspace: WorkspaceModel?
+    let diff: TurnDiff
+    @State private var expanded = true
+    @State private var showingAllLines = false
+
+    private var lines: [String] {
+        diff.patch.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    /// `+41 −7`, counted off the patch body. Hunk headers (`@@`) and the
+    /// `+++`/`---` file markers are excluded — they start with the same
+    /// characters but are not changed lines, and counting them inflates every
+    /// diff by two.
+    private var stats: (added: Int, removed: Int) {
+        lines.reduce(into: (0, 0)) { counts, line in
+            if line.hasPrefix("+") && !line.hasPrefix("+++") { counts.0 += 1 }
+            if line.hasPrefix("-") && !line.hasPrefix("---") { counts.1 += 1 }
+        }
+    }
+
+    private var resolvedURL: URL? {
+        guard let root = workspace?.projectDirectory else { return nil }
+        return root.appendingPathComponent(diff.path)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if expanded { body(for: showingAllLines ? lines : Array(lines.prefix(Self.lineCap))) }
+        }
+        // Rises one rung off the canvas, same rule as `ToolRow` — see §6.4.
+        // The patch text INSIDE it is machine output nested in a raised
+        // object, so that recesses to `surfaceInset`; the two together are
+        // what make a diff read as a card holding a code well rather than as
+        // two unrelated rectangles.
+        .background(theme.surface(2), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        // The nested code well is a full-bleed rectangle, so without this it
+        // squares off the card's own bottom corners.
+        .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .strokeBorder(theme.color(\.chromeBorderSubtle), lineWidth: 1)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: Space.sm) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: Space.sm) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .foregroundStyle(theme.color(\.textMuted))
+                    pathLabel
+                    Spacer(minLength: Space.md)
+                    Text("+\(stats.added)")
+                        .foregroundStyle(theme.color(\.diffAddedFg))
+                    Text("−\(stats.removed)")
+                        .foregroundStyle(theme.color(\.diffRemovedFg))
+                }
+                .textStyle(Type.monoMicro)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if let resolvedURL {
+                Button("Open") { NSWorkspace.shared.open(resolvedURL) }
+                    .buttonStyle(.plain)
+                    .textStyle(Type.micro)
+                    .foregroundStyle(theme.color(\.textLink))
+                    .help("Open \(diff.path)")
+            }
+        }
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, 7)
+    }
+
+    /// Leading directories dimmed, filename at full contrast. The filename is
+    /// what identifies the change; the path to it is context, and setting both
+    /// at one weight made every diff header read as an undifferentiated run of
+    /// mono text.
+    private var pathLabel: some View {
+        let parts = diff.path.split(separator: "/").map(String.init)
+        let file = parts.last ?? diff.path
+        let prefix = parts.dropLast().joined(separator: "/")
+        return HStack(spacing: 0) {
+            if !prefix.isEmpty {
+                Text(prefix + "/")
+                    .foregroundStyle(theme.color(\.textMuted))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Text(file)
+                .foregroundStyle(theme.color(\.textPrimary))
+                .lineLimit(1)
+                .layoutPriority(1)
+        }
+    }
+
+    private func body(for shown: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(shown.enumerated()), id: \.offset) { _, line in
+                    Text(line.isEmpty ? " " : line)
+                        .textStyle(Type.mono)
+                        .foregroundStyle(color(for: line))
+                        .textSelection(.enabled)
+                        // Wraps rather than scrolling sideways. A wrapped
+                        // continuation is unambiguous in a diff — it cannot be
+                        // mistaken for a changed line, because it carries no
+                        // +/- marker of its own.
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.color(\.surfaceInset))
+
+            if !showingAllLines && lines.count > Self.lineCap {
+                Button("Show \(lines.count - Self.lineCap) more lines") { showingAllLines = true }
+                    .buttonStyle(.plain)
+                    .textStyle(Type.micro)
+                    .foregroundStyle(theme.color(\.textLink))
+                    .padding(.horizontal, Space.lg)
+                    .padding(.bottom, Space.md)
+            }
+        }
+    }
+
+    private func color(for line: String) -> Color {
+        if line.hasPrefix("+") { return theme.color(\.diffAddedFg) }
+        if line.hasPrefix("-") { return theme.color(\.diffRemovedFg) }
+        if line.hasPrefix("@@") { return theme.color(\.diffGutter) }
+        return theme.color(\.diffContext)
+    }
+
+    private static let lineCap = 20
+}
+
+/// Where the transcript is scrolled to, assembled from two separate geometry
+/// reads (§6.7).
+///
+/// The content probe knows the content's height and how far it has been pushed
+/// up; the viewport probe knows the visible height. Neither knows the other, so
+/// they publish through one preference and `reduce` merges them — each probe
+/// contributes zeros for the field it cannot see, so the merge is a plain sum
+/// and does not depend on which probe reports first.
+///
+/// Both probes live in `.background`, which is the property that makes this
+/// safe: a background takes its size FROM its parent and never contributes to
+/// the parent's own sizing, so measuring the transcript here cannot feed back
+/// into laying the transcript out.
+private struct TranscriptMetrics: Equatable {
+    var contentHeight: CGFloat = 0
+    var offset: CGFloat = 0
+    var viewportHeight: CGFloat = 0
+
+    /// How far the bottom of the content sits below the bottom of the
+    /// viewport. Clamped at zero: content shorter than the viewport is
+    /// trivially "at the tail", and a negative distance would otherwise read
+    /// as scrolled-past-the-end.
+    var distanceFromBottom: CGFloat {
+        max(0, contentHeight - viewportHeight - offset)
+    }
+}
+
+private struct TranscriptMetricsKey: PreferenceKey {
+    static let defaultValue = TranscriptMetrics()
+
+    static func reduce(value: inout TranscriptMetrics, nextValue: () -> TranscriptMetrics) {
+        let next = nextValue()
+        value.contentHeight += next.contentHeight
+        value.offset += next.offset
+        value.viewportHeight += next.viewportHeight
+    }
+}
+
 /// A blinking caret — motion that means exactly one thing: this turn is still
 /// producing text right now. Not `private`: `Markdown.swift` reuses it to cap
 /// off a streaming markdown answer, wherever in the block structure that
@@ -2156,7 +2782,12 @@ struct StreamingCaret: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 1)
             .fill(theme.color(\.streamCursor))
-            .frame(width: 6, height: 14)
+            // 2.5pt, down from 6. At 6pt this was a terminal block cursor —
+            // wider than the stems of the 15pt prose it sits against, so it
+            // read as a filled rectangle punctuating the sentence rather than
+            // as a caret continuing it. A caret should be about the weight of
+            // the strokes around it.
+            .frame(width: 2.5, height: 14)
             .opacity(dim ? 0.15 : 1)
             .onAppear {
                 withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) {
@@ -2197,6 +2828,10 @@ struct ToolRow: View {
     let tool: ToolActivity
     @State private var expanded = false
     @State private var hovering = false
+    /// Whether the 20-line payload cap has been lifted for this row. Per-row
+    /// and non-persistent on purpose: lifting it is a decision about one
+    /// output you are looking at now, not a preference.
+    @State private var showingFullPayload = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -2212,12 +2847,25 @@ struct ToolRow: View {
                     Text(tool.name)
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(theme.color(\.textPrimary))
-                    if let args = tool.args {
-                        Text(args.inlineDescription)
+                    if let subtitle = ToolSummary.arguments(name: tool.name, args: tool.args) {
+                        Text(subtitle)
                             .textStyle(Type.monoMicro)
                             .foregroundStyle(theme.color(\.textMuted))
                             .lineLimit(1)
-                            .truncationMode(.tail)
+                            // `.middle`: these are paths, and a path's two
+                            // ends (the repo-relative root and the filename)
+                            // are what identify it. Tail-truncating
+                            // `Sources/NexusApp/Features/ConversationView
+                            // .swift` throws away the only part anyone reads.
+                            .truncationMode(.middle)
+                    }
+                    if let outcome = ToolSummary.outcome(tool) {
+                        Spacer(minLength: Space.md)
+                        Text(outcome.text)
+                            .textStyle(Type.monoMicro)
+                            .foregroundStyle(outcome.failed ? theme.color(\.errorFg) : theme.color(\.textMuted))
+                            .lineLimit(1)
+                            .fixedSize()
                     }
                 }
                 .padding(.horizontal, Space.lg)
@@ -2230,10 +2878,19 @@ struct ToolRow: View {
             if expanded {
                 VStack(alignment: .leading, spacing: Space.md) {
                     if let args = tool.args {
-                        labeledPayload("args", prettyPrinted(args))
+                        argumentsSection(args)
                     }
                     if let result = tool.result {
-                        labeledPayload("result", prettyPrinted(result))
+                        payloadSection(
+                            "result",
+                            ToolSummary.plainText(result),
+                            // A command's interesting output is at the END
+                            // (the error, the summary line, the prompt it
+                            // returned to); a file read's is at the START.
+                            // One rule for both directions gets one of them
+                            // wrong every time.
+                            keepingTail: ToolSummary.isCommandLike(tool.name)
+                        )
                     }
                 }
                 .padding(.horizontal, Space.lg)
@@ -2245,8 +2902,17 @@ struct ToolRow: View {
         // edge to edge drew a wide empty rectangle through the middle of the
         // answer and broke the column's vertical flow for no information.
         .fixedSize(horizontal: !expanded, vertical: false)
+        // RISES off the canvas, rather than recessing into it (§6.4).
+        //
+        // Measured, a tool row sat at `#111218` under a `#14161C` canvas — it
+        // sank. The transcript therefore ran in two directions at once: the
+        // user slab rose, the tool row sank, the code well inside it sank
+        // further, and the canvas ended up the lightest large surface on
+        // screen. One rule instead: an object distinct from the canvas rises
+        // one rung, and only machine output NESTED inside such an object
+        // recesses (which is what the expanded payload below still does).
         .background(
-            hovering ? theme.color(\.surfaceOverlay).opacity(0.6) : theme.color(\.surfaceInset).opacity(0.5),
+            hovering ? theme.color(\.surfaceOverlay) : theme.surface(2),
             in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
         )
         .overlay {
@@ -2256,24 +2922,224 @@ struct ToolRow: View {
         .animation(Motion.state, value: hovering)
     }
 
+    /// Arguments as a small key/value table, not a JSON blob in a code well.
+    ///
+    /// A tool call's arguments are a handful of short named values — that is a
+    /// table, and rendering it as pretty-printed JSON inside a `CodeBlock`
+    /// spent a scrolling container and four lines of braces to show two facts.
+    /// Falls back to the raw encoding only for the shapes a table genuinely
+    /// cannot express (a bare array, a nested object).
     @ViewBuilder
-    private func labeledPayload(_ label: String, _ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label.uppercased())
-                .textStyle(Type.micro)
-                .tracking(0.5)
-                .foregroundStyle(theme.color(\.textMuted))
-            CodeBlock(text: text)
+    private func argumentsSection(_ args: JSONValue) -> some View {
+        if case .object(let fields) = args, !fields.isEmpty, fields.values.allSatisfy(ToolSummary.isScalar) {
+            VStack(alignment: .leading, spacing: 3) {
+                sectionLabel("args")
+                // Emitted order is not recoverable from a Swift dictionary, so
+                // this sorts — but by SALIENCE, not alphabetically. `path`
+                // before `limit` is the difference between reading the
+                // argument list and decoding it. (The old code used
+                // `.sortedKeys`, which put `limit` first for every file read
+                // in the transcript.)
+                ForEach(ToolSummary.orderedKeys(fields), id: \.self) { key in
+                    HStack(alignment: .top, spacing: Space.sm) {
+                        Text(key)
+                            .textStyle(Type.monoMicro)
+                            .foregroundStyle(theme.color(\.textMuted))
+                            .frame(width: 72, alignment: .leading)
+                        Text(fields[key]?.inlineDescription ?? "")
+                            .textStyle(Type.monoMicro)
+                            .foregroundStyle(theme.color(\.textSecondary))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        } else {
+            payloadSection("args", ToolSummary.plainText(args), keepingTail: false)
         }
     }
 
-    private func prettyPrinted(_ value: JSONValue) -> String {
+    /// A capped payload with an honest footer saying what was withheld.
+    ///
+    /// The cap is the point: a 4,000-line command output rendered in full
+    /// inside the transcript buries every turn after it, and the old
+    /// `CodeBlock` "solved" that with a nested scroll view that stole
+    /// trackpad momentum from the transcript's own. Twenty lines plus a
+    /// stated count is the honest version — you can always see how much you
+    /// are not being shown, and lift the cap deliberately.
+    @ViewBuilder
+    private func payloadSection(_ label: String, _ text: String, keepingTail: Bool) -> some View {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let capped = showingFullPayload || lines.count <= Self.payloadLineCap
+        let shown = capped
+            ? lines
+            : (keepingTail ? Array(lines.suffix(Self.payloadLineCap)) : Array(lines.prefix(Self.payloadLineCap)))
+
+        VStack(alignment: .leading, spacing: 3) {
+            sectionLabel(label)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(shown.enumerated()), id: \.offset) { _, line in
+                    Text(line.isEmpty ? " " : line)
+                        .textStyle(Type.monoMicro)
+                        .foregroundStyle(theme.color(\.textSecondary))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Space.sm)
+            .background(theme.color(\.surfaceInset), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+
+            if !capped {
+                HStack(spacing: Space.md) {
+                    Text("Showing \(keepingTail ? "last" : "first") \(Self.payloadLineCap) of \(lines.count) lines")
+                    Button("Show all") { showingFullPayload = true }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(theme.color(\.textLink))
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.color(\.textLink))
+                }
+                .textStyle(Type.micro)
+                .foregroundStyle(theme.color(\.textMuted))
+            }
+        }
+    }
+
+    private func sectionLabel(_ label: String) -> some View {
+        Text(label.uppercased())
+            .textStyle(Type.micro)
+            .tracking(0.5)
+            .foregroundStyle(theme.color(\.textMuted))
+    }
+
+    private static let payloadLineCap = 20
+}
+
+/// How a tool call reads as one line: which of its arguments is the fact worth
+/// showing, and what its result amounted to.
+///
+/// This replaces `JSONValue.inlineDescription` at the `ToolRow` call site,
+/// which returned `fields.keys.sorted().prefix(3)` — so a file read rendered
+/// as `read_file {limit, path}`. That is a description of the SHAPE of the
+/// arguments, and by construction it can never show a value: the one fact a
+/// reader wants from a tool row (which file? which command?) was the one fact
+/// it was structurally incapable of printing.
+///
+/// `inlineDescription` itself is untouched and still right for what it does —
+/// summarising an arbitrary payload of unknown shape. This is the per-tool
+/// knowledge that call site needed and it did not have.
+private enum ToolSummary {
+    /// The salient argument VALUE for a known tool, or a key summary for one
+    /// this does not recognise. Unknown tools keep the old behaviour rather
+    /// than guessing at a field name — a wrong value shown confidently is
+    /// worse than an honest shape.
+    static func arguments(name: String, args: JSONValue?) -> String? {
+        guard let args else { return nil }
+        switch normalised(name) {
+        case "read_file", "read", "open_file", "view":
+            return args["path"]?.stringValue ?? args["file"]?.stringValue ?? args.inlineDescription
+        case "bash", "shell", "run", "exec", "run_command", "terminal":
+            return (args["command"]?.stringValue ?? args["cmd"]?.stringValue).map(firstLine)
+                ?? args.inlineDescription
+        case "edit", "write", "write_file", "str_replace", "apply_patch", "create_file":
+            return args["path"]?.stringValue ?? args["file"]?.stringValue ?? args.inlineDescription
+        case "grep", "search", "ripgrep", "search_files":
+            return args["pattern"]?.stringValue ?? args["query"]?.stringValue ?? args.inlineDescription
+        case "web_fetch", "fetch", "http", "curl":
+            return (args["url"]?.stringValue).map(host) ?? args.inlineDescription
+        case "glob", "list_files", "ls":
+            return args["pattern"]?.stringValue ?? args["path"]?.stringValue ?? args.inlineDescription
+        default:
+            return args.inlineDescription
+        }
+    }
+
+    /// The right-hand fact: what the call amounted to. `nil` while a call is
+    /// still running — an outcome that has not happened yet is not a blank,
+    /// it is absent.
+    ///
+    /// Duration belongs here too per §6.5's sketch, and is deliberately not
+    /// faked: `ToolActivity` carries `id`/`name`/`args`/`status`/`result` and
+    /// no timestamps at all, so there is nothing to compute one from. See the
+    /// report.
+    static func outcome(_ tool: ToolActivity) -> (text: String, failed: Bool)? {
+        if tool.status == .running { return nil }
+        if tool.status == .error { return ("failed", true) }
+        guard let result = tool.result else { return nil }
+
+        if let code = result["exitCode"]?.intValue ?? result["exit_code"]?.intValue {
+            return ("exit \(code)", code != 0)
+        }
+        if let matches = result["matches"]?.arrayValue?.count {
+            return ("\(matches) \(matches == 1 ? "match" : "matches")", false)
+        }
+        let text = plainText(result)
+        guard !text.isEmpty else { return nil }
+        let count = text.split(separator: "\n", omittingEmptySubsequences: false).count
+        return ("\(count) \(count == 1 ? "line" : "lines")", false)
+    }
+
+    /// Whether this tool's output reads bottom-up. See `payloadSection`.
+    static func isCommandLike(_ name: String) -> Bool {
+        ["bash", "shell", "run", "exec", "run_command", "terminal"].contains(normalised(name))
+    }
+
+    /// Argument keys in reading order: the identifying value first, its
+    /// modifiers after, anything unrecognised last but still alphabetical so
+    /// the order is at least stable.
+    static func orderedKeys(_ fields: [String: JSONValue]) -> [String] {
+        let salient = ["path", "file", "command", "cmd", "pattern", "query", "url"]
+        let known = salient.filter { fields.keys.contains($0) }
+        let rest = fields.keys.filter { !salient.contains($0) }.sorted()
+        return known + rest
+    }
+
+    static func isScalar(_ value: JSONValue) -> Bool {
+        switch value {
+        case .object, .array: return false
+        default: return true
+        }
+    }
+
+    /// A payload as readable text. A tool result is very often already a
+    /// string (or the CLI's `[{type:"text", text:…}]` content-block array), and
+    /// re-encoding that as JSON just to display it wraps real output in quotes
+    /// and escapes every newline into a literal `\n`.
+    static func plainText(_ value: JSONValue) -> String {
+        if let string = value.stringValue { return string }
+        if let items = value.arrayValue {
+            let texts = items.compactMap { $0["text"]?.stringValue }
+            if texts.count == items.count, !texts.isEmpty { return texts.joined(separator: "\n") }
+        }
+        if let text = value["text"]?.stringValue { return text }
+        if let content = value["content"], let text = content.stringValue { return text }
+
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // No `.sortedKeys`: it destroys the order the CLI emitted, which is
+        // the order the tool's own author chose to present its fields in.
+        encoder.outputFormatting = [.prettyPrinted]
         guard let data = try? encoder.encode(value),
               let text = String(data: data, encoding: .utf8)
         else { return value.inlineDescription }
         return text
+    }
+
+    private static func normalised(_ name: String) -> String {
+        name.lowercased().split(separator: "-").joined(separator: "_")
+    }
+
+    private static func firstLine(_ command: String) -> String {
+        let line = command.split(separator: "\n").first.map(String.init) ?? command
+        return line.count > 60 ? String(line.prefix(60)) + "…" : line
+    }
+
+    private static func host(_ url: String) -> String {
+        URL(string: url)?.host ?? url
     }
 }
 

@@ -1,756 +1,333 @@
 import SwiftUI
 
-// Hand-designed app themes.
-//
-// These are NOT generated from `packages/theme` and are NOT ANSI-derived —
-// every hex value here was chosen for this window, not for a terminal cursor.
-// Where the 16 themes in `Generated/Themes.swift` are a flat palette that
-// happens to also render in the app, each theme below is a deliberate stance
-// on material, elevation, gradient, and typography, in the register of a
-// specific class of Mac app (Linear, Raycast, Warp, Things, Xcode). All 74
-// `ThemeTokens` fields are defined for each — a partially-defined theme
-// silently renders the wrong colour, so nothing here is left to a fallback.
-//
-// Contrast: every body/secondary pair below is verified in
-// `Tests/NexusKitTests/AppThemeTests.swift` against WCAG 2.1 floors (4.5:1
-// body, 3:1 secondary) on the theme's `surfaceBase`. None of the dark themes
-// use pure `#FFFFFF` for primary text on a near-black surface — an off-white
-// carries the same contrast without the glow pure white produces against a
-// near-black fill (see `DesignSystem.swift`'s note on `hairline`).
+/// The shipped theme catalogue: twelve seeds, expanded by `AppTheme.derived(from:)`.
+///
+/// **What this file used to be.** 756 lines in which each of seven themes spelled
+/// out all 74 `ThemeTokens` *and* a second, separately hand-typed `ElevationLadder`
+/// — 518 hex values, none of which any human could audit. The results were exactly
+/// what you would predict: `level2` and `level3` came out identical in five of the
+/// seven themes (so a popover had no rung above the card it floats over), both
+/// light themes collapsed levels 1, 2 and 3 into `#FFFFFF`, `chromeBorderSubtle`
+/// equalled `surfaceOverlay` in four themes, and two themes shipped a button whose
+/// label sat at 3.40:1 on its own fill. Every one of those is a copy-editing
+/// failure, not a taste failure.
+///
+/// **What it is now.** Each theme authors the ~22 colours that carry its identity;
+/// the other 52 tokens, the whole elevation ladder, both gradients and the state
+/// layers are derived from them (`ThemeDerivation.swift`), with every contrast
+/// floor enforced during derivation rather than checked afterwards. A duplicate
+/// rung is now unrepresentable, and `ThemeSeed.validate()` — asserted for all
+/// twelve in `ThemeCatalogTests` — refuses a palette that misses a floor.
+///
+/// **Sources.** These are not invented palettes. Each is anchored to a body of
+/// work developers have already voted for over years (Tokyo Night, Kanagawa,
+/// Catppuccin, Ayu, Everforest, Rosé Pine, Synthwave '84, Flexoki), corrected
+/// where the original misses this app's floors — every such correction is noted
+/// inline, because "we changed the famous theme" is exactly the kind of decision
+/// that deserves a reason next to it.
+public enum ThemeCatalog {
+    /// Every shipped theme, in picker order: darks first, then lights.
+    public static let seeds: [ThemeSeed] = [
+        storm, sumi, mocha, mirage, grove, moon, neon, ink,
+        porcelain, paper, dawn, clarity,
+    ]
 
-public extension AppTheme {
-    /// Dark, restrained, near-black, one confident accent. The register of an
-    /// app that trusts its content and gets out of the way — a single indigo
-    /// accent carries every interactive moment (link, focus ring, info,
-    /// spinner) instead of competing hues. Materials are used sparingly (thin
-    /// glass on the sidebar and composer) so translucency reads as considered
-    /// rather than decorative. Pairs with `studio` for OS light/dark.
-    static let meridian = AppTheme(
-        id: "meridian",
-        name: "Meridian",
+    // MARK: - Dark
+
+    /// The very modern one, and the app's default. Tokyo Night Storm.
+    ///
+    /// The reference implementation of the rule that separates this catalogue
+    /// from the one it replaces: **the surface ramp carries hue.** `#1A1B26` is
+    /// a blue-violet, not a grey, and every rung above it keeps that
+    /// temperature. A near-black neutral with one blue accent bolted on is what
+    /// reads as dead; a canvas that is already, quietly, the accent's own family
+    /// is what reads as designed.
+    static let storm = ThemeSeed(
+        id: "storm",
+        name: "Storm",
         isDark: true,
-        tokens: ThemeTokens(
-            surfaceSunken: "#08090D",
-            surfaceBase: "#0B0D12",
-            surfaceRaised: "#14161D",
-            surfaceOverlay: "#1B1E27",
-            surfaceInset: "#0D0F14",
-            textPrimary: "#EDEFF4",
-            textSecondary: "#9FA7B8",
-            textMuted: "#7F8797",
-            textInverse: "#0B0D12",
-            textLink: "#7EA2FF",
-            chromeBorder: "#262A36",
-            chromeBorderSubtle: "#1B1E27",
-            chromeBorderStrong: "#3A3F4E",
-            chromeBorderFocus: "#6E9BFF",
-            chromeTitle: "#EDEFF4",
-            chromeDivider: "#1B1E27",
-            accentDefault: "#6E9BFF",
-            accentEmphasis: "#9DBCFF",
-            accentMuted: "#35406B",
-            accentFg: "#0B0D12",
-            successFg: "#4FD08A",
-            successBg: "#0E2417",
-            successBorder: "#2E8A5C",
-            warningFg: "#E5B567",
-            warningBg: "#2A2110",
-            warningBorder: "#A9803A",
-            errorFg: "#F0708A",
-            errorBg: "#2A1018",
-            errorBorder: "#B84D66",
-            infoFg: "#6E9BFF",
-            infoBg: "#101A2E",
-            infoBorder: "#3A5390",
-            streamCursor: "#9DBCFF",
-            streamThinking: "#7F8797",
-            streamText: "#EDEFF4",
-            diffAddedFg: "#4FD08A",
-            diffAddedBg: "#0E2417",
-            diffRemovedFg: "#F0708A",
-            diffRemovedBg: "#2A1018",
-            diffContext: "#7F8797",
-            diffGutter: "#3A3F4E",
-            syntaxKeyword: "#F0708A",
-            syntaxFunction: "#9DBCFF",
-            syntaxType: "#7EC9E0",
-            syntaxString: "#7ED0A0",
-            syntaxNumber: "#E5B567",
-            syntaxComment: "#7F8797",
-            syntaxOperator: "#9FA7B8",
-            syntaxVariable: "#EDEFF4",
-            syntaxConstant: "#C9A6FF",
-            syntaxTag: "#7ED0A0",
-            syntaxAttribute: "#E5B567",
-            syntaxInvalid: "#F0708A",
-            providerAnthropic: "#E0916B",
-            providerOpenai: "#4FD0A8",
-            providerGoogle: "#6E9BFF",
-            providerXai: "#C7CCD6",
-            providerOllama: "#B39DE0",
-            providerMistral: "#FF8A44",
-            providerDeepseek: "#7C93FF",
-            providerCustom: "#E080C0",
-            costOk: "#4FD08A",
-            costWarn: "#E5B567",
-            costCrit: "#F0708A",
-            selectionBg: "#1B2740",
-            selectionFg: "#EDEFF4",
-            focusRing: "#6E9BFF",
-            badgeBg: "#14161D",
-            badgeFg: "#EDEFF4",
-            scrollbarTrack: "#14161D",
-            scrollbarThumb: "#3A3F4E",
-            spinner: "#6E9BFF",
-            linkVisited: "#B79CE8",
-            overlayScrim: "#08090D"
-        ),
-        pairId: "studio",
-        elevation: ElevationLadder(
-            level0: ElevationStep(surface: "#08090D", border: "#1B1E27", shadowOpacity: 0, shadowRadius: 0),
-            level1: ElevationStep(surface: "#14161D", border: "#262A36", shadowOpacity: 0.14, shadowRadius: 6),
-            level2: ElevationStep(surface: "#1B1E27", border: "#3A3F4E", shadowOpacity: 0.22, shadowRadius: 12),
-            level3: ElevationStep(surface: "#1B1E27", border: "#6E9BFF", shadowOpacity: 0.30, shadowRadius: 20)
-        ),
-        materials: MaterialUsage(sidebar: .thin, overlay: .regular, composer: .thin),
-        gradients: GradientSet(
-            surfaceWash: ["#0B0D12", "#08090D"],
-            accentGradient: ["#6E9BFF", "#7CE0C8"]
-        ),
-        stateLayers: StateLayers(hover: 0.08, pressed: 0.14, selected: 0.18, disabled: 0.38),
-        accents: AccentSystem(primary: "#6E9BFF", secondary: "#7CE0C8"),
+        pairId: "porcelain",
+        surfaces: SurfaceRamp(sunken: "#121320", base: "#1A1B26", raised: "#22243A", overlay: "#2A2E48", inset: "#161721"),
+        // Comment/muted raised from Tokyo Night's own `#565F89`, which measures
+        // ~2.6:1 on this base — below even the 3:1 non-text floor, and the most
+        // commonly patched value in the theme's own issue tracker.
+        text: TextRamp(primary: "#C0CAF5", secondary: "#A9B1D6", muted: "#737AA2"),
+        accent: AccentSeed(primary: "#7AA2F7", secondary: "#BB9AF7"),
+        semantic: SemanticSeed(success: "#9ECE6A", warning: "#E0AF68", error: "#F7768E", info: "#7DCFFF"),
+        syntax: SyntaxSeed(keyword: "#BB9AF7", function: "#7AA2F7", type: "#2AC3DE", string: "#9ECE6A", number: "#FF9E64", comment: "#737AA2"),
+        materials: MaterialUsage(sidebar: .solid, overlay: .regular, composer: .solid),
         typography: .neutral
     )
-}
 
-public extension AppTheme {
-    /// Dark, a deep surface ladder with hairline borders and deliberately NO
-    /// shadow — depth comes entirely from four flat surface tones stepping
-    /// away from black, the way a command-palette app reads. Violet accent,
-    /// tool-forward typography (tighter tracking, mono-leaning labels) for
-    /// the register of an app you drive with the keyboard. Solid everywhere —
-    /// no material — so the ladder itself carries all the depth.
-    static let basalt = AppTheme(
-        id: "basalt",
-        name: "Basalt",
+    /// The developer-friendly one. Kanagawa Wave.
+    ///
+    /// Its defining property is *low accent chroma* — roughly C 0.095 where the
+    /// rest of this catalogue sits 0.13–0.19. That restraint is not blandness,
+    /// it is the whole eight-hour register: nothing on screen is bright enough
+    /// to pull the eye off the code. Warm ink (`#DCD7BA`) on cool ground is the
+    /// second half of it, and the reason the palette reads as sumi on paper
+    /// rather than as a dimmed dark theme.
+    static let sumi = ThemeSeed(
+        id: "sumi",
+        name: "Sumi",
         isDark: true,
-        tokens: ThemeTokens(
-            surfaceSunken: "#08070C",
-            surfaceBase: "#0C0B14",
-            surfaceRaised: "#17151F",
-            surfaceOverlay: "#201D2C",
-            surfaceInset: "#0F0D17",
-            textPrimary: "#E7E6F0",
-            textSecondary: "#9A97B4",
-            textMuted: "#8885A0",
-            textInverse: "#0C0B14",
-            textLink: "#B79CFF",
-            chromeBorder: "#2A273A",
-            chromeBorderSubtle: "#201D2C",
-            chromeBorderStrong: "#423C58",
-            chromeBorderFocus: "#A88BFF",
-            chromeTitle: "#E7E6F0",
-            chromeDivider: "#201D2C",
-            accentDefault: "#A88BFF",
-            accentEmphasis: "#C4AEFF",
-            accentMuted: "#4E4380",
-            accentFg: "#0C0B14",
-            successFg: "#5FD9A0",
-            successBg: "#102A1E",
-            successBorder: "#347A57",
-            warningFg: "#E8BE6E",
-            warningBg: "#2C2211",
-            warningBorder: "#A9843C",
-            errorFg: "#F27690",
-            errorBg: "#2C121C",
-            errorBorder: "#B8506C",
-            infoFg: "#7FA6FF",
-            infoBg: "#131F38",
-            infoBorder: "#3E5896",
-            streamCursor: "#C4AEFF",
-            streamThinking: "#8885A0",
-            streamText: "#E7E6F0",
-            diffAddedFg: "#5FD9A0",
-            diffAddedBg: "#102A1E",
-            diffRemovedFg: "#F27690",
-            diffRemovedBg: "#2C121C",
-            diffContext: "#8885A0",
-            diffGutter: "#423C58",
-            syntaxKeyword: "#F27690",
-            syntaxFunction: "#7FA6FF",
-            syntaxType: "#6FD3D0",
-            syntaxString: "#5FD9A0",
-            syntaxNumber: "#E8BE6E",
-            syntaxComment: "#8885A0",
-            syntaxOperator: "#9A97B4",
-            syntaxVariable: "#E7E6F0",
-            syntaxConstant: "#C4AEFF",
-            syntaxTag: "#5FD9A0",
-            syntaxAttribute: "#E8BE6E",
-            syntaxInvalid: "#F27690",
-            providerAnthropic: "#E5946D",
-            providerOpenai: "#58D9AE",
-            providerGoogle: "#7FA6FF",
-            providerXai: "#CBCBD8",
-            providerOllama: "#A88BFF",
-            providerMistral: "#FF8F4A",
-            providerDeepseek: "#7E93FF",
-            providerCustom: "#E285C8",
-            costOk: "#5FD9A0",
-            costWarn: "#E8BE6E",
-            costCrit: "#F27690",
-            selectionBg: "#241F38",
-            selectionFg: "#E7E6F0",
-            focusRing: "#A88BFF",
-            badgeBg: "#17151F",
-            badgeFg: "#E7E6F0",
-            scrollbarTrack: "#17151F",
-            scrollbarThumb: "#423C58",
-            spinner: "#A88BFF",
-            linkVisited: "#C4AEFF",
-            overlayScrim: "#08070C"
-        ),
-        pairId: nil,
-        elevation: ElevationLadder(
-            level0: ElevationStep(surface: "#08070C", border: "#201D2C", shadowOpacity: 0, shadowRadius: 0),
-            level1: ElevationStep(surface: "#17151F", border: "#2A273A", shadowOpacity: 0, shadowRadius: 0),
-            level2: ElevationStep(surface: "#201D2C", border: "#423C58", shadowOpacity: 0, shadowRadius: 0),
-            level3: ElevationStep(surface: "#272232", border: "#A88BFF", shadowOpacity: 0, shadowRadius: 0)
-        ),
-        materials: MaterialUsage(sidebar: .solid, overlay: .solid, composer: .solid),
-        gradients: GradientSet(
-            surfaceWash: ["#0C0B14", "#0C0B14"],
-            accentGradient: ["#A88BFF", "#6FD3D0"]
-        ),
-        stateLayers: StateLayers(hover: 0.06, pressed: 0.11, selected: 0.16, disabled: 0.35),
-        accents: AccentSystem(primary: "#A88BFF", secondary: "#6FD3D0"),
+        pairId: "paper",
+        surfaces: SurfaceRamp(sunken: "#16161D", base: "#1F1F28", raised: "#2A2A37", overlay: "#363646", inset: "#1A1A22"),
+        text: TextRamp(primary: "#DCD7BA", secondary: "#C8C093", muted: "#938AA9"),
+        accent: AccentSeed(primary: "#7E9CD8", secondary: "#E6C384"),
+        semantic: SemanticSeed(success: "#98BB6C", warning: "#FF9E3B", error: "#E46876", info: "#7FB4CA"),
+        syntax: SyntaxSeed(keyword: "#957FB8", function: "#7E9CD8", type: "#7AA89F", string: "#98BB6C", number: "#D27E99", comment: "#727169"),
+        typography: .neutral
+    )
+
+    /// The cozy one. Catppuccin Mocha.
+    ///
+    /// Widest usable ladder in the catalogue — the base→raised step is ΔL\* 5.8,
+    /// nearly double some of its neighbours, which is what gives a card real
+    /// separation from the canvas without a border doing the work.
+    static let mocha = ThemeSeed(
+        id: "mocha",
+        name: "Mocha",
+        isDark: true,
+        surfaces: SurfaceRamp(sunken: "#181825", base: "#1E1E2E", raised: "#292A3D", overlay: "#35374D", inset: "#11111B"),
+        text: TextRamp(primary: "#CDD6F4", secondary: "#A6ADC8", muted: "#7F849C"),
+        accent: AccentSeed(primary: "#CBA6F7", secondary: "#94E2D5"),
+        semantic: SemanticSeed(success: "#A6E3A1", warning: "#F9E2AF", error: "#F38BA8", info: "#89B4FA"),
+        syntax: SyntaxSeed(keyword: "#CBA6F7", function: "#89B4FA", type: "#F9E2AF", string: "#A6E3A1", number: "#FAB387", comment: "#7F849C"),
+        materials: MaterialUsage(sidebar: .solid, overlay: .regular, composer: .solid),
+        typography: .neutral
+    )
+
+    /// The product one. Ayu Mirage.
+    ///
+    /// The theme that proves the accent rule: amber (H 83°) against a blue-grey
+    /// ground (H 267°) is a 184° near-complementary split, so the two accents
+    /// can never be confused for one another. That maps onto the one distinction
+    /// this app most needs to draw — warm is *your* action, cool is the model's
+    /// output — instead of onto decoration.
+    static let mirage = ThemeSeed(
+        id: "mirage",
+        name: "Mirage",
+        isDark: true,
+        surfaces: SurfaceRamp(sunken: "#161A23", base: "#1F2430", raised: "#282F3E", overlay: "#333C4D", inset: "#171B24"),
+        text: TextRamp(primary: "#CCCAC2", secondary: "#9EA6B4", muted: "#8A93A3"),
+        accent: AccentSeed(primary: "#FFCC66", secondary: "#5CCFE6"),
+        semantic: SemanticSeed(success: "#87D96C", warning: "#FFCC66", error: "#F27983", info: "#5CCFE6"),
+        syntax: SyntaxSeed(keyword: "#FFA659", function: "#FFCD66", type: "#73D0FF", string: "#D5FF80", number: "#DFBFFF", comment: "#6E7C8F"),
         typography: .toolForged
     )
-}
 
-public extension AppTheme {
-    /// Dark, warm, a strong single brand colour rather than a neutral
-    /// palette that happens to have an accent — the register of an app that
-    /// wants to be recognised at a glance. Brand red-orange shows up as the
-    /// window's actual warmth (surfaces lean brown-black, not blue-black),
-    /// carries the accent gradient prominently, and gets real glass on
-    /// overlays and the composer. Pairs with `daylight` for OS light/dark.
-    static let cinder = AppTheme(
-        id: "cinder",
-        name: "Cinder",
+    /// Lowest eye strain, and the best diffs in the catalogue. Everforest Dark.
+    ///
+    /// Its base sits at L\* ≈ 21.7 — by far the lightest dark base here, which
+    /// keeps the whole palette out of the crushed bottom of sRGB where adjacent
+    /// surfaces stop being separable at all.
+    ///
+    /// **The diff pair is the reason to ship it.** `#A7C080` and `#E67E80` are
+    /// 106° apart at matched lightness, so an added and a removed line differ by
+    /// hue rather than by brightness — which is what keeps them apart for a
+    /// red-green colour-blind reader too.
+    static let grove = ThemeSeed(
+        id: "grove",
+        name: "Grove",
         isDark: true,
-        tokens: ThemeTokens(
-            surfaceSunken: "#130E09",
-            surfaceBase: "#181008",
-            surfaceRaised: "#241A0E",
-            surfaceOverlay: "#2D2013",
-            surfaceInset: "#1B140B",
-            textPrimary: "#F4EAE1",
-            textSecondary: "#B99E8A",
-            textMuted: "#9D8774",
-            textInverse: "#181008",
-            textLink: "#FF9D6E",
-            chromeBorder: "#3A2C1C",
-            chromeBorderSubtle: "#2D2013",
-            chromeBorderStrong: "#55402A",
-            chromeBorderFocus: "#FF6B4A",
-            chromeTitle: "#F4EAE1",
-            chromeDivider: "#2D2013",
-            accentDefault: "#FF6B4A",
-            accentEmphasis: "#FF8F6E",
-            accentMuted: "#8A3A26",
-            accentFg: "#181008",
-            successFg: "#8FCB6A",
-            successBg: "#1C260E",
-            successBorder: "#5C8A38",
-            warningFg: "#F0B94E",
-            warningBg: "#2E2410",
-            warningBorder: "#B08A2C",
-            errorFg: "#FF6B6B",
-            errorBg: "#2E1210",
-            errorBorder: "#C24040",
-            infoFg: "#6EB8E0",
-            infoBg: "#122430",
-            infoBorder: "#3E7EA0",
-            streamCursor: "#FF8F6E",
-            streamThinking: "#9D8774",
-            streamText: "#F4EAE1",
-            diffAddedFg: "#8FCB6A",
-            diffAddedBg: "#1C260E",
-            diffRemovedFg: "#FF6B6B",
-            diffRemovedBg: "#2E1210",
-            diffContext: "#9D8774",
-            diffGutter: "#55402A",
-            syntaxKeyword: "#FF6B6B",
-            syntaxFunction: "#FFA96E",
-            syntaxType: "#6EB8E0",
-            syntaxString: "#8FCB6A",
-            syntaxNumber: "#F0B94E",
-            syntaxComment: "#9D8774",
-            syntaxOperator: "#B99E8A",
-            syntaxVariable: "#F4EAE1",
-            syntaxConstant: "#E0A0FF",
-            syntaxTag: "#FF9D6E",
-            syntaxAttribute: "#F0B94E",
-            syntaxInvalid: "#FF6B6B",
-            providerAnthropic: "#FF6B4A",
-            providerOpenai: "#6ED0A8",
-            providerGoogle: "#6EB8E0",
-            providerXai: "#E4D5C4",
-            providerOllama: "#C79CE8",
-            providerMistral: "#FF9433",
-            providerDeepseek: "#7E9EFF",
-            providerCustom: "#E886B0",
-            costOk: "#8FCB6A",
-            costWarn: "#F0B94E",
-            costCrit: "#FF6B6B",
-            selectionBg: "#33220F",
-            selectionFg: "#F4EAE1",
-            focusRing: "#FF6B4A",
-            badgeBg: "#241A0E",
-            badgeFg: "#F4EAE1",
-            scrollbarTrack: "#241A0E",
-            scrollbarThumb: "#55402A",
-            spinner: "#FF6B4A",
-            linkVisited: "#E0A0FF",
-            overlayScrim: "#130E09"
-        ),
-        pairId: "daylight",
-        elevation: ElevationLadder(
-            level0: ElevationStep(surface: "#130E09", border: "#2D2013", shadowOpacity: 0, shadowRadius: 0),
-            level1: ElevationStep(surface: "#241A0E", border: "#3A2C1C", shadowOpacity: 0.18, shadowRadius: 6),
-            level2: ElevationStep(surface: "#2D2013", border: "#55402A", shadowOpacity: 0.26, shadowRadius: 14),
-            level3: ElevationStep(surface: "#2D2013", border: "#FF6B4A", shadowOpacity: 0.34, shadowRadius: 22)
-        ),
-        materials: MaterialUsage(sidebar: .thin, overlay: .regular, composer: .regular),
-        gradients: GradientSet(
-            surfaceWash: ["#241A0E", "#181008"],
-            accentGradient: ["#FF6B4A", "#FFA96E"]
-        ),
-        stateLayers: StateLayers(hover: 0.09, pressed: 0.15, selected: 0.19, disabled: 0.38),
-        accents: AccentSystem(primary: "#FF6B4A", secondary: "#6EB8E0"),
-        typography: .neutral
+        surfaces: SurfaceRamp(sunken: "#272E33", base: "#2D353B", raised: "#374145", overlay: "#414D51", inset: "#232A2E"),
+        text: TextRamp(primary: "#D3C6AA", secondary: "#A6B0A0", muted: "#899B8B"),
+        accent: AccentSeed(primary: "#A7C080", secondary: "#7FBBB3"),
+        semantic: SemanticSeed(success: "#A7C080", warning: "#DBBC7F", error: "#E67E80", info: "#7FBBB3"),
+        syntax: SyntaxSeed(keyword: "#E67E80", function: "#7FBBB3", type: "#DBBC7F", string: "#A7C080", number: "#D699B6", comment: "#859289"),
+        typography: .editorial,
+        // The one earned override in the catalogue. The generic derivation mixes
+        // a diff row's fill 86% toward the base surface, which is right for a
+        // status badge and slightly too dark for a hunk you have to read code
+        // inside. Everforest ships its own diff fills, tuned to sit ~4 ΔL* above
+        // base for exactly that reason, and they are better than the generic
+        // answer here.
+        overrides: { tokens in
+            tokens.diffAddedBg = "#425047"
+            tokens.diffRemovedBg = "#514045"
+        }
     )
-}
 
-public extension AppTheme {
-    /// Light, generous, friendly — warm off-white rather than clinical white,
-    /// a soft coral accent, gentle pastel semantic colours instead of the
-    /// saturated ones a dark theme can afford. Editorial typography (looser
-    /// tracking on labels). The overlay layer gets a thin material for
-    /// sheets; everything else stays flat, content-first. Pairs with `cinder`
-    /// for OS light/dark.
-    static let daylight = AppTheme(
-        id: "daylight",
-        name: "Daylight",
-        isDark: false,
-        tokens: ThemeTokens(
-            surfaceSunken: "#F1EAE0",
-            surfaceBase: "#FAF6EF",
-            surfaceRaised: "#FFFFFF",
-            surfaceOverlay: "#FFFFFF",
-            surfaceInset: "#F3EDE3",
-            textPrimary: "#2B2420",
-            textSecondary: "#6B6058",
-            textMuted: "#786E66",
-            textInverse: "#FAF6EF",
-            textLink: "#C1502E",
-            chromeBorder: "#E3D9C9",
-            chromeBorderSubtle: "#ECE3D3",
-            chromeBorderStrong: "#C7B89E",
-            chromeBorderFocus: "#C34E1D",
-            chromeTitle: "#2B2420",
-            chromeDivider: "#ECE3D3",
-            accentDefault: "#C34E1D",
-            accentEmphasis: "#C1502E",
-            accentMuted: "#F0BBA0",
-            accentFg: "#FFFBF7",
-            successFg: "#2F8F5C",
-            successBg: "#E4F3E8",
-            successBorder: "#5FAE80",
-            warningFg: "#91610C",
-            warningBg: "#FBEECB",
-            warningBorder: "#C99A3E",
-            errorFg: "#BC382A",
-            errorBg: "#FBE4E0",
-            errorBorder: "#D97364",
-            infoFg: "#2A6FB0",
-            infoBg: "#E2EEFC",
-            infoBorder: "#5F9AD6",
-            streamCursor: "#C34E1D",
-            streamThinking: "#786E66",
-            streamText: "#2B2420",
-            diffAddedFg: "#2F8F5C",
-            diffAddedBg: "#E4F3E8",
-            diffRemovedFg: "#BC382A",
-            diffRemovedBg: "#FBE4E0",
-            diffContext: "#786E66",
-            diffGutter: "#C7B89E",
-            syntaxKeyword: "#BC382A",
-            syntaxFunction: "#2A6FB0",
-            syntaxType: "#91610C",
-            syntaxString: "#2F8F5C",
-            syntaxNumber: "#8A4FC7",
-            syntaxComment: "#786E66",
-            syntaxOperator: "#6B6058",
-            syntaxVariable: "#2B2420",
-            syntaxConstant: "#2A6FB0",
-            syntaxTag: "#2F8F5C",
-            syntaxAttribute: "#91610C",
-            syntaxInvalid: "#BC382A",
-            providerAnthropic: "#C1502E",
-            providerOpenai: "#2F8F6E",
-            providerGoogle: "#2A6FB0",
-            providerXai: "#4A433C",
-            providerOllama: "#8A5FC0",
-            providerMistral: "#C1650E",
-            providerDeepseek: "#3A5AC0",
-            providerCustom: "#B03E82",
-            costOk: "#2F8F5C",
-            costWarn: "#91610C",
-            costCrit: "#BC382A",
-            selectionBg: "#F7DCC9",
-            selectionFg: "#2B2420",
-            focusRing: "#C34E1D",
-            badgeBg: "#FFFFFF",
-            badgeFg: "#2B2420",
-            scrollbarTrack: "#FFFFFF",
-            scrollbarThumb: "#C7B89E",
-            spinner: "#C34E1D",
-            linkVisited: "#8A5FC0",
-            overlayScrim: "#F1EAE0"
-        ),
-        pairId: "cinder",
-        elevation: ElevationLadder(
-            level0: ElevationStep(surface: "#F1EAE0", border: "#ECE3D3", shadowOpacity: 0, shadowRadius: 0),
-            level1: ElevationStep(surface: "#FFFFFF", border: "#E3D9C9", shadowOpacity: 0.05, shadowRadius: 4),
-            level2: ElevationStep(surface: "#FFFFFF", border: "#C7B89E", shadowOpacity: 0.08, shadowRadius: 8),
-            level3: ElevationStep(surface: "#FFFFFF", border: "#C34E1D", shadowOpacity: 0.12, shadowRadius: 14)
-        ),
-        materials: MaterialUsage(sidebar: .solid, overlay: .thin, composer: .solid),
-        gradients: GradientSet(
-            surfaceWash: ["#FFFFFF", "#FAF6EF"],
-            accentGradient: ["#C34E1D", "#F0BBA0"]
-        ),
-        stateLayers: StateLayers(hover: 0.05, pressed: 0.09, selected: 0.12, disabled: 0.40),
-        accents: AccentSystem(primary: "#C34E1D", secondary: "#2A6FB0"),
+    /// The distinctive one. Rosé Pine Moon.
+    ///
+    /// Most chromatic ramp in the catalogue, and the only palette here with **no
+    /// green at all**: additions are foam `#9CCFD8`, deletions are love
+    /// `#EB6F92`. Those are 205° apart *and* separated in lightness, so the diff
+    /// survives deuteranopia — which makes the most decorative-looking theme in
+    /// the set quietly the most accessible one for its most important surface.
+    static let moon = ThemeSeed(
+        id: "moon",
+        name: "Moon",
+        isDark: true,
+        pairId: "dawn",
+        surfaces: SurfaceRamp(sunken: "#1C1A2B", base: "#232136", raised: "#2E2B45", overlay: "#393552", inset: "#191724"),
+        // Muted lifted from Rosé Pine's own `#6E6A86` (3.03:1 — technically
+        // passing, visibly not) to `#817C9C`.
+        text: TextRamp(primary: "#E0DEF4", secondary: "#B4AFD0", muted: "#817C9C"),
+        accent: AccentSeed(primary: "#C4A7E7", secondary: "#EA9A97"),
+        semantic: SemanticSeed(success: "#9CCFD8", warning: "#F6C177", error: "#EB6F92", info: "#C4A7E7"),
+        syntax: SyntaxSeed(keyword: "#C4A7E7", function: "#9CCFD8", type: "#EA9A97", string: "#F6C177", number: "#EB6F92", comment: "#817C9C"),
+        materials: MaterialUsage(sidebar: .solid, overlay: .thick, composer: .solid),
         typography: .editorial
     )
-}
 
-public extension AppTheme {
-    /// Light, neutral, professional — cool near-white rather than warm,
-    /// crisp hairline borders, minimal ornamentation, a precise blue accent.
-    /// The register of an IDE: nothing here competes with the user's own
-    /// content for attention. No material anywhere; depth comes from
-    /// contrast and a very restrained shadow only at the top elevation.
-    /// Pairs with `meridian` for OS light/dark.
-    static let studio = AppTheme(
-        id: "studio",
-        name: "Studio",
-        isDark: false,
-        tokens: ThemeTokens(
-            surfaceSunken: "#E7E9EC",
-            surfaceBase: "#F5F6F8",
-            surfaceRaised: "#FFFFFF",
-            surfaceOverlay: "#FFFFFF",
-            surfaceInset: "#EEF0F2",
-            textPrimary: "#1D2126",
-            textSecondary: "#5B6570",
-            textMuted: "#68707A",
-            textInverse: "#F5F6F8",
-            textLink: "#0A66C2",
-            chromeBorder: "#D7DBE0",
-            chromeBorderSubtle: "#E4E7EA",
-            chromeBorderStrong: "#B7BFC8",
-            chromeBorderFocus: "#1C75D3",
-            chromeTitle: "#1D2126",
-            chromeDivider: "#E4E7EA",
-            accentDefault: "#1C75D3",
-            accentEmphasis: "#0A66C2",
-            accentMuted: "#B8D6F5",
-            accentFg: "#FFFFFF",
-            successFg: "#1E8E5A",
-            successBg: "#E4F3EA",
-            successBorder: "#4CAE7E",
-            warningFg: "#90640B",
-            warningBg: "#FBF0D3",
-            warningBorder: "#D3A63E",
-            errorFg: "#C1332A",
-            errorBg: "#FBE5E3",
-            errorBorder: "#DC7268",
-            infoFg: "#1C75D3",
-            infoBg: "#E2EEFC",
-            infoBorder: "#5FA0E8",
-            streamCursor: "#1C75D3",
-            streamThinking: "#68707A",
-            streamText: "#1D2126",
-            diffAddedFg: "#1E8E5A",
-            diffAddedBg: "#E4F3EA",
-            diffRemovedFg: "#C1332A",
-            diffRemovedBg: "#FBE5E3",
-            diffContext: "#68707A",
-            diffGutter: "#B7BFC8",
-            syntaxKeyword: "#A626A4",
-            syntaxFunction: "#1C75D3",
-            syntaxType: "#0F68A0",
-            syntaxString: "#1E8E5A",
-            syntaxNumber: "#90640B",
-            syntaxComment: "#68707A",
-            syntaxOperator: "#5B6570",
-            syntaxVariable: "#1D2126",
-            syntaxConstant: "#0F68A0",
-            syntaxTag: "#C1332A",
-            syntaxAttribute: "#90640B",
-            syntaxInvalid: "#C1332A",
-            providerAnthropic: "#B0501E",
-            providerOpenai: "#1E8E6E",
-            providerGoogle: "#1E7DE0",
-            providerXai: "#43494F",
-            providerOllama: "#7247B0",
-            providerMistral: "#B0600E",
-            providerDeepseek: "#2E4EC7",
-            providerCustom: "#A03A78",
-            costOk: "#1E8E5A",
-            costWarn: "#90640B",
-            costCrit: "#C1332A",
-            selectionBg: "#CFE3FA",
-            selectionFg: "#1D2126",
-            focusRing: "#1C75D3",
-            badgeBg: "#FFFFFF",
-            badgeFg: "#1D2126",
-            scrollbarTrack: "#FFFFFF",
-            scrollbarThumb: "#B7BFC8",
-            spinner: "#1C75D3",
-            linkVisited: "#7247B0",
-            overlayScrim: "#E7E9EC"
-        ),
-        pairId: "meridian",
-        elevation: ElevationLadder(
-            level0: ElevationStep(surface: "#E7E9EC", border: "#E4E7EA", shadowOpacity: 0, shadowRadius: 0),
-            level1: ElevationStep(surface: "#FFFFFF", border: "#D7DBE0", shadowOpacity: 0.04, shadowRadius: 3),
-            level2: ElevationStep(surface: "#FFFFFF", border: "#B7BFC8", shadowOpacity: 0.07, shadowRadius: 6),
-            level3: ElevationStep(surface: "#FFFFFF", border: "#1C75D3", shadowOpacity: 0.10, shadowRadius: 10)
-        ),
-        materials: MaterialUsage(sidebar: .solid, overlay: .solid, composer: .solid),
-        gradients: GradientSet(
-            surfaceWash: ["#F5F6F8", "#F5F6F8"],
-            accentGradient: ["#1C75D3", "#0A66C2"]
-        ),
-        stateLayers: StateLayers(hover: 0.05, pressed: 0.09, selected: 0.12, disabled: 0.40),
-        accents: AccentSystem(primary: "#1C75D3", secondary: "#7247B0"),
-        typography: .neutral
-    )
-}
-
-public extension AppTheme {
-    /// High-contrast / accessible. Pure black base, an off-white (never pure
-    /// `#FFFFFF`) for body text at AAA contrast, and every state layer
-    /// deliberately stronger than the other themes' — a hover or selection
-    /// needs to be unmistakable, not a subtle brightness nudge. No material
-    /// anywhere and no visible gradient: both make contrast against a control
-    /// unpredictable, which is precisely what this theme exists to avoid.
-    /// Tool-forward typography for scanability. Unpaired — this theme is
-    /// itself the answer in both appearances.
-    static let vantage = AppTheme(
-        id: "vantage",
-        name: "Vantage",
+    /// The neon one. Synthwave '84, re-engineered to survive a workday.
+    ///
+    /// Two mechanisms are what separate this from the demo theme it is drawn
+    /// from. First, the ground is **violet-black with real chroma** (`#1E1A2A`,
+    /// H 295°) rather than `#000`, so no maximum-contrast edge exists anywhere
+    /// on screen — pure black under saturated pink is what makes neon themes
+    /// unusable after an hour. Second, chroma *rises* with lightness up the
+    /// ramp, so elevation reads as lit rather than merely stacked.
+    ///
+    /// The house rule that keeps it honest: neon is a glyph, caret and stroke
+    /// colour. Nothing larger than a badge is ever filled with it.
+    static let neon = ThemeSeed(
+        id: "neon",
+        name: "Neon Grid",
         isDark: true,
-        tokens: ThemeTokens(
-            surfaceSunken: "#000000",
-            surfaceBase: "#000000",
-            surfaceRaised: "#121212",
-            surfaceOverlay: "#1C1C1C",
-            surfaceInset: "#0A0A0A",
-            textPrimary: "#F5F6F8",
-            textSecondary: "#D2D5DC",
-            textMuted: "#A8ACB5",
-            textInverse: "#000000",
-            textLink: "#7FD4FF",
-            chromeBorder: "#7A7A7A",
-            chromeBorderSubtle: "#4A4A4A",
-            chromeBorderStrong: "#ADADAD",
-            chromeBorderFocus: "#F5F6F8",
-            chromeTitle: "#F5F6F8",
-            chromeDivider: "#4A4A4A",
-            accentDefault: "#5FD0FF",
-            accentEmphasis: "#8FE0FF",
-            accentMuted: "#2C6E8A",
-            accentFg: "#000000",
-            successFg: "#52D999",
-            successBg: "#00190F",
-            successBorder: "#2E8F63",
-            warningFg: "#F0B23C",
-            warningBg: "#1E1400",
-            warningBorder: "#C08A1E",
-            errorFg: "#FF8A78",
-            errorBg: "#1E0A06",
-            errorBorder: "#C24E38",
-            infoFg: "#5FD0FF",
-            infoBg: "#001A26",
-            infoBorder: "#2C6E8A",
-            streamCursor: "#8FE0FF",
-            streamThinking: "#A8ACB5",
-            streamText: "#F5F6F8",
-            diffAddedFg: "#52D999",
-            diffAddedBg: "#00190F",
-            diffRemovedFg: "#FF8A78",
-            diffRemovedBg: "#1E0A06",
-            diffContext: "#A8ACB5",
-            diffGutter: "#ADADAD",
-            syntaxKeyword: "#FF8A78",
-            syntaxFunction: "#8FE0FF",
-            syntaxType: "#5FD0FF",
-            syntaxString: "#52D999",
-            syntaxNumber: "#F0B23C",
-            syntaxComment: "#A8ACB5",
-            syntaxOperator: "#D2D5DC",
-            syntaxVariable: "#F5F6F8",
-            syntaxConstant: "#C9A6FF",
-            syntaxTag: "#52D999",
-            syntaxAttribute: "#F0B23C",
-            syntaxInvalid: "#FF8A78",
-            providerAnthropic: "#F0A868",
-            providerOpenai: "#52D999",
-            providerGoogle: "#5FD0FF",
-            providerXai: "#F5F6F8",
-            providerOllama: "#C9A6FF",
-            providerMistral: "#F0C23C",
-            providerDeepseek: "#7FA8FF",
-            providerCustom: "#FF8ACB",
-            costOk: "#52D999",
-            costWarn: "#F0B23C",
-            costCrit: "#FF8A78",
-            selectionBg: "#2A2A2A",
-            selectionFg: "#F5F6F8",
-            focusRing: "#F5F6F8",
-            badgeBg: "#121212",
-            badgeFg: "#F5F6F8",
-            scrollbarTrack: "#121212",
-            scrollbarThumb: "#ADADAD",
-            spinner: "#5FD0FF",
-            linkVisited: "#C9A6FF",
-            overlayScrim: "#000000"
-        ),
-        pairId: nil,
-        elevation: ElevationLadder(
-            level0: ElevationStep(surface: "#000000", border: "#4A4A4A", shadowOpacity: 0, shadowRadius: 0),
-            level1: ElevationStep(surface: "#121212", border: "#7A7A7A", shadowOpacity: 0, shadowRadius: 0),
-            level2: ElevationStep(surface: "#1C1C1C", border: "#ADADAD", shadowOpacity: 0, shadowRadius: 0),
-            level3: ElevationStep(surface: "#1C1C1C", border: "#F5F6F8", shadowOpacity: 0, shadowRadius: 0)
-        ),
-        materials: MaterialUsage(sidebar: .solid, overlay: .solid, composer: .solid),
-        gradients: GradientSet(
-            surfaceWash: ["#000000", "#000000"],
-            accentGradient: ["#5FD0FF", "#5FD0FF"]
-        ),
-        stateLayers: StateLayers(hover: 0.14, pressed: 0.22, selected: 0.28, disabled: 0.45),
-        accents: AccentSystem(primary: "#5FD0FF", secondary: "#F0B23C"),
+        surfaces: SurfaceRamp(sunken: "#131020", base: "#1E1A2A", raised: "#2A2540", overlay: "#363052", inset: "#141220"),
+        // `#EDE6F7`, carrying a trace of the surface's own hue — NOT Synthwave's
+        // `#FFFFFF`. That single substitution is the difference between a theme
+        // you screenshot and a theme you work in.
+        text: TextRamp(primary: "#EDE6F7", secondary: "#B6ABDD", muted: "#8D8FC4"),
+        accent: AccentSeed(primary: "#FF7EDB", secondary: "#36F9F6"),
+        semantic: SemanticSeed(success: "#72F1B8", warning: "#FEDE5D", error: "#FE4450", info: "#36F9F6"),
+        syntax: SyntaxSeed(keyword: "#FEDE5D", function: "#36F9F6", type: "#FF7EDB", string: "#FF8B39", number: "#FE4450", comment: "#8D8FC4"),
+        materials: MaterialUsage(sidebar: .solid, overlay: .regular, composer: .solid),
         typography: .toolForged
     )
-}
 
-public extension AppTheme {
-    /// Dark, gradient-forward hero theme — the one built to show the
-    /// gradient and material system off rather than stay out of the way.
-    /// Deep indigo-violet surfaces pool into a visible wash, the brand
-    /// gradient runs violet-to-teal, and overlays get the thickest material
-    /// of any theme here (a real frosted-glass command surface). Editorial
-    /// typography. Unpaired.
-    static let nightfall = AppTheme(
-        id: "nightfall",
-        name: "Nightfall",
+    /// The paper-and-ink one. Flexoki.
+    ///
+    /// The deliberate counter-example to Storm: these surfaces are genuinely
+    /// neutral (C ≈ 0.003) and the theme still does not read dead, because the
+    /// warmth lives in the **text** (`#CECDC3`, H 68°) and the accent is thrown
+    /// 172° the other way into blue. Proof that "put hue in the surfaces" is one
+    /// working answer rather than the only one — what actually matters is that
+    /// ink and ground are not the same temperature. Most even ladder here, which
+    /// makes it the best choice for reading a long transcript.
+    static let ink = ThemeSeed(
+        id: "ink",
+        name: "Ink",
         isDark: true,
-        tokens: ThemeTokens(
-            surfaceSunken: "#08071C",
-            surfaceBase: "#0D0A1C",
-            surfaceRaised: "#171232",
-            surfaceOverlay: "#201A42",
-            surfaceInset: "#110D26",
-            textPrimary: "#EDE9FA",
-            textSecondary: "#A79FC7",
-            textMuted: "#8B84A8",
-            textInverse: "#0D0A1C",
-            textLink: "#8FA8FF",
-            chromeBorder: "#2E2650",
-            chromeBorderSubtle: "#201A42",
-            chromeBorderStrong: "#453A72",
-            chromeBorderFocus: "#B48CFF",
-            chromeTitle: "#EDE9FA",
-            chromeDivider: "#201A42",
-            accentDefault: "#B48CFF",
-            accentEmphasis: "#D0B4FF",
-            accentMuted: "#5A4790",
-            accentFg: "#0D0A1C",
-            successFg: "#5FE0B8",
-            successBg: "#0C2A22",
-            successBorder: "#33967A",
-            warningFg: "#F0C168",
-            warningBg: "#2C2210",
-            warningBorder: "#B08E3C",
-            errorFg: "#FF7BA0",
-            errorBg: "#2C1220",
-            errorBorder: "#C24C74",
-            infoFg: "#8FA8FF",
-            infoBg: "#141E3E",
-            infoBorder: "#4A5FA8",
-            streamCursor: "#5FE0B8",
-            streamThinking: "#8B84A8",
-            streamText: "#EDE9FA",
-            diffAddedFg: "#5FE0B8",
-            diffAddedBg: "#0C2A22",
-            diffRemovedFg: "#FF7BA0",
-            diffRemovedBg: "#2C1220",
-            diffContext: "#8B84A8",
-            diffGutter: "#453A72",
-            syntaxKeyword: "#FF7BA0",
-            syntaxFunction: "#8FA8FF",
-            syntaxType: "#5FE0B8",
-            syntaxString: "#7EDDBE",
-            syntaxNumber: "#F0C168",
-            syntaxComment: "#8B84A8",
-            syntaxOperator: "#A79FC7",
-            syntaxVariable: "#EDE9FA",
-            syntaxConstant: "#D0B4FF",
-            syntaxTag: "#5FE0B8",
-            syntaxAttribute: "#F0C168",
-            syntaxInvalid: "#FF7BA0",
-            providerAnthropic: "#E89A72",
-            providerOpenai: "#5FE0B8",
-            providerGoogle: "#8FA8FF",
-            providerXai: "#D8D2EE",
-            providerOllama: "#B48CFF",
-            providerMistral: "#FF9A52",
-            providerDeepseek: "#7E93FF",
-            providerCustom: "#E886D8",
-            costOk: "#5FE0B8",
-            costWarn: "#F0C168",
-            costCrit: "#FF7BA0",
-            selectionBg: "#241C4A",
-            selectionFg: "#EDE9FA",
-            focusRing: "#B48CFF",
-            badgeBg: "#171232",
-            badgeFg: "#EDE9FA",
-            scrollbarTrack: "#171232",
-            scrollbarThumb: "#453A72",
-            spinner: "#B48CFF",
-            linkVisited: "#D0B4FF",
-            overlayScrim: "#08071C"
-        ),
-        pairId: nil,
-        elevation: ElevationLadder(
-            level0: ElevationStep(surface: "#08071C", border: "#201A42", shadowOpacity: 0, shadowRadius: 0),
-            level1: ElevationStep(surface: "#171232", border: "#2E2650", shadowOpacity: 0.20, shadowRadius: 8),
-            level2: ElevationStep(surface: "#201A42", border: "#453A72", shadowOpacity: 0.30, shadowRadius: 16),
-            level3: ElevationStep(surface: "#2A2350", border: "#B48CFF", shadowOpacity: 0.40, shadowRadius: 26)
-        ),
-        materials: MaterialUsage(sidebar: .regular, overlay: .thick, composer: .regular),
-        gradients: GradientSet(
-            surfaceWash: ["#171232", "#0D0A1C"],
-            accentGradient: ["#B48CFF", "#5FE0B8"]
-        ),
-        stateLayers: StateLayers(hover: 0.10, pressed: 0.16, selected: 0.22, disabled: 0.40),
-        accents: AccentSystem(primary: "#B48CFF", secondary: "#5FE0B8"),
+        pairId: "clarity",
+        surfaces: SurfaceRamp(sunken: "#100F0F", base: "#1C1B1A", raised: "#282726", overlay: "#343331", inset: "#0D0C0C"),
+        text: TextRamp(primary: "#CECDC3", secondary: "#A19F98", muted: "#787672"),
+        // Flexoki's 300 steps, not its 400s — the 400s land at 4.37:1 and 3.97:1
+        // on this base, below the floor for an ink that carries meaning.
+        accent: AccentSeed(primary: "#66A0C8", secondary: "#D0A215"),
+        semantic: SemanticSeed(success: "#879A39", warning: "#D0A215", error: "#E8705F", info: "#66A0C8"),
+        syntax: SyntaxSeed(keyword: "#8B7EC8", function: "#66A0C8", type: "#D0A215", string: "#879A39", number: "#DA702C", comment: "#787672"),
+        typography: .toolForged
+    )
+
+    // MARK: - Light
+
+    /// Cool, IDE-professional. The default light theme.
+    ///
+    /// Fixes precisely what the theme it replaces broke: that one's ladder ran
+    /// `#E7E9EC → #FFFFFF → #FFFFFF → #FFFFFF`, so three of its four rungs were
+    /// the same colour and nothing could be raised above anything. Porcelain
+    /// keeps real headroom above the canvas by refusing to spend white on it.
+    static let porcelain = ThemeSeed(
+        id: "porcelain",
+        name: "Porcelain",
+        isDark: false,
+        pairId: "storm",
+        surfaces: SurfaceRamp(sunken: "#E4E8ED", base: "#EFF2F6", raised: "#F7F9FB", overlay: "#FCFDFE", inset: "#DCE1E7"),
+        text: TextRamp(primary: "#242B33", secondary: "#545D69", muted: "#6B7480"),
+        accent: AccentSeed(primary: "#0C69CE", secondary: "#7D50CD"),
+        semantic: SemanticSeed(success: "#0A7E3A", warning: "#936017", error: "#C9292F", info: "#0C69CE"),
+        syntax: SyntaxSeed(keyword: "#7442BE", function: "#1461BA", type: "#1B6C7A", string: "#1B7339", number: "#A14B13", comment: "#6F7885"),
+        typography: .neutral
+    )
+
+    /// Warm and editorial.
+    ///
+    /// The matched-hue school: olive-warm ink (H 94°) on cream (H 92°). Ink and
+    /// paper sharing a hue is why it reads as *printed* rather than as black
+    /// text dropped onto a beige rectangle — the failure mode of most warm light
+    /// themes.
+    static let paper = ThemeSeed(
+        id: "paper",
+        name: "Paper",
+        isDark: false,
+        pairId: "sumi",
+        surfaces: SurfaceRamp(sunken: "#EAE5D8", base: "#F5F2E7", raised: "#FBF9F1", overlay: "#FEFDF7", inset: "#E2DCCC"),
+        text: TextRamp(primary: "#2C2A23", secondary: "#5F5C52", muted: "#75726A"),
+        accent: AccentSeed(primary: "#2A67BD", secondary: "#B04F1F"),
+        semantic: SemanticSeed(success: "#297C3D", warning: "#926011", error: "#BF3B32", info: "#226BC0"),
+        syntax: SyntaxSeed(keyword: "#9E2B36", function: "#275EAE", type: "#1A6F6B", string: "#237236", number: "#6C44A4", comment: "#7F7962"),
         typography: .editorial
     )
+
+    /// Soft and personable. Rosé Pine Dawn.
+    ///
+    /// The complementary-ink school, and the exact opposite of Paper's method:
+    /// violet ink (H 292°) on blush paper (H 52°) is a 240° split. That
+    /// deliberate disagreement between ink and ground is the entire reason it
+    /// reads as designed rather than merely tinted.
+    static let dawn = ThemeSeed(
+        id: "dawn",
+        name: "Dawn",
+        isDark: false,
+        pairId: "moon",
+        surfaces: SurfaceRamp(sunken: "#EFE6E0", base: "#F9F0EA", raised: "#FDF7F3", overlay: "#FFFCFA", inset: "#E7DCD5"),
+        text: TextRamp(primary: "#2B2542", secondary: "#5D567D", muted: "#726A94"),
+        accent: AccentSeed(primary: "#6B5AA8", secondary: "#107091"),
+        semantic: SemanticSeed(success: "#257C58", warning: "#955F16", error: "#AE4457", info: "#107091"),
+        syntax: SyntaxSeed(keyword: "#6350A0", function: "#0C6785", type: "#8A6114", string: "#187350", number: "#A43E43", comment: "#7A778F"),
+        typography: .editorial
+    )
+
+    /// High-contrast and accessible.
+    ///
+    /// Deliberately not pure white or pure black at either end: `#FFFFFF`
+    /// maximises glare without buying any usable contrast over `#FDFDFE`, and
+    /// this is the theme whose whole point is that a user can look at it for a
+    /// long time. Body text lands at AAA, and nothing here is translucent or
+    /// gradient-filled — a predictable contrast is the feature.
+    static let clarity = ThemeSeed(
+        id: "clarity",
+        name: "Clarity",
+        isDark: false,
+        pairId: "ink",
+        surfaces: SurfaceRamp(sunken: "#E4E7EA", base: "#F0F2F4", raised: "#F8F9FA", overlay: "#FDFDFE", inset: "#DCDFE2"),
+        text: TextRamp(primary: "#161A1E", secondary: "#474C53", muted: "#565B62"),
+        accent: AccentSeed(primary: "#0B509E", secondary: "#6731A8"),
+        semantic: SemanticSeed(success: "#126132", warning: "#814D03", error: "#A0161C", info: "#0B509E"),
+        syntax: SyntaxSeed(keyword: "#5F279E", function: "#0E498E", type: "#065460", string: "#02582A", number: "#813610", comment: "#576574"),
+        typography: .neutral
+    )
+}
+
+// MARK: - Retired theme ids
+
+public extension ThemeCatalog {
+    /// Where a user who picked one of the seven retired themes lands.
+    ///
+    /// Without this, `WorkspaceModel.init` silently falls back to the default
+    /// for any id it cannot resolve — so shipping this catalogue would have
+    /// quietly moved every existing user onto Storm and lost their choice with
+    /// no way to tell that anything had happened. Each mapping goes to the
+    /// theme that occupies the retired one's register, not to whatever is
+    /// nearest in hue.
+    static let retiredThemeIds: [String: String] = [
+        "meridian": "storm",      // the restrained blue default
+        "studio": "porcelain",    // cool professional light
+        "cinder": "mirage",       // warm, strong single brand colour
+        "daylight": "paper",      // warm editorial light
+        "basalt": "sumi",         // keyboard-driven, tool-forward dark
+        "vantage": "ink",         // the high-contrast reading theme
+        "nightfall": "moon",      // violet, gradient-forward, editorial
+    ]
+
+    /// Resolves a possibly-retired id to one this catalogue actually ships.
+    /// Returns `nil` for an id that was never ours, so a caller can still fall
+    /// through to the generated terminal palettes.
+    static func migrate(_ id: String) -> String? {
+        seeds.contains { $0.id == id } ? id : retiredThemeIds[id]
+    }
 }

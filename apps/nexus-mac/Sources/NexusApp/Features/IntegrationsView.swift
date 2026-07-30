@@ -70,7 +70,6 @@ struct IntegrationsView: View {
     private var headerRow: some View {
         PageHeader(
             "Integrations",
-            subtitle: "MCP servers, tools, and hooks",
             accessory: AnyView(
                 Button {
                     Task { await refresh() }

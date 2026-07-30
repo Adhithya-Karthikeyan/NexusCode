@@ -78,7 +78,7 @@ public struct ApprovalSheet: View {
     // MARK: - Detail
 
     private var detailCard: some View {
-        Card {
+        Card(fill: true) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 metaRow("Mode", approval.mode)
                 metaRow("Reason", approval.reason.isEmpty ? "—" : approval.reason)
