@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { toNativeRequest, type AnthropicConfig } from "@nexuscode/provider-anthropic";
+import {
+  reasoningUnavailableForOAuth,
+  toNativeRequest,
+  type AnthropicConfig,
+} from "@nexuscode/provider-anthropic";
 import type { ChatRequest } from "@nexuscode/shared";
 
 /**
@@ -111,5 +115,47 @@ describe("anthropic — max_tokens accommodates the thinking budget (a real API 
     expect(native.max_tokens).toBe(4096);
     const explicit = toNativeRequest(cfg, { ...req(), maxTokens: 500 });
     expect(explicit.max_tokens).toBe(500);
+  });
+});
+
+describe("extended thinking is not sent on a Claude subscription OAuth token", () => {
+  // Verified on a live account by capturing the literal request bytes: with a
+  // bearer credential the API accepted `thinking:{type:"enabled",
+  // budget_tokens:24000}` alongside `max_tokens:25024`, returned **200**, and
+  // omitted every thinking block. So the parameter is silently ignored, not
+  // rejected — which is why this looked like a wiring bug for three rounds and
+  // why no error ever surfaced. Sending it anyway would leave the product's
+  // effort control looking functional while doing nothing.
+  it("omits `thinking` for a bearer credential but keeps it for an api key", () => {
+    const cfg: AnthropicConfig = { modelMap: {} };
+    const reasoning = { enabled: true, effort: "high", budgetTokens: 24_000 };
+
+    const viaOAuth = toNativeRequest(cfg, req(reasoning), true) as Record<string, unknown>;
+    expect(viaOAuth["thinking"]).toBeUndefined();
+
+    const viaApiKey = toNativeRequest(cfg, req(reasoning), false) as Record<string, unknown>;
+    expect(viaApiKey["thinking"]).toEqual({ type: "enabled", budget_tokens: 24_000 });
+  });
+
+  it("does not inflate max_tokens for a budget it is not going to send", () => {
+    // The `max_tokens` sizing exists ONLY to satisfy Anthropic's constraint
+    // that it exceed `thinking.budget_tokens`. With no thinking sent there is
+    // no constraint, so silently requesting 25k output would be a real cost
+    // and latency change for a request that gains nothing by it.
+    const cfg: AnthropicConfig = { modelMap: {}, defaultMaxTokens: 4096 };
+    const viaOAuth = toNativeRequest(
+      cfg,
+      req({ enabled: true, effort: "high", budgetTokens: 24_000 }),
+      true,
+    ) as Record<string, unknown>;
+    expect(viaOAuth["max_tokens"]).toBe(4096);
+  });
+
+  it("reports the unavailability so a caller can warn instead of failing silently", () => {
+    const enabled = req({ enabled: true, effort: "high", budgetTokens: 24_000 });
+    expect(reasoningUnavailableForOAuth(enabled, true)).toBe(true);
+    // Not "unavailable" when nothing was asked for, and not for an api key.
+    expect(reasoningUnavailableForOAuth(enabled, false)).toBe(false);
+    expect(reasoningUnavailableForOAuth(req(undefined), true)).toBe(false);
   });
 });

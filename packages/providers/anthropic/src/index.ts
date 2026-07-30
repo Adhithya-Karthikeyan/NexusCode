@@ -374,6 +374,17 @@ const MIN_ANSWER_HEADROOM_TOKENS = 1024;
  * can be verified offline without any network or SDK client. `oauth` prepends the
  * Claude Code identity system block required by subscription OAuth tokens.
  */
+/**
+ * True when a request asked for extended thinking that this credential kind
+ * cannot deliver — i.e. reasoning was enabled AND the credential is a Claude
+ * subscription OAuth bearer. Exported so the CLI can WARN rather than let a
+ * silently-ignored parameter masquerade as a working feature; see the comment
+ * on `thinkingBudget` in {@link toNativeRequest} for the live evidence.
+ */
+export function reasoningUnavailableForOAuth(req: ChatRequest, oauth: boolean): boolean {
+  return oauth && req.reasoning?.enabled === true;
+}
+
 export function toNativeRequest(
   cfg: AnthropicConfig,
   req: ChatRequest,
@@ -384,9 +395,24 @@ export function toNativeRequest(
 
   // Compute BEFORE `max_tokens` so an enabled thinking budget can size it —
   // see `MIN_ANSWER_HEADROOM_TOKENS`'s doc for why this must happen at all.
-  const thinkingBudget = req.reasoning?.enabled
-    ? (req.reasoning.budgetTokens ?? cfg.defaultThinkingBudget ?? 8000)
-    : undefined;
+  // A Claude.ai SUBSCRIPTION OAuth token cannot do extended thinking, and the
+  // API does not say so: it returns 200 and silently omits every thinking
+  // block. Verified on a live account by capturing the literal request bytes —
+  // `thinking:{type:"enabled",budget_tokens:24000}` and `max_tokens:25024`
+  // present, `anthropic-beta: oauth-2025-04-20`, status 200, zero thinking
+  // content back. Console api-key requests are unaffected.
+  //
+  // So the parameter is NOT sent on the bearer path. Sending a field the
+  // server ignores would leave every effort control in the product looking
+  // functional while doing nothing — the exact failure this codebase treats as
+  // a defect elsewhere (see `offDisablesReasoning`, `localServerReachable`,
+  // `ModelListSource`). `reasoningUnavailableForOAuth` below lets callers say
+  // so out loud instead.
+  const reasoningRequested = req.reasoning?.enabled === true;
+  const thinkingBudget =
+    reasoningRequested && !oauth
+      ? (req.reasoning?.budgetTokens ?? cfg.defaultThinkingBudget ?? 8000)
+      : undefined;
   const requestedMaxTokens = req.maxTokens ?? cfg.defaultMaxTokens ?? 4096;
   // Only ever adjusts UPWARD, and only bites when thinking is actually on —
   // an explicit `req.maxTokens` large enough already, or a non-reasoning
@@ -426,22 +452,6 @@ export function toNativeRequest(
   const extras: Record<string, unknown> = { ...(req.providerExtensions ?? {}) };
   if (thinkingBudget !== undefined) {
     extras.thinking = { type: "enabled", budget_tokens: thinkingBudget };
-  }
-  // TEMPORARY DIAGNOSTIC — remove before shipping. Env-gated so it is inert
-  // unless explicitly asked for. Exists to answer one question that cannot be
-  // answered from a unit test: on a LIVE OAuth run, does `thinking` actually
-  // reach this boundary, or is `reasoning` being dropped upstream? `oauth`
-  // is logged too — it is exactly `lastCredKind === "bearer"` from the
-  // caller (`stream()`), so this confirms whether the run really resolved
-  // an OAuth Bearer credential at all, not just that thinking made it into
-  // the object either way.
-  if (process.env["NEXUS_DEBUG_ANTHROPIC_REQ"] === "1") {
-    process.stderr.write(
-      `[diag] model=${nativeModel} oauth=${String(oauth)} reasoning=${JSON.stringify(req.reasoning)} ` +
-        `thinkingBudget=${String(thinkingBudget)} ` +
-        `max_tokens=${String((base as unknown as Record<string, unknown>)["max_tokens"])} ` +
-        `thinking=${JSON.stringify(extras["thinking"])}\n`,
-    );
   }
   return { ...base, ...extras } as Anthropic.MessageStreamParams;
 }
@@ -676,6 +686,9 @@ export function createAnthropicAdapter(
   // Tracks the kind of the last resolved credential so `stream()` knows whether
   // to inject the Claude Code identity system block (required for OAuth bearer).
   let lastCredKind: AnthropicResolvedCredential["kind"] = "api-key";
+  // Once per adapter instance: a per-turn repeat of the same unavoidable notice
+  // would be noise in a long session.
+  let warnedOAuthReasoning = false;
 
   const getClient = async (): Promise<Anthropic> => {
     // Prefer the OAuth-aware credential source when wired (sends an
@@ -736,6 +749,19 @@ export function createAnthropicAdapter(
     let ms: ReturnType<Anthropic.Messages["stream"]>;
     try {
       const anthropic = await getClient();
+      // Say it out loud, ONCE per process, when a requested effort cannot be
+      // honored by this credential kind. Silence here is what made the whole
+      // effort control look functional while doing nothing.
+      if (reasoningUnavailableForOAuth(req, lastCredKind === "bearer") && !warnedOAuthReasoning) {
+        warnedOAuthReasoning = true;
+        process.stderr.write(
+          "nexus: reasoning effort was requested but this Anthropic credential is a Claude " +
+            "subscription OAuth token, which cannot do extended thinking — the API accepts the " +
+            "request and silently returns no thinking. Sent WITHOUT it. Use a console API key " +
+            "(`nexus login anthropic --api-key`) for extended thinking, or use the claude-code " +
+            "provider, which reasons by default.\n",
+        );
+      }
       ms = anthropic.messages.stream(toNativeRequest(cfg, req, lastCredKind === "bearer"), {
         signal: ctx.signal,
       });
