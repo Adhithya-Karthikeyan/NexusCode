@@ -168,19 +168,19 @@ public struct MaterialUsage: Sendable, Hashable {
 
 // MARK: - Gradient
 
-/// Two washes every theme defines on purpose rather than by accident: a
-/// near-invisible multi-stop tint across a hero surface (depth without a
-/// shadow), and a brand gradient for the one or two moments that should look
-/// unmistakably like THIS theme — a primary CTA, a hero glow, an active tab.
+/// The brand gradient: the one or two moments that should look unmistakably
+/// like THIS theme — the wordmark plate and the primary CTA.
+///
+/// There used to be a second entry here, `surfaceWash`, a multi-stop tint for a
+/// "hero surface". It was defined by every theme and referenced by zero views,
+/// and wiring it up was the wrong fix: the only surface large enough to want it
+/// is the canvas, and a vertical wash behind a SCROLLING transcript puts text at
+/// the bottom of the window on a different value from text at the top, with the
+/// composer docked in the darkest part. Depth here is carried by the ladder.
 public struct GradientSet: Sendable, Hashable {
-    /// 2–3 hex stops, first surface to last. A theme that wants no visible
-    /// wash repeats the same stop twice rather than omitting it, so callers
-    /// never need to special-case an empty gradient.
-    public let surfaceWash: [String]
     public let accentGradient: [String]
 
-    public init(surfaceWash: [String], accentGradient: [String]) {
-        self.surfaceWash = surfaceWash
+    public init(accentGradient: [String]) {
         self.accentGradient = accentGradient
     }
 }
@@ -293,14 +293,6 @@ public extension AppTheme {
     func surface(_ level: Int) -> Color { elevation.step(level).surfaceColor }
     func border(_ level: Int) -> Color { elevation.step(level).borderColor }
 
-    var surfaceWash: LinearGradient {
-        LinearGradient(
-            colors: gradients.surfaceWash.map { color(hex: $0) },
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
     var accentGradient: LinearGradient {
         LinearGradient(
             colors: gradients.accentGradient.map { color(hex: $0) },
@@ -377,10 +369,7 @@ public extension NexusTheme {
                 level3: ElevationStep(surface: Hex.mix(tokens.surfaceOverlay, tokens.textPrimary, 0.06), border: tokens.chromeBorderFocus, shadowOpacity: isDark ? 0 : 0.14, shadowRadius: isDark ? 0 : 20)
             ),
             materials: MaterialUsage(sidebar: .solid, overlay: .solid, composer: .solid),
-            gradients: GradientSet(
-                surfaceWash: [tokens.surfaceBase, tokens.surfaceSunken],
-                accentGradient: [tokens.accentDefault, tokens.accentEmphasis]
-            ),
+            gradients: GradientSet(accentGradient: [tokens.accentDefault, tokens.accentEmphasis]),
             stateLayers: StateLayers(
                 hover: isDark ? 0.08 : 0.05,
                 pressed: isDark ? 0.14 : 0.09,

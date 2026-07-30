@@ -577,10 +577,7 @@ public extension AppTheme {
                 level3: step(ramp.overlay, isDark ? 0.30 : 0.36, 3)
             ),
             materials: seed.materials,
-            gradients: GradientSet(
-                surfaceWash: [ramp.base, ramp.sunken],
-                accentGradient: [seed.accent.primary, seed.accentEmphasis]
-            ),
+            gradients: GradientSet(accentGradient: [seed.accent.primary, seed.accentEmphasis]),
             stateLayers: StateLayers(
                 hover: isDark ? 0.08 : 0.05,
                 pressed: isDark ? 0.14 : 0.09,

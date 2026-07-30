@@ -44,9 +44,6 @@ final class AppThemeTests: XCTestCase {
                 XCTAssertNotNil(Color(hex: step.surface), "\(theme.id) elevation level \(level) surface is not a valid colour: \(step.surface)")
                 XCTAssertNotNil(Color(hex: step.border), "\(theme.id) elevation level \(level) border is not a valid colour: \(step.border)")
             }
-            for stop in theme.gradients.surfaceWash {
-                XCTAssertNotNil(Color(hex: stop), "\(theme.id) surfaceWash stop is not a valid colour: \(stop)")
-            }
             for stop in theme.gradients.accentGradient {
                 XCTAssertNotNil(Color(hex: stop), "\(theme.id) accentGradient stop is not a valid colour: \(stop)")
             }
