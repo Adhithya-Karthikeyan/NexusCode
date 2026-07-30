@@ -1118,6 +1118,15 @@ struct ControlStrip: View {
                 // with room to spare, without growing past its content.
                 minWidth: 88,
                 maxWidth: 150,
+                // `truncates: false` is what actually MAKES the "must never
+                // truncate" claim above true, rather than merely stating it.
+                // `minWidth`/`maxWidth` alone never enforced it — a squeezed
+                // `HStack` can compress plain `Text` well below `minWidth`
+                // regardless of what the frame declares, and adding the
+                // effort picker as a fourth control did exactly that,
+                // reproducing "ant…opic" live. See `DropdownPicker
+                // .truncates`'s doc for the mechanism.
+                truncates: false,
                 emptyHint: "No providers loaded yet"
             ) { id in
                 controller.provider = id
@@ -1370,6 +1379,23 @@ private struct DropdownPicker: View {
     /// truncation belongs if it has to happen at all.
     var minWidth: CGFloat = 120
     var maxWidth: CGFloat? = 120
+    /// Whether `displayText` may compress under pressure — `true` (the
+    /// default) for every ordinary picker (model/role/backend), which may
+    /// legitimately give ground when the strip is tight. `false` for the
+    /// PROVIDER picker specifically (see `singleLaneControls`): the doc
+    /// above already names "ant…opic" as a fixed, closed defect, and a
+    /// squeezed `HStack` reproduced it again the instant a fourth control
+    /// (the effort picker) was added — not by lying about `minWidth`/
+    /// `maxWidth`, but because `Text` alone is flexible enough to shrink
+    /// and truncate well below either bound while `.frame` stayed silent
+    /// about it. `false` wraps the text in `.fixedSize(horizontal:)`, which
+    /// makes it report its TRUE unwrapped width during layout negotiation
+    /// instead of accepting a too-small proposal — the same mechanism
+    /// `ModePicker`'s tab labels needed for the identical reason. That
+    /// forces the real deficit up to `ViewThatFits` (`ControlStrip.body`),
+    /// which can then correctly choose `twoRowStack`, rather than this
+    /// picker silently absorbing the squeeze.
+    var truncates: Bool = true
     var emptyHint: String?
     var onSelect: (String) -> Void
 
@@ -1395,6 +1421,7 @@ private struct DropdownPicker: View {
                 Text(displayText)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .fixedSize(horizontal: !truncates, vertical: false)
                 if let selectedWarning {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 8))
