@@ -1540,6 +1540,58 @@ requiring no space, then treating a non-string body as empty) and reported
 `max_tokens` as "absent" when the API requires it — when a diagnostic says
 something impossible, the diagnostic is wrong.
 
+### ✅ Reasoning-effort control, per-provider and honest
+Live-probed per provider, never a shared scale:
+- `claude-code` — `low, medium, high, xhigh, max, ultracode, auto` (from `claude -p "/effort"`)
+- `codex` — `low, medium, high, xhigh, max, ultra` + descriptions + its own default
+- `anthropic` — `low/medium/high` as thinking-token budgets
+
+Neither CLI provider is offered an "off": they always reason and `--effort`
+selects the LEVEL, so `off` is omitted from their lists rather than shown as a
+no-op. A provider with no effort support gets no control at all.
+
+`ConversationController.effort` defaults to `nil` and nothing auto-selects it,
+so an untouched picker produces byte-identical argv to before. That is
+deliberate — auto-preselecting is what made the FIRST `EffortPicker` harmful
+enough to delete.
+
+### 🔴 THREE bugs tonight were all "a limit smaller than the thing it measured"
+Worth stating as one pattern, because it cost the most time and each looked
+like something else:
+1. **Pipe drain** — `readabilityHandler` cleared at exit while bytes remained
+   in the OS pipe. Presented as "malformed JSON" on the Sessions screen.
+2. **Probe output cap** — `DEFAULT_PROBE_MAX_CHARS` is 262_144; `codex debug
+   models --bundled` returns ~290KB because every entry embeds its model's
+   full instruction prose. Truncated → `JSON.parse` threw → degraded to the
+   config value → codex reported ONE "unverified" effort level instead of six.
+   Presented as "codex has a poor scale."
+3. **`max_tokens` vs thinking budget** — 4096 default against a 10k–24k
+   budget, which Anthropic rejects. Presented as nothing at all; it was
+   invisible.
+
+**A cap below the payload it must parse is not a safety limit, it is a silent
+failure.** In all three the code was defensible in isolation and the bound was
+simply smaller than reality.
+
+### 🔴 SwiftUI: `minWidth` is not a truncation floor, and an unbounded `Text` lies
+Two rounds on the control strip, same failure class one layer apart:
+- `ModePicker`'s tab `Text` had no `.lineLimit`, so under pressure it wrapped
+  INTERNALLY ("Agent" → "Agen / t") and therefore reported a smaller intrinsic
+  width than it needs — which fooled `ViewThatFits` into choosing `singleRow`
+  because the artificially-shrunk measurement "fit".
+- `DropdownPicker`'s `.frame(minWidth: 88, maxWidth: 150)` is a FLEXIBLE frame,
+  not a floor. With no `.fixedSize` on its `Text`, a squeezed `HStack`
+  compressed it well below `minWidth` and `.truncationMode(.middle)` silently
+  ate the difference — reintroducing the `ant…opic` truncation the owner had
+  already reported once.
+
+Fix in both cases is `.fixedSize(horizontal: true, vertical: false)` so the
+view reports its true width and the layout has to make a real decision. The
+provider picker now passes `truncates: false`; model/role/backend keep their
+(correct) truncating behaviour. **Verify by reading the pill TEXT in the
+screenshot, not by whether the row looks tidy** — "it fits now" was true of the
+silhouette and false of the content, twice.
+
 ### Open
 1. The redesign sweep (`AgentsView`/`SessionsView`/`TasksView`/`AuthView`/
    `IntegrationsView`/`GitView`/`ApprovalSheet`), plus a before/after
