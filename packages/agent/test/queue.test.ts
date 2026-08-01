@@ -78,6 +78,17 @@ describe("AsyncQueue — fail() (core-F4 regression)", () => {
     // The values queued before the failure are still delivered first.
     expect(seen).toEqual([1, 2]);
   });
+
+  it("fail(undefined) is still recognized as a failure, not mistaken for 'no failure set'", async () => {
+    const queue = new AsyncQueue<number>();
+    const it0 = queue[Symbol.asyncIterator]();
+    const pending = it0.next();
+    queue.fail(undefined);
+    // A falsy failure value must still reject — not resolve as a clean
+    // done:true, which a `this.failure !== undefined` sentinel would do.
+    await expect(pending).rejects.toBeUndefined();
+    await expect(it0.next()).rejects.toBeUndefined();
+  });
 });
 
 describe("AsyncQueue — close-then-push is inert", () => {

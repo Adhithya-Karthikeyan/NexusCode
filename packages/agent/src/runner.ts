@@ -224,6 +224,15 @@ export class Agent {
       resolveResult = res;
       rejectResult = rej;
     });
+    // A caller may legitimately consume only `events()` and never call
+    // `result()` (e.g. the delegate site below re-yields a sub-agent's chunks
+    // but only reaches `subHandle.result()` if the events loop completes
+    // cleanly). Without this, a failed run whose `result()` nobody awaits
+    // leaves `resultPromise` rejected-and-unobserved — an unhandledRejection
+    // that crashes the process under Node's default handling. The rejection
+    // stays fully observable: `result()` below still returns the same
+    // promise, so a caller that DOES await it still sees the failure.
+    resultPromise.catch(() => {});
 
     let finalResult: AgentRunResult | undefined;
     const source = this.oodaLoop(ctx, scope, agentRunId, def, options, (r) => {

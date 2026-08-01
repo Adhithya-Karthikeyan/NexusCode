@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSecretStore } from "@nexuscode/config";
+import { createSecretStore, type SecretStore } from "@nexuscode/config";
 import {
   createTokenStore,
   tokenRef,
@@ -140,6 +140,80 @@ describe("TokenStore over SecretStore", () => {
       // The persisted set matches what both callers received.
       const persisted = await store.get("mockprov");
       expect(persisted?.accessToken).toBe(first?.accessToken);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("getFresh re-reads latest before refreshing, closing the residual single-flight race", async () => {
+    // Residual race (same store instance, same dedup map): caller A's own
+    // `get` (the very first line of `getFresh`) reads the expired token and
+    // suspends BEFORE it ever reaches the `refreshInFlight` map check. While
+    // A is suspended, caller B runs an ENTIRE refresh on the same instance —
+    // registers in the map, refreshes, persists, and (in its `finally`)
+    // clears its own map entry — start to finish. When A resumes, the map
+    // is empty again (B already cleared it), so A does NOT dedup against
+    // B; it must instead re-read the store before refreshing, or it would
+    // replay its stale (now-rotated, revoked) refresh token.
+    //
+    // Deterministic (no real-clock sleeps): a wrapped SecretStore gates only
+    // the FIRST call to `get` and resolves it with a literal snapshot of the
+    // seeded expired token — never touching the real backing store's timing
+    // — so resolve order is fully controlled by `releaseGate()`, not by
+    // racing file I/O against network I/O.
+    const server = await startMockOAuthServer({ rotateRefresh: true });
+    const secrets = vaultStore();
+    try {
+      const seed = await refreshViaAuthorize(server);
+      const expired: TokenSet = { ...seed, expiresAt: Date.now() - 1000 };
+      await secrets.set(tokenRef("mockprov"), JSON.stringify(expired));
+
+      let getCalls = 0;
+      let releaseGate: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      // Explicit delegation (not `{...secrets}`): `secrets` is a class
+      // instance whose methods live on the prototype, so a spread would
+      // silently drop `set`/`delete`/`source`.
+      const gatedSecrets: SecretStore = {
+        get: async (ref: string) => {
+          getCalls += 1;
+          if (getCalls === 1) {
+            // Caller A's stale snapshot, captured deterministically (not
+            // read from the real store, whose content will have changed by
+            // the time this resolves) — then suspended until released.
+            await gate;
+            return JSON.stringify(expired);
+          }
+          return secrets.get(ref);
+        },
+        set: (ref, value) => secrets.set(ref, value),
+        delete: (ref) => secrets.delete(ref),
+        source: (ref) => secrets.source(ref),
+      };
+      const store = createTokenStore(gatedSecrets, { fetchImpl: fetch });
+
+      // Caller A starts and suspends inside its first `get` (the gate) —
+      // before it ever touches `refreshInFlight`.
+      const aResult = store.getFresh("mockprov", configFor(server));
+
+      // Caller B — same instance, same dedup map — runs a full refresh to
+      // completion (register, refresh, persist, clear its dedup slot)
+      // while A is still suspended.
+      const bResult = await store.getFresh("mockprov", configFor(server));
+      expect(server.refreshCount).toBe(1);
+
+      // Release A: it resumes with the stale (pre-B) token it captured, the
+      // map is already empty (B cleared it), so A does not dedup against B
+      // — it must re-read before refreshing and see B's already-fresh
+      // result instead of replaying B's now-rotated refresh token.
+      releaseGate();
+      const resolvedA = await aResult;
+
+      expect(server.refreshCount).toBe(1); // no second network refresh from A
+      expect(resolvedA?.accessToken).toBe(bResult?.accessToken);
+      expect(resolvedA?.refreshToken).toBe(bResult?.refreshToken);
     } finally {
       await server.close();
     }

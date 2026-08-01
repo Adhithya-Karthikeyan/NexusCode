@@ -10,13 +10,19 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSecretStore, type SecretStore } from "@nexuscode/config";
 import { AuditLog, auditKeyRef, resolveAuditKey, DEFAULT_AUDIT_KEY_REF } from "../src/index.js";
 import { buildEnterpriseServices } from "../src/wire/index.js";
 
+// Every root `vaultStore()` mkdtemps, so they can all be drained together once
+// at the end of the file instead of tracking each call site individually.
+const vaultRoots: string[] = [];
+
 function vaultStore(): SecretStore {
-  const file = join(mkdtempSync(join(tmpdir(), "nx-ent-key-")), "secrets.enc.json");
+  const root = mkdtempSync(join(tmpdir(), "nx-ent-key-"));
+  vaultRoots.push(root);
+  const file = join(root, "secrets.enc.json");
   // Encrypted-file backend (no keychain) so tests never GUI-block.
   return createSecretStore({ env: {}, disableKeychain: true, filePath: file, passphrase: "pw" });
 }
@@ -28,6 +34,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+});
+afterAll(() => {
+  for (const root of vaultRoots) rmSync(root, { recursive: true, force: true });
 });
 
 describe("resolveAuditKey", () => {

@@ -12,6 +12,12 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
   }> = [];
   private closed = false;
   private failure: unknown;
+  /**
+   * Whether `fail()` was ever called, tracked separately from `failure` so a
+   * falsy failure value (`fail(undefined)`, `fail(0)`, `fail("")`) is still
+   * recognized as a failure rather than being mistaken for "no failure set".
+   */
+  private failed = false;
 
   push(value: T): void {
     if (this.closed) return;
@@ -31,6 +37,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
   fail(err: unknown): void {
     if (this.closed) return;
     this.closed = true;
+    this.failed = true;
     this.failure = err;
     while (this.waiters.length > 0) {
       this.waiters.shift()!.reject(err);
@@ -43,7 +50,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
         if (this.values.length > 0) {
           return Promise.resolve({ value: this.values.shift()!, done: false });
         }
-        if (this.failure !== undefined) return Promise.reject(this.failure);
+        if (this.failed) return Promise.reject(this.failure);
         if (this.closed) return Promise.resolve({ value: undefined as never, done: true });
         return new Promise<IteratorResult<T>>((resolve, reject) => this.waiters.push({ resolve, reject }));
       },

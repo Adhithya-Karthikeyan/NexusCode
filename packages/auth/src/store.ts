@@ -57,11 +57,16 @@ export interface TokenStoreOptions {
 class SecretStoreTokenStore implements TokenStore {
   /**
    * Single-flight refresh dedup, keyed by the provider's SecretStore ref.
-   * Two concurrent `getFresh` calls on an expired token must share ONE
-   * refresh request — otherwise, against a refresh-rotating server, the
-   * second caller consumes an already-rotated (and thus invalid) refresh
-   * token. Cleared on settle (success or failure) so a failed refresh never
-   * poisons subsequent attempts.
+   * Two concurrent `getFresh` calls on this instance racing an expired
+   * token must share ONE refresh request — otherwise, against a
+   * refresh-rotating server, the second caller consumes an already-rotated
+   * (and thus invalid) refresh token. Dedup is per-instance (in-memory
+   * only), NOT process-wide: separate `TokenStore` instances (different
+   * processes, or independently-constructed stores in the same process) do
+   * not share this map and can still race each other — the re-read inside
+   * the refresh closure below (see `getFresh`) is what makes that residual
+   * race safe. Cleared on settle (success or failure) so a failed refresh
+   * never poisons subsequent attempts.
    */
   private readonly refreshInFlight = new Map<string, Promise<TokenSet>>();
 
@@ -110,7 +115,14 @@ class SecretStoreTokenStore implements TokenStore {
 
     const refreshToken = current.refreshToken;
     const inFlight = (async (): Promise<TokenSet> => {
-      const refreshed = await refreshTokens(config, refreshToken, {
+      // Re-read after winning the dedup slot: another caller may have
+      // raced us end-to-end (started and finished its own refresh, rotating
+      // the refresh token, then cleared its map entry) between our initial
+      // `get` above and this closure running. Refreshing with the token we
+      // captured earlier would replay an already-consumed refresh token.
+      const latest = (await this.get(providerId)) ?? current;
+      if (!needsRefresh(latest, now(), skew)) return latest;
+      const refreshed = await refreshTokens(config, latest.refreshToken ?? refreshToken, {
         ...(this.opts.fetchImpl ? { fetchImpl: this.opts.fetchImpl } : {}),
         now,
       });

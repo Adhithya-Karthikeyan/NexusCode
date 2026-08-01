@@ -16,8 +16,8 @@
  * pattern of `enterprise-usage-attribution.test.ts`.
  */
 
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
+import { afterAll, describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -33,13 +33,22 @@ import {
   recordRunSpend,
 } from "../src/enterprise.js";
 
+// Every root `sandbox()` mkdtemps, so they can all be drained together once at
+// the end of the file instead of tracking each call site individually.
+const sandboxRoots: string[] = [];
+
 /** One isolated sandbox: its own data dir + audit file. */
 function sandbox(): { dataDir: string; auditFile: string } {
   const root = mkdtempSync(join(tmpdir(), "nx-ent-interceptor-"));
+  sandboxRoots.push(root);
   const dataDir = join(root, "data");
   mkdirSync(dataDir, { recursive: true });
   return { dataDir, auditFile: join(root, "audit.ndjson") };
 }
+
+afterAll(() => {
+  for (const root of sandboxRoots) rmSync(root, { recursive: true, force: true });
+});
 
 /** In-memory SecretStore so the audit HMAC key never touches a real keychain/vault. */
 function fakeSecretStore(): SecretStore {

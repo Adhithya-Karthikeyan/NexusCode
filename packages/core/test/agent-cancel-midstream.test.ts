@@ -16,7 +16,7 @@ import {
   dispatchAgent,
   type ProviderAdapter,
 } from "@nexuscode/core";
-import type { ChatRequest, Message, StreamChunk } from "@nexuscode/shared";
+import { AdapterError, type ChatRequest, type Message, type StreamChunk } from "@nexuscode/shared";
 import { PermissionGate, ToolRegistry, okText, type Tool } from "@nexuscode/tools";
 import { createMockAdapter } from "@nexuscode/provider-mock";
 
@@ -27,6 +27,44 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     if (Date.now() - start > timeoutMs) throw new Error("waitFor: timed out");
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
+}
+
+/**
+ * A stub adapter (same pattern as `alwaysToolAdapter` below) that streams a
+ * text answer in two chunks, pausing between them on an externally-resolved
+ * `gate` promise instead of a wall-clock delay — so a caller can deterministically
+ * cancel while the adapter is paused mid-stream, with no timing race against the
+ * test runner. Re-checks `ctx.signal` after the gate resolves and, if aborted,
+ * emits the terminal `cancelled` error chunk itself (mirroring the real mock
+ * adapter's `abortableDelay` contract) instead of continuing to stream.
+ */
+function gatedTextAdapter(gate: Promise<void>): ProviderAdapter {
+  const base = createMockAdapter({ id: "gated" });
+  return {
+    ...base,
+    stream(req: ChatRequest, ctx): AsyncIterable<StreamChunk> {
+      return (async function* (): AsyncIterable<StreamChunk> {
+        yield { type: "run-start", runId: ctx.runId, adapterId: "gated", model: req.model, ts: Date.now() };
+        yield { type: "text-delta", runId: ctx.runId, text: "first ", channel: "answer" };
+        await gate;
+        if (ctx.signal.aborted) {
+          yield {
+            type: "error",
+            runId: ctx.runId,
+            error: new AdapterError("cancelled", "Gated mock run cancelled by caller.", {
+              providerId: "gated",
+              retryable: false,
+            }),
+            retryable: false,
+          };
+          return;
+        }
+        yield { type: "text-delta", runId: ctx.runId, text: "second", channel: "answer" };
+        const message: Message = { role: "assistant", content: [{ type: "text", text: "first second" }] };
+        yield { type: "run-end", runId: ctx.runId, finishReason: "stop", message, ts: Date.now() };
+      })();
+    },
+  };
 }
 
 /**
@@ -60,10 +98,15 @@ function alwaysToolAdapter(toolName: string): ProviderAdapter {
 
 describe("dispatchAgent — mid-stream cancellation", () => {
   it(
-    "cancelling after the first chunk of a slow multi-chunk text stream yields exactly one terminal cancelled AdapterError chunk and settles the outcome",
+    "cancelling while a multi-chunk text stream is gated mid-stream yields exactly one terminal cancelled AdapterError chunk and settles the outcome",
     async () => {
+      let releaseGate!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+
       const registry = new ProviderRegistry();
-      await registry.register(createMockAdapter({ delayMs: 20 }));
+      await registry.register(gatedTextAdapter(gate));
       const engine = createEngine({ registry });
       const session = await engine.openSession();
       const turn = session.newTurn({ prompt: "PING PONG PANG" });
@@ -71,7 +114,7 @@ describe("dispatchAgent — mid-stream cancellation", () => {
       const tools = new ToolRegistry();
 
       const handle = dispatchAgent(
-        { adapterId: "mock", model: "mock-fast", input: turn.input, idempotencyKey: "cancel-mid-text" },
+        { adapterId: "gated", model: "mock-fast", input: turn.input, idempotencyKey: "cancel-mid-text" },
         runCtx,
         { tools, gate: new PermissionGate({ mode: "full-access" }) },
       );
@@ -81,7 +124,14 @@ describe("dispatchAgent — mid-stream cancellation", () => {
       expect(first.done).toBe(false);
       expect(first.value?.chunk.type).toBe("run-start");
 
+      const second = await iterator.next();
+      expect(second.done).toBe(false);
+      expect(second.value?.chunk.type).toBe("text-delta");
+
+      // The adapter is now blocked on `gate`, mid-stream. Cancel while gated,
+      // then release — no wall-clock pacing is involved anywhere here.
       await runCtx.scope.cancel("user");
+      releaseGate();
 
       const rest: StreamChunk[] = [];
       for (let r = await iterator.next(); !r.done; r = await iterator.next()) {
