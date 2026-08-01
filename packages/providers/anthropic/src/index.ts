@@ -782,6 +782,26 @@ export function createAnthropicAdapter(
     // registration (which fires only on `tool-call-end`) never saw a single
     // Anthropic-native tool call during streaming.
     const openTools = new Map<number, { id: string; args: string }>();
+    // Flushes any tool-use blocks still open (started but never closed by a
+    // `content_block_stop`) as `tool-call-end` chunks. Reached both when the
+    // stream ends/errors normally with a dangling block and when the stream
+    // is torn down (e.g. abort) mid tool-call — without this, the
+    // orchestrator's live tool-call registration would never see a
+    // `tool-call-end` for that call at all.
+    function* flushOpenTools(): Generator<StreamChunk> {
+      for (const [index, open] of openTools) {
+        openTools.delete(index);
+        let input: unknown = {};
+        if (open.args) {
+          try {
+            input = JSON.parse(open.args);
+          } catch {
+            input = {};
+          }
+        }
+        yield { type: "tool-call-end", runId, id: open.id, input };
+      }
+    }
     try {
       for await (const ev of ms) {
         if (ev.type === "content_block_start") {
@@ -828,6 +848,8 @@ export function createAnthropicAdapter(
         }
       }
 
+      yield* flushOpenTools();
+
       const final = await ms.finalMessage();
       const usage = mapUsage(final.usage as unknown as WidenedUsage);
       yield { type: "usage", runId, usage, raw: final.usage };
@@ -840,6 +862,7 @@ export function createAnthropicAdapter(
         ts: Date.now(),
       };
     } catch (e) {
+      yield* flushOpenTools();
       const error = ctx.signal.aborted
         ? new AdapterError("cancelled", "aborted", { providerId: PROVIDER_ID })
         : mapError(e);

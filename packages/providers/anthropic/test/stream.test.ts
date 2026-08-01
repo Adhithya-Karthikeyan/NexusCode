@@ -299,4 +299,53 @@ describe("anthropic adapter — cancellation", () => {
     // Exactly one terminal chunk — no error surfaced ahead of it either.
     expect(chunks.filter((c) => c.type === "run-end" || c.type === "error")).toHaveLength(1);
   });
+
+  it("aborting between content_block_start(tool_use) and its content_block_stop flushes a tool-call-end before the terminal cancelled error", async () => {
+    const ac = new AbortController();
+    let sawAbortInGenerator = false;
+
+    streamImpl.current = () => ({
+      [Symbol.asyncIterator]: async function* () {
+        yield {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "tu_1", name: "get_weather", input: {} },
+        };
+        yield {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: '{"cit' },
+        };
+        // Simulate the real SDK tearing the socket down mid-stream, after the
+        // tool_use block was opened but before its content_block_stop — the
+        // openTools entry must not be silently dropped.
+        ac.abort();
+        sawAbortInGenerator = true;
+        throw new DOMException("The user aborted a request.", "AbortError");
+      },
+      async finalMessage(): Promise<never> {
+        throw new Error("finalMessage must not be reached after a mid-stream abort");
+      },
+    });
+
+    const chunks: StreamChunk[] = [];
+    for await (const c of adapter().stream(SAMPLE_REQ, ctx(ac.signal))) {
+      chunks.push(c);
+    }
+
+    expect(sawAbortInGenerator).toBe(true);
+
+    // Never-closed tool_use must still surface a tool-call-end (with the
+    // best-effort assembled args — {} since the accumulated JSON was cut off
+    // mid-object and fails to parse), not vanish silently.
+    const toolEnd = chunks.find((c) => c.type === "tool-call-end");
+    expect(toolEnd).toMatchObject({ type: "tool-call-end", id: "tu_1", input: {} });
+
+    const last = chunks[chunks.length - 1];
+    if (last?.type !== "error") throw new Error("expected terminal error chunk");
+    expect(last.error.code).toBe("cancelled");
+
+    // The flushed tool-call-end must arrive before the terminal error chunk.
+    expect(chunks.indexOf(toolEnd!)).toBeLessThan(chunks.indexOf(last));
+  });
 });

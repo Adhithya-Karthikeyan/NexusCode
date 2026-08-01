@@ -30,12 +30,27 @@ function readWorkspaceEntries(repoRoot: string): string[] {
   const src = readFileSync(join(repoRoot, "vitest.workspace.ts"), "utf8");
   const match = src.match(/defineWorkspace\(\s*\[([\s\S]*?)\]\s*\)/);
   if (!match) throw new Error("vitest.workspace.ts does not contain a defineWorkspace([...]) array");
-  return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const body = match[1] ?? "";
+  return [...body.matchAll(/"([^"]+)"/g)].flatMap((m) => (m[1] ? [m[1]] : []));
 }
 
-function hasTestFiles(testDir: string): boolean {
-  if (!existsSync(testDir) || !statSync(testDir).isDirectory()) return false;
-  return readdirSync(testDir).some((f) => /\.test\.tsx?$/.test(f));
+/** Recursively searches `dir` for any `*.test.ts`/`*.test.tsx` file. */
+function containsTestFile(dir: string): boolean {
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) return false;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (containsTestFile(full)) return true;
+    } else if (entry.isFile() && /\.test\.tsx?$/.test(entry.name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** A package "has tests" if `test/` (recursively) or `src/` (co-located) contains a test file. */
+function hasTestFiles(packageDir: string): boolean {
+  return containsTestFile(join(packageDir, "test")) || containsTestFile(join(packageDir, "src"));
 }
 
 /** Every `packages/*` or `packages/providers/*` leaf dir that has a package.json + test files. */
@@ -45,7 +60,7 @@ function testedLeafPackages(repoRoot: string): string[] {
   for (const name of readdirSync(packagesDir)) {
     const dir = join(packagesDir, name);
     if (!statSync(dir).isDirectory()) continue;
-    if (existsSync(join(dir, "package.json")) && hasTestFiles(join(dir, "test"))) {
+    if (existsSync(join(dir, "package.json")) && hasTestFiles(dir)) {
       leafs.push(`packages/${name}`);
       continue;
     }
@@ -54,7 +69,7 @@ function testedLeafPackages(repoRoot: string): string[] {
       for (const providerName of readdirSync(dir)) {
         const providerDir = join(dir, providerName);
         if (!statSync(providerDir).isDirectory()) continue;
-        if (existsSync(join(providerDir, "package.json")) && hasTestFiles(join(providerDir, "test"))) {
+        if (existsSync(join(providerDir, "package.json")) && hasTestFiles(providerDir)) {
           leafs.push(`packages/providers/${providerName}`);
         }
       }
@@ -78,5 +93,16 @@ describe("vitest workspace registration", () => {
 
     const uncovered = leafs.filter((pkg) => !isCovered(pkg, entries));
     expect(uncovered, `packages with tests but missing from vitest.workspace.ts: ${uncovered.join(", ")}`).toEqual([]);
+  });
+
+  it("every non-glob entry resolves to an existing package directory", () => {
+    const entries = readWorkspaceEntries(REPO_ROOT);
+    const broken = entries
+      .filter((entry) => !entry.includes("*"))
+      .filter((entry) => {
+        const dir = join(REPO_ROOT, entry);
+        return !(existsSync(dir) && statSync(dir).isDirectory() && existsSync(join(dir, "package.json")));
+      });
+    expect(broken, `workspace entries that don't resolve to a real package: ${broken.join(", ")}`).toEqual([]);
   });
 });
