@@ -9,6 +9,7 @@ import { defineWorkspace } from "vitest/config";
 export default defineWorkspace([
   "packages/shared",
   "packages/config",
+  "packages/memory",
   "packages/transfer",
   "packages/auth",
   "packages/core",
