@@ -55,6 +55,16 @@ export interface TokenStoreOptions {
 }
 
 class SecretStoreTokenStore implements TokenStore {
+  /**
+   * Single-flight refresh dedup, keyed by the provider's SecretStore ref.
+   * Two concurrent `getFresh` calls on an expired token must share ONE
+   * refresh request — otherwise, against a refresh-rotating server, the
+   * second caller consumes an already-rotated (and thus invalid) refresh
+   * token. Cleared on settle (success or failure) so a failed refresh never
+   * poisons subsequent attempts.
+   */
+  private readonly refreshInFlight = new Map<string, Promise<TokenSet>>();
+
   constructor(
     private readonly secrets: SecretStore,
     private readonly opts: TokenStoreOptions,
@@ -93,12 +103,26 @@ class SecretStoreTokenStore implements TokenStore {
         `token for "${providerId}" is expired and has no refresh token — re-run login`,
       );
     }
-    const refreshed = await refreshTokens(config, current.refreshToken, {
-      ...(this.opts.fetchImpl ? { fetchImpl: this.opts.fetchImpl } : {}),
-      now,
-    });
-    await this.set(providerId, refreshed);
-    return refreshed;
+
+    const ref = tokenRef(providerId);
+    const existing = this.refreshInFlight.get(ref);
+    if (existing) return existing;
+
+    const refreshToken = current.refreshToken;
+    const inFlight = (async (): Promise<TokenSet> => {
+      const refreshed = await refreshTokens(config, refreshToken, {
+        ...(this.opts.fetchImpl ? { fetchImpl: this.opts.fetchImpl } : {}),
+        now,
+      });
+      await this.set(providerId, refreshed);
+      return refreshed;
+    })();
+    this.refreshInFlight.set(ref, inFlight);
+    try {
+      return await inFlight;
+    } finally {
+      this.refreshInFlight.delete(ref);
+    }
   }
 }
 

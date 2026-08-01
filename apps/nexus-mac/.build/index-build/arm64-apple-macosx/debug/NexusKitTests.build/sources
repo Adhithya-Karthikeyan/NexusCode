@@ -2,6 +2,7 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AppThemeTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ApprovalsTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/AuthTests.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/CLIRequirement.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/DiagnosticClassifierTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/EffortTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/IntegrationsTests.swift
@@ -17,8 +18,12 @@
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ProvidersTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/RolesTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/SessionsTests.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/SidebarStateTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/SwitchWiringTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/TasksTests.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ThemeCatalogTests.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ThemeDerivationTests.swift
+/Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ThemeReportTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ThemeTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/UiEventDecodingTests.swift
 /Users/adhithya/Projects/apps/NexusCode/apps/nexus-mac/Tests/NexusKitTests/ViewStateTests.swift

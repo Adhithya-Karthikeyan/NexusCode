@@ -21,16 +21,15 @@ final class NexusClientIntegrationTests: XCTestCase {
     }
 
     private func makeClient() throws -> NexusClient {
-        guard let binary = NexusBinary.discover(repoRoot: repoRoot) else {
-            throw XCTSkip("nexus CLI not found — run `npm run build` at the repo root")
-        }
+        let binary = try requireCLI(
+            NexusBinary.discover(repoRoot: repoRoot),
+            "nexus CLI not found — run `npm run build` at the repo root"
+        )
         return NexusClient(binary: binary)
     }
 
     func testDiscoversTheRepoLocalCliBuild() throws {
-        guard let binary = NexusBinary.discover(repoRoot: repoRoot) else {
-            throw XCTSkip("nexus CLI not found")
-        }
+        let binary = try requireCLI(NexusBinary.discover(repoRoot: repoRoot), "nexus CLI not found")
         XCTAssertTrue(
             FileManager.default.isExecutableFile(atPath: binary.url.path),
             "discovered path must actually be executable"

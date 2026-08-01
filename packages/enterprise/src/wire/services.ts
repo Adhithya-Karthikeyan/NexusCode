@@ -61,6 +61,13 @@ export interface EnterpriseServicesOptions {
    * restarts) when the chain must verify across CLI invocations. Defaults to a
    * fresh random key for this instance's lifetime only — fine for tests/an
    * in-process bundle, but NOT durable across a restart of a file-backed log.
+   *
+   * IMPORTANT: when `auditFile` (or `config.audit.file`) is set, callers MUST
+   * pass a persistent, `resolveAuditKey`-derived key here. Omitting it means
+   * every new instance gets its own independent random key at construction,
+   * so a later instance loading the SAME file cannot authenticate records an
+   * earlier instance appended — `verifyFile()` reports them as tampered
+   * (hash-mismatch), even though nothing was actually altered.
    */
   auditKey?: Buffer | string;
 }

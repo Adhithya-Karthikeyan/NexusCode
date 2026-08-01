@@ -131,6 +131,7 @@ export async function fetchPage(rawUrl: string, opts: FetchOptions, signal: Abor
   const ssrf: SsrfOptions = {};
   if (opts.allowPrivate !== undefined) ssrf.allowPrivate = opts.allowPrivate;
   if (opts.resolveDns !== undefined) ssrf.resolveDns = opts.resolveDns;
+  if (opts.allowlist !== undefined) ssrf.allowlist = opts.allowlist;
   const url = await assertAllowedUrl(rawUrl, ssrf);
 
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;

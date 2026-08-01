@@ -27,9 +27,10 @@ final class SwitchWiringTests: XCTestCase {
     }
 
     private func makeController() throws -> ConversationController {
-        guard let binary = NexusBinary.discover(repoRoot: repoRoot) else {
-            throw XCTSkip("nexus CLI not found — run `npm run build` at the repo root")
-        }
+        let binary = try requireCLI(
+            NexusBinary.discover(repoRoot: repoRoot),
+            "nexus CLI not found — run `npm run build` at the repo root"
+        )
         return ConversationController(client: NexusClient(binary: binary), binary: binary, workingDirectory: repoRoot)
     }
 

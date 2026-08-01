@@ -81,6 +81,8 @@ export interface MockOAuthServer {
   tokenEndpoint: string;
   deviceEndpoint: string;
   clientId: string;
+  /** Number of `POST /token` requests handled with `grant_type=refresh_token` so far. */
+  readonly refreshCount: number;
   /** Approve a pending device authorization immediately (skip poll countdown). */
   approveDevice(userCode: string): void;
   close(): Promise<void>;
@@ -99,6 +101,7 @@ export async function startMockOAuthServer(
   const devices = new Map<string, DeviceRecord>(); // device_code -> record
   const userToDevice = new Map<string, string>(); // user_code -> device_code
   let slowDownArmed = opts.deviceSlowDownOnce ?? false;
+  let refreshCount = 0;
 
   const server: Server = createServer((req, res) => {
     void handle(req, res).catch(() => json(res, 500, { error: "server_error" }));
@@ -203,6 +206,7 @@ export async function startMockOAuthServer(
       }
 
       if (grant === "refresh_token") {
+        refreshCount += 1;
         const rt = form.get("refresh_token") ?? "";
         const scope = refreshTokens.get(rt);
         if (scope === undefined) {
@@ -270,6 +274,9 @@ export async function startMockOAuthServer(
     tokenEndpoint: `${baseUrl}/token`,
     deviceEndpoint: `${baseUrl}/device_authorization`,
     clientId,
+    get refreshCount(): number {
+      return refreshCount;
+    },
     approveDevice(userCode: string): void {
       const dc = userToDevice.get(userCode);
       if (dc) {

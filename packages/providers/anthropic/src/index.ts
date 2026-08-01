@@ -773,14 +773,22 @@ export function createAnthropicAdapter(
       return;
     }
 
-    const openTools: string[] = [];
+    // Keyed by the SDK's content-block `index` (not insertion order) so a
+    // stop event can be matched back to the tool it closes even though
+    // `content_block_stop` carries no block-type info of its own. Also
+    // accumulates each tool's `input_json_delta` pieces so the stop event can
+    // emit the fully assembled JSON `input` — without this, `tool-call-end`
+    // was never emitted at all, and the orchestrator's live tool-call
+    // registration (which fires only on `tool-call-end`) never saw a single
+    // Anthropic-native tool call during streaming.
+    const openTools = new Map<number, { id: string; args: string }>();
     try {
       for await (const ev of ms) {
         if (ev.type === "content_block_start") {
           const block = ev.content_block as WidenedBlock;
           if (block.type === "tool_use") {
             const id = block.id ?? "";
-            openTools.push(id);
+            openTools.set(ev.index, { id, args: "" });
             yield { type: "tool-call-start", runId, id, name: block.name ?? "", raw: ev };
           }
         } else if (ev.type === "content_block_delta") {
@@ -790,16 +798,32 @@ export function createAnthropicAdapter(
           } else if (delta.type === "thinking_delta") {
             yield { type: "reasoning-delta", runId, text: delta.thinking ?? "", raw: ev };
           } else if (delta.type === "input_json_delta") {
-            const id = openTools[openTools.length - 1];
-            if (id !== undefined) {
+            const open = openTools.get(ev.index);
+            if (open !== undefined) {
+              const piece = delta.partial_json ?? "";
+              open.args += piece;
               yield {
                 type: "tool-call-delta",
                 runId,
-                id,
-                argsJsonDelta: delta.partial_json ?? "",
+                id: open.id,
+                argsJsonDelta: piece,
                 raw: ev,
               };
             }
+          }
+        } else if (ev.type === "content_block_stop") {
+          const open = openTools.get(ev.index);
+          if (open !== undefined) {
+            openTools.delete(ev.index);
+            let input: unknown = {};
+            if (open.args) {
+              try {
+                input = JSON.parse(open.args);
+              } catch {
+                input = open.args;
+              }
+            }
+            yield { type: "tool-call-end", runId, id: open.id, input, raw: ev };
           }
         }
       }

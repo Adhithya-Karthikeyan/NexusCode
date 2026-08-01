@@ -111,6 +111,40 @@ describe("TokenStore over SecretStore", () => {
     }
   });
 
+  it("getFresh deduplicates concurrent refreshes into a single in-flight request", async () => {
+    const server = await startMockOAuthServer({ rotateRefresh: true });
+    const secrets = vaultStore();
+    try {
+      // Seed an ALREADY-EXPIRED token set with a real (rotating) refresh token.
+      const seed = await refreshViaAuthorize(server);
+      const expired: TokenSet = { ...seed, expiresAt: Date.now() - 1000 };
+      const store = createTokenStore(secrets, { fetchImpl: fetch });
+      await store.set("mockprov", expired);
+
+      // Two concurrent callers both see the expired token and race to refresh it.
+      const [first, second] = await Promise.all([
+        store.getFresh("mockprov", configFor(server)),
+        store.getFresh("mockprov", configFor(server)),
+      ]);
+
+      // Only ONE refresh request should have hit the token endpoint — a second
+      // request against a rotating server would consume the already-rotated
+      // refresh token and fail (or persist a revoked-token-derived set).
+      expect(server.refreshCount).toBe(1);
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(first?.accessToken).not.toBe(expired.accessToken);
+      expect(first?.accessToken).toBe(second?.accessToken);
+      expect(first?.refreshToken).toBe(second?.refreshToken);
+
+      // The persisted set matches what both callers received.
+      const persisted = await store.get("mockprov");
+      expect(persisted?.accessToken).toBe(first?.accessToken);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("getFresh returns a still-valid token unchanged", async () => {
     const store = createTokenStore(vaultStore(), { fetchImpl: fetch });
     const server = await startMockOAuthServer();

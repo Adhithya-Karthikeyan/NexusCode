@@ -604,6 +604,48 @@ describe("Agent — a step that runs out of budget is not a step that succeeded"
   });
 });
 
+describe("Agent — a pump failure surfaces as a real error, not a silent end-of-stream (core-F4)", () => {
+  it("iterating handle.events() throws when the OODA loop itself throws mid-run", async () => {
+    const { engine, ctx, store } = await harness({ toolName: "echo" });
+    const tools = new ToolRegistry();
+    tools.register(echoTool());
+    const agent = new Agent(deps(store, tools));
+
+    // A custom Evaluate policy that blows up AFTER the step's real tool call
+    // has already flowed onto the bus — a genuine mid-run failure, not one at
+    // the very first chunk.
+    const boom = new Error("evaluate policy exploded");
+    const evaluate: EvaluateFn = () => {
+      throw boom;
+    };
+
+    const handle = agent.run(ctx, customDef({ role: "coder", allowedTools: ["echo"] }), {
+      goal: { objective: "read the config", successCriteria: ["config"] },
+      policies: { evaluate },
+    });
+
+    const seen: Labeled<StreamChunk>[] = [];
+    await expect(
+      (async () => {
+        for await (const l of handle.events()) seen.push(l);
+      })(),
+    ).rejects.toBe(boom);
+
+    // Real progress happened before the failure — this is a stream cut short
+    // by an error, not simply an empty one.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(phasesIn(seen)).toContain("step-start");
+    // It never reached a clean "stop": the loop was blown up mid-flight.
+    expect(phasesIn(seen)).not.toContain("stop");
+
+    // `result()` observes the same underlying failure — `events()` merely
+    // stopped hiding it, it did not start double-reporting a NEW one.
+    await expect(handle.result()).rejects.toBe(boom);
+
+    await engine.dispose();
+  });
+});
+
 describe("defaultEvaluate — the two paths that used to manufacture a success", () => {
   /** A clean, successful single-lane outcome, optionally truncated by a budget. */
   function outcomeOf(text: string, finishReason: FinishReason = "stop"): OrchestrationOutcome {

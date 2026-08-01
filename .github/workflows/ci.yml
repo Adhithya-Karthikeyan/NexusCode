@@ -42,3 +42,30 @@ jobs:
 
       - name: Test
         run: npm test
+
+  swift-test:
+    name: swift test (nexus-mac)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      # Serial, single job, no matrix: concurrent `swift test` runs manufacture
+      # spurious failures from SwiftPM lock contention (a 1.45s test observed
+      # taking 1053s under concurrency), so this must not be parallelized.
+      - name: Swift test
+        working-directory: apps/nexus-mac
+        env:
+          NEXUS_REQUIRE_CLI: "1"
+        run: swift test
